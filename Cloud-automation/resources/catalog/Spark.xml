@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.6"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.6 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.6/schedulerjob.xsd"
+    name="Spark" projectName="Cloud Automation - Deployment"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="instance_name" value="sparkContainer"/>
+    <variable name="dashboard_port" value="5000"/>
+    <variable name="master_host_IP_address" value="127.0.0.1"/>
+    <variable name="network" value="my-net"/>
+    <variable name="optional_worker_host_IP_addresses_file" value="undefined"/>
+    <variable name="optional_hdfs_IP_address" value="127.0.0.1"/>
+    <variable name="infrastructure_name" value="#{Trydev}"/>
+  </variables>
+  <genericInformation>
+    <info name="pca.service.model" value="2"/>
+    <info name="pca.service.type" value="platform"/>
+    <info name="pca.service.name" value="spark"/>
+    <info name="pca.service.description" value="spark"/>
+    <info name="pca.action.type" value="create"/>
+    <info name="pca.action.name" value="deployment"/>
+    <info name="pca.action.description" value="deployment of spark"/>
+    <info name="pca.action.origin_state" value="null"/>
+    <info name="pca.action.icon" value="/cloud-automation/styles/patterns/spark.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="run_master_in_container">
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+master_container_name=$variables_instance_name"Master"
+
+docker run -dit --publish=$variables_dashboard_port:8080 --name=$master_container_name --hostname=$master_container_name --net=$variables_network activeeon/hdfs-spark:latest
+
+docker exec $master_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ /usr/local/hadoop/etc/hadoop/core-site.xml.template > /usr/local/hadoop/etc/hadoop/core-site.xml; ./$SPARK_HOME/sbin/start-master.sh'
+
+# Ensure Master is started
+while [ "$(docker exec "$master_container_name" jps | grep Master | cut -d ' ' -f 2)" != "Master" ]
+do
+	echo "sleep 5s"
+	sleep 5s
+done
+
+echo "SPARK MASTER STARTING IN "$master_container_name" ..."
+
+# Ensure the spark master url is written in the log
+spark_master_url=""
+while [ -z "$spark_master_url" ]
+do
+	spark_master_url="$(docker exec "$master_container_name" /bin/sh -c 'grep "Starting Spark master at" $SPARK_HOME/logs/* | cut -d " " -f 9')"
+	echo "sleep 5s"
+	sleep 5s
+done
+
+echo "... STARTED AT "$spark_master_url" ..."
+
+# Ensure MasterWebUI is started
+while [ -z "$(docker exec "$master_container_name" /bin/sh -c 'grep "Started MasterWebUI at" $SPARK_HOME/logs/*')" ]
+do
+	echo "sleep 5s"
+	sleep 5s
+done
+
+echo "... MASTERWEBUI ACCESSIBLE !"
+
+touch results_$variables_PA_JOB_ID.txt
+echo $spark_master_url > results_$variables_PA_JOB_ID.txt
+
+echo "... MASTERWEBUI URL IN FILE"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="process_worker_IP_addresses">
+      <depends>
+        <task ref="run_master_in_container"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$optional_worker_host_IP_addresses_file" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the datanode IP addresses
+String optional_worker_host_IP_addresses_file = variables.get("optional_worker_host_IP_addresses_file")
+def file = new File(optional_worker_host_IP_addresses_file)
+
+// By default, if there is no optional_worker_host_IP_addresses_file specified, let's start locally 2 workers
+def file_content = "127.0.0.1\n127.0.0.1"
+if (file.exists())
+	file_content = file.text
+
+// 1 IP address per replicated task
+String[] lines_array = file_content.split("\n")
+result = lines_array
+
+// Store the worker number
+variables["nb_workers"] = lines_array.length
+
+// Store IP addresses in variables for the replicated task selection scripts
+for (int i = 0; i < lines_array.length; i++)
+{
+   variables["IP_address_"+i] = lines_array[i]
+   println "variable " + variables["IP_address_"+i]
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_workers")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="run_worker_in_container">
+      <depends>
+        <task ref="process_worker_IP_addresses"/>
+      </depends>
+      <selection>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var task_id = variables.get('PA_TASK_REPLICATION');
+var worker_IP_address = variables.get('IP_address_' + task_id);
+
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(worker_IP_address)) {
+    selected = true;
+} else {
+   selected = false;
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+master_container_name=$variables_instance_name"Master"
+worker_container_name=$variables_instance_name"Worker"$variables_PA_TASK_REPLICATION
+
+echo "SPARK WORKER STARTING IN "$worker_container_name" ..."
+
+docker run -dit --name=$worker_container_name --hostname=$worker_container_name --net=$variables_network activeeon/hdfs-spark:latest
+
+docker exec $worker_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ /usr/local/hadoop/etc/hadoop/core-site.xml.template > /usr/local/hadoop/etc/hadoop/core-site.xml; ./$SPARK_HOME/sbin/start-slave.sh spark://'$master_container_name':7077'
+
+echo "... STARTED"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="end_deployment">
+      <description>
+        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
+      </description>
+      <depends>
+        <task ref="run_worker_in_container"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var myObject = {};
+myObject.id= variables.get("instance_name");
+myObject.status="RUNNING";
+myObject.endpoint="trydev.activeeon.com:" + variables.get("dashboard_port");
+
+result=JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>

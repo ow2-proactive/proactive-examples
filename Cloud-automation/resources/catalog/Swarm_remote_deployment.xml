@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.7"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.7 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.7/schedulerjob.xsd"
+    name="Swarm_remote_deployment" 
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="pca.platform.swarm.machineName" value="try.activeeon.com"/>
+    <variable name="dashboard_port" value="8500"/>
+    <variable name="pca.platform.swarm.hostIP" value="localhost"/>
+    <variable name="pca.platform.swarm.masterIP" value="localhost"/>
+    <variable name="pca.platform.swarm.agentsIP" value="undefined"/>
+    <variable name="userSSH" value="ubuntu"/>
+    <variable name="subnet" value="70.66.66.0/24"/>
+    <variable name="pca.platform.swarm.networkName" value="my-net"/>
+    <variable name="key" value="activeeon.key"/>
+    <variable name="swarm_configuration_url" value="http://localhost:8080/workflow-catalog/buckets/2/workflows/119?alt=xml"/>
+    <variable name="swarm_workflow_url" value="http://localhost:8080/workflow-catalog/buckets/2/workflows/123?alt=xml"/>
+  </variables>
+  <genericInformation>
+    <info name="pca.service.model" value="pca.platform.swarm"/>
+    <info name="pca.service.type" value="platform"/>
+    <info name="pca.service.name" value="swarm"/>
+    <info name="pca.service.description" value="swarm"/>
+    <info name="pca.action.type" value="create"/>
+    <info name="pca.action.name" value="deployment"/>
+    <info name="pca.action.description" value="deployment of swarm"/>
+    <info name="pca.action.origin.states" value="null"/>
+    <info name="pca.action.icon" value="/cloud-automation/styles/patterns/swarm.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="check_job_result">
+      <description>
+        <![CDATA[ Will run every minutes ]]>
+      </description>
+      <depends>
+        <task ref="configure_vm"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//check that all vm are configured
+
+schedulerapi.connect()
+
+variables.put("isFinished", true)
+
+for( jobID in variables.get("jobID") ){
+  if(! schedulerapi.isJobFinished(jobID)){
+   	 variables.put("isFinished", false);
+  }
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="check_job_result">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+// You can use a Cron Expression here
+              // examples http://www.sauronsoftware.it/projects/cron4j/manual.php#p02
+if(!variables.get("isFinished")){
+	loop = '* * * * *';
+}else{
+	loop = false;
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+    </task>
+    <task name="deploy_swarm">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="check_job_result"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// set the job URL for the swarm workflow deployment
+jobURL = new URL(variables.get("swarm_workflow_url"))
+
+
+//setting the variables
+def arguments = [:]
+arguments.put("instance_name",variables.get("pca.platform.swarm.machineName"))
+arguments.put("consulIP",variables.get("pca.platform.swarm.hostIP"))
+arguments.put("swarmMasterAgentIP",variables.get("pca.platform.swarm.masterIP"))
+arguments.put("swarmAgentIPsFile","agentsIP.txt")
+arguments.put("networkName",variables.get("pca.platform.swarm.networkName"))
+arguments.put("dashboard_port", variables.get("dashboard_port"))
+arguments.put("subnet", variables.get("subnet"))
+arguments.put("userSSH", variables.get("userSSH"))
+
+// connect to the scheduler
+schedulerapi.connect()
+
+
+// submitting the job
+jobID = schedulerapi.submit(jobURL,arguments)
+
+variables.put("jobID", jobID)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="split_remote_url">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//This workflow need docker-machine and docker to be installed on the local machine in order to work
+
+def file = new File("agentsIP.txt")
+def i = 0;
+def result = [:];
+def remote = [];
+def agents = variables.get("pca.platform.swarm.agentsIP");
+def host = variables.get("pca.platform.swarm.hostIP");
+def master = variables.get("pca.platform.swarm.masterIP");
+remote = agents.split(",");
+              
+if( master != host ) {
+	result.put(i,master);
+	i++;
+	result.put(i,host);
+ 	i++;
+}
+else {
+	result.put(i,master);
+    i++;
+}              
+              
+for ( url in remote) {
+	// creating a file with the agents IP              
+    file << url+"\n"
+              
+    //gather the machine ip to configure
+    if( url != variables.get("pca.platform.swarm.hostIP") && url != variables.get("pca.platform.swarm.masterIP")){
+		result.put(i,url);
+        i++;
+    }
+}
+                           
+              
+variables.put("configureIP",result);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="agentsIP.txt" accessMode="transferToUserSpace"/>
+      </outputFiles>
+    </task>
+    <task name="configure_vm">
+      <description>
+        <![CDATA[ This task will be replicated according to the 'runs' value specified in the replication script.                The replication index is used in each task's instance to select the input. ]]>
+      </description>
+      <depends>
+        <task ref="split_remote_url"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// set the job URL for the configuration workflow
+jobURL = new URL(variables.get("swarm_configuration_url"))
+
+
+def configureIP = variables.get("configureIP")
+def jobID = new String[configureIP.size()]
+
+// connect to the scheduler
+schedulerapi.connect()
+
+for( i=0; i<configureIP.size(); i++){
+  	//setting the variables
+	def arguments = [:]
+
+	arguments.put("userSSH",variables.get("userSSH"))
+	arguments.put("key", variables.get("key"))
+	arguments.put("remote",configureIP[i])
+
+	// submitting the job
+	jobID[i] = schedulerapi.submit(jobURL,arguments).value() 
+}
+               
+variables.put("jobID", jobID)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="end_deployment">
+      <depends>
+        <task ref="check_swarm_result"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="python">
+            <![CDATA[
+import json
+
+instanceOutput = {}
+instanceOutput["status"]="RUNNING"
+instanceOutput["endpoint"]=variables.get("pca.platform.swarm.hostIP")+":8500"
+instanceOutput["id"]=variables.get("pca.platform.swarm.machineName")
+result = json.dumps(instanceOutput)
+print result
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="check_swarm_result">
+      <description>
+        <![CDATA[ Will run every minutes ]]>
+      </description>
+      <depends>
+        <task ref="deploy_swarm"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+schedulerapi.connect()
+
+isFinished = schedulerapi.isJobFinished(variables.get("jobID"))
+
+variables.put("isFinished", isFinished)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="check_swarm_result">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+// You can use a Cron Expression here
+              // examples http://www.sauronsoftware.it/projects/cron4j/manual.php#p02
+if(!variables.get("isFinished")){
+	loop = '* * * * *';
+}else{
+	loop = false;
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+    </task>
+  </taskFlow>
+</job>

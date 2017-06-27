@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.7"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.7 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.7/schedulerjob.xsd"
+    name="Swarm" 
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="instance_name" value="trydev.activeeon.com"/>
+    <variable name="dashboard_port" value="8500"/>
+    <variable name="consulIP" value="localhost"/>
+    <variable name="swarmMasterAgentIP" value="localhost"/>
+    <variable name="swarmAgentIPsFile" value="undefined"/>
+    <variable name="userSSH" value="cperUser"/>
+    <variable name="subnet" value="10.0.9.0/24"/>
+    <variable name="networkName" value="my-net"/>
+    <variable name="infrastructure_name" value="#{Trydev}"/>
+  </variables>
+  <genericInformation>
+    <info name="pca.service.model" value="6"/>
+    <info name="pca.service.type" value="platform"/>
+    <info name="pca.service.name" value="swarm"/>
+    <info name="pca.service.description" value="swarm"/>
+    <info name="pca.action.type" value="create"/>
+    <info name="pca.action.name" value="deployment"/>
+    <info name="pca.action.description" value="deployment of swarm"/>
+    <info name="pca.action.origin_state" value="null"/>
+    <info name="pca.action.icon" value="/cloud-automation/styles/patterns/swarm.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="start_consul">
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+# REQUIREMENTS
+# http://www.thegeekstuff.com/2016/02/docker-machine-create-generic/
+# passwordless or use ssh agent
+
+# DOCKER ISSUE
+# The only temporary fix is to let your user explicitly allow sudo to be used without a password.
+# edit /etc/sudoers and add  YOURUSERNAME ALL=(ALL) NOPASSWD:ALL
+# This is until #1586 is merged
+
+# TIPS on try
+# sudo journalctl -fu docker.service
+# sudo systemctl start docker
+# always check /etc/systemd/system/docker.service if daemon did not run
+
+echo "STARTING CONSUL ..."
+
+ipConsul=$variables_consulIP
+nameMachine=$variables_instance_name
+sshUser=$variables_userSSH
+
+docker-machine create --driver generic --generic-ip-address $ipConsul --generic-ssh-user $sshUser ${nameMachine}-consul-machine
+
+docker $(docker-machine config ${nameMachine}-consul-machine) run -d --restart=always -p $variables_dashboard_port":8500" -h "consul" --name ${nameMachine}-swarm-consul progrium/consul -server -bootstrap
+
+echo "... CONSUL STARTED !"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="start_swarm_master_agent">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="check_consul"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "STARTING SWARM MASTER AND AGENT ..."
+
+sshUser=$variables_userSSH
+swarmMasterAgentIP=$variables_swarmMasterAgentIP
+nameMachine=$variables_instance_name
+networkInterfaceSwarm=$(ssh -T $sshUser@$swarmMasterAgentIP "ip route get 8.8.8.8" | awk '{ print $5; exit }')
+
+docker-machine create --driver generic --generic-ip-address $swarmMasterAgentIP --generic-ssh-user $sshUser --swarm --swarm-master --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376" $nameMachine
+
+echo "... SWARM MASTER AND AGENT STARTED !"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="start_swarm_agents">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="check_consul2"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$swarmAgentIPsFile" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "STARTING SWARM AGENTS ..."
+
+swarmAgentIPsFile=$variables_swarmAgentIPsFile
+sshUser=$variables_userSSH
+nameMachine=$variables_instance_name
+i=0
+
+while read -u 10 p;do
+ 	i=$((i+1));
+ 	networkInterfaceSwarm=$(ssh -T $sshUser@$p "ip route get 8.8.8.8" | awk '{ print $5; exit }');
+ 	docker-machine create --driver generic --generic-ip-address $p --generic-ssh-user $sshUser --swarm --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376"  ${nameMachine}-swarm-node-${i};
+done 10<$swarmAgentIPsFile
+
+echo "... SWARM AGENTS STARTED !"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="end_deployment">
+      <description>
+        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
+      </description>
+      <depends>
+        <task ref="Create_overlay_network"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var myObject = {};
+myObject.id= variables.get("instance_name");
+myObject.status="RUNNING";
+myObject.endpoint="try.activeeon.com:" + variables.get("dashboard_port");
+
+result=JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="check_consul">
+      <description>
+        <![CDATA[ Will run every minutes ]]>
+      </description>
+      <depends>
+        <task ref="set_iterator_value"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//check that the docker daemon is running on the consul machine
+
+def command = "docker-machine env "+variables.get("instance_name")+"-consul-machine"
+def sout = new StringBuilder(), serr = new StringBuilder()
+command.execute().waitForProcessOutput(sout,serr)
+println "sour"+sout
+println "serr"+serr
+
+def error = serr.count("Error");
+if(error <= 0){
+ 	variables.put("iterator",0) 
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="check_consul">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+variables["iterator"]=variables.get("iterator")-1;
+if(variables.get("iterator")>=0){
+    loop = '* * * * *';
+  	println("waiting");
+} else {
+    loop = false;
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+    </task>
+    <task name="set_iterator_value">
+      <description>
+        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
+      </description>
+      <depends>
+        <task ref="start_consul"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+variables["iterator"]=variables.get("attempt");
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="set_iterator_value2">
+      <description>
+        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
+      </description>
+      <depends>
+        <task ref="start_swarm_master_agent"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+variables["iterator"]=variables.get("attempt");
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="check_consul2">
+      <description>
+        <![CDATA[ Will run every minutes ]]>
+      </description>
+      <depends>
+        <task ref="set_iterator_value2"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//check that the docker daemon is running on the consul machine
+
+def command = "docker-machine env "+variables.get("instance_name")+"-consul-machine ;"
+def sout = new StringBuilder(), serr = new StringBuilder()
+command.execute().waitForProcessOutput(sout,serr)
+println "sour"+sout
+println "serr"+serr
+
+def error = serr.count("Error");
+if(error <= 0){
+ 	variables.put("iterator",0) 
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="check_consul2">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+variables["iterator"]=variables.get("iterator")-1;
+if(variables.get("iterator")>=0){
+    loop = '* * * * *';
+  	println("waiting");
+} else {
+    loop = false;
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+    </task>
+    <task name="Create_overlay_network">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="start_swarm_agents"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "CREATING OVERLAY NETWORK ..."
+
+networkName=$variables_networkName
+machineName=$variables_instance_name;
+attempt=20;
+sleepTime=1;
+DOCKER_TLS_VERIFY="";
+
+i=0;
+while [ $i -lt $attempt ]; do
+    ((i++));
+	eval $(docker-machine env $machineName);
+    if [ -n "$DOCKER_TLS_VERIFY" ];
+    then
+		i=$(($attempt+1));
+    else
+		sleep $sleepTime;
+		echo "Waiting $sleepTime s";		
+    fi
+done
+
+if [ $i -eq $(($attempt+1)) ];
+then
+	echo "Variables sucessfully set up";
+else
+  	echo "After $attempt attempts, fail to set up the docker variables, connection aborted";
+fi
+
+
+docker network create --driver overlay --subnet=$variables_subnet $networkName
+
+echo "... OVERLAY NETWORK CREATED !"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>

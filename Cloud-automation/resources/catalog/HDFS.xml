@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.6"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.6 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.6/schedulerjob.xsd"
+    name="HDFS" projectName="Cloud Automation - Deployment"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="instance_name" value="hdfsContainer"/>
+    <variable name="dashboard_port" value="6000"/>
+    <variable name="namenode_host_IP_address" value="127.0.0.1"/>
+    <variable name="datanode_starting_port" value="50010"/>
+	<variable name="fs_name" value="10.0.9.2"/>
+    <variable name="network" value="my-net"/>
+    <variable name="optional_datanode_host_IP_addresses_file" value="undefined"/>
+    <variable name="infrastructure_name" value="#{Trydev}"/>
+  </variables>
+  <genericInformation>
+    <info name="pca.service.model" value="3"/>
+    <info name="pca.service.type" value="platform"/>
+    <info name="pca.service.name" value="hdfs"/>
+    <info name="pca.service.description" value="hdfs"/>
+    <info name="pca.action.type" value="create"/>
+    <info name="pca.action.name" value="deployment"/>
+    <info name="pca.action.description" value="deployment of hdfs"/>
+    <info name="pca.action.origin_state" value="null"/>
+    <info name="pca.action.icon" value="/cloud-automation/styles/patterns/hdfs.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="run_namenode_in_container">
+      <selection>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var namenode_host_IP_address = variables.get('namenode_host_IP_address');
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(namenode_host_IP_address)) {
+    selected = true;
+} else {
+    selected = false;
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+namenode_container_name=$variables_instance_name"Namenode"
+
+docker run -dit --publish=$variables_dashboard_port:50070 --name=$namenode_container_name --hostname=$namenode_container_name --net=$variables_network activeeon/hdfs-spark:latest
+
+docker exec $namenode_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_fs_name':9000/ /usr/local/hadoop/etc/hadoop/core-site.xml.template > /usr/local/hadoop/etc/hadoop/core-site.xml; rm -r /tmp; hdfs namenode -format -force'
+
+docker exec $namenode_container_name /bin/sh -c './$HADOOP_PREFIX/sbin/hadoop-daemon.sh start namenode'
+
+echo "... NAMENODE STARTED & WEBUI ACCESSIBLE !"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="process_datanode_IP_addresses">
+      <depends>
+        <task ref="run_namenode_in_container"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$optional_datanode_host_IP_addresses_file" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the datanode IP addresses
+def optional_datanode_host_IP_addresses_file = variables.get("optional_datanode_host_IP_addresses_file")
+def file = new File(optional_datanode_host_IP_addresses_file)
+
+// By default, if there is no optional_datanode_host_IP_addresses_file specified, let's start locally 2 datanodes
+def file_content = "127.0.0.1\n127.0.0.1"
+if (file.exists())
+	file_content = file.text
+
+// 1 IP address per replicated task
+String[] lines_array = file_content.split("\n")
+result = lines_array
+
+// Store the datanode number
+variables["nb_datanode"] = lines_array.length
+
+// Store IP addresses in variables for the replicated task selection scripts
+for (int i = 0; i < lines_array.length; i++)
+{
+   variables["IP_address_"+i] = lines_array[i]
+   println "variable " + variables["IP_address_"+i]
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_datanode")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="run_datanode_in_container">
+      <depends>
+        <task ref="process_datanode_IP_addresses"/>
+      </depends>
+      <selection>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var task_id = variables.get('PA_TASK_REPLICATION');
+var datanode_IP_address = variables.get('IP_address_' + task_id);
+
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(datanode_IP_address)) {
+    print("TASK " + task_id + " on " + datanode_IP_address);
+    selected = true;
+} else {
+   selected = false;
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+# Retrieve variables
+task_id=$variables_PA_TASK_REPLICATION
+datanode_container_name=$variables_instance_name"Datanode"$task_id
+datanode_port=$(expr $variables_datanode_starting_port + $task_id)
+
+echo "file_system_port "$file_system_port
+echo "datanode_port "$datanode_port
+echo "DATANODE STARTING IN "$datanode_container_name" ..."
+
+docker run -dit --name=$datanode_container_name --hostname=$datanode_container_name --net=$variables_network activeeon/hdfs-spark:latest
+
+docker exec $datanode_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_fs_name':9000/ /usr/local/hadoop/etc/hadoop/core-site.xml.template > /usr/local/hadoop/etc/hadoop/core-site.xml; sed s/PORT/'$datanode_port'/ /usr/local/hadoop/etc/hadoop/hdfs-site.xml.template > /usr/local/hadoop/etc/hadoop/hdfs-site.xml; rm -r /tmp;./$HADOOP_PREFIX/sbin/hadoop-daemon.sh start datanode'
+
+echo "... "$datanode_container_name" STARTED"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="end_deployment">
+      <description>
+        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
+      </description>
+      <depends>
+        <task ref="run_datanode_in_container"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var myObject = {};
+myObject.id= variables.get("instance_name");
+myObject.status="RUNNING";
+myObject.endpoint="trydev.activeeon.com:" + variables.get("dashboard_port");
+
+result=JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
