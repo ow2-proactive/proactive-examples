@@ -22,14 +22,18 @@ def unzipFile(src, dest) {
     }
 }
 
-// Retrieve variables
+// User variables
 def examples_zip_path = "/home/michael/TEST/proactive-examples.zip"
-def example_dir_path = "/home/michael/TEST/proactive-examples"
-def global_space_path = this.binding.variables.get("pa.scheduler.dataspace.defaultglobal.localpath")
-def scheduler_rest_url = this.binding.variables.get("pa.scheduler.rest.url")
-def workflow_catalog_url = scheduler_rest_url.substring(0,scheduler_rest_url.length()-4) + "workflow-catalog"
 def workflow_templates_dir_path = "/home/michael/scheduling/config/workflows/templates"
 def bucket_owner = "workflow-catalog"
+
+// Bindings
+def global_space_path = this.binding.variables.get("pa.scheduler.dataspace.defaultglobal.localpath")
+def scheduler_rest_url = this.binding.variables.get("pa.scheduler.rest.url")
+
+// Deduced variables
+def workflow_catalog_url = scheduler_rest_url.substring(0,scheduler_rest_url.length()-4) + "workflow-catalog"//"catalog-7.29.0-SNAPSHOT"
+def example_dir_path = examples_zip_path.substring(0,examples_zip_path.lastIndexOf("."))
 	
 println "examples_zip_path " + examples_zip_path
 println "example_dir_path " + example_dir_path
@@ -37,6 +41,7 @@ println "global_space_path " + global_space_path
 println "workflow_catalog_url " + workflow_catalog_url
 println "workflow_templates_dir_path " + workflow_templates_dir_path
 println "bucket_owner " + bucket_owner
+
 
 // If the unzipped dir already exists, lets remove it
 def example_dir = new File(example_dir_path)
@@ -150,8 +155,9 @@ example_dir.eachDir() { dir ->
 			if (metadata_map.get("kind") == "workflow")
 			{
 				def workflow_relative_path = object.get("file")
-				def workflow_file_name = new File(workflow_relative_path).getName()
-				def workflow_absolute_path = new File(dir.absolutePath, workflow_relative_path).absolutePath
+				def workflow_file = new File(dir.absolutePath, workflow_relative_path)
+				def workflow_file_name = workflow_file.getName()
+				def workflow_absolute_path = workflow_file.absolutePath
 
 				// Push the workflow to the bucket
 				def push_wkw_cmd = [ "bash", "-c", "curl -X POST --header 'Content-Type: multipart/form-data' --header 'Accept: application/json' '" + workflow_catalog_url + "/buckets/" + bucket_id + "/workflows' -F 'file=@" + workflow_absolute_path + "'"]
@@ -163,15 +169,22 @@ example_dir.eachDir() { dir ->
 					// Create a new template dir in the targeted directory and copy the wkw into it
 					def template_dir = new File(workflow_templates_dir_path, template_dir_name)
 					template_dir.mkdir()
+						
+					// Copy the workflow into it
 					def file_dest = new File(template_dir, workflow_file_name)	
 					def file_dest_path = file_dest.absolutePath
-					Files.copy(Paths.get(workflow_absolute_path), Paths.get(file_dest_path), StandardCopyOption.REPLACE_EXISTING)
-					
+					Files.copy(Paths.get(workflow_absolute_path), Paths.get(file_dest_path), StandardCopyOption.REPLACE_EXISTING)				
+
+					// Create a name file into it
+					def job_tab = new XmlSlurper().parse(workflow_file)
+					new File(template_dir,"name").text = job_tab.@name
+
 					template_dir_name = (template_dir_name.toInteger() + 1) + ""
 				}
 			}
 				
 		}
+		
 			
 	}
 }
