@@ -25,14 +25,14 @@ def unzipFile(src, dest) {
 // User variables
 def examples_zip_path = "/home/michael/TEST/proactive-examples.zip"
 def workflow_templates_dir_path = "/home/michael/scheduling/config/workflows/templates"
-def bucket_owner = "workflow-catalog"
+def bucket_owner = "object-catalog"
 
 // Bindings
 def global_space_path = this.binding.variables.get("pa.scheduler.dataspace.defaultglobal.localpath")
 def scheduler_rest_url = this.binding.variables.get("pa.scheduler.rest.url")
 
 // Deduced variables
-def workflow_catalog_url = scheduler_rest_url.substring(0,scheduler_rest_url.length()-4) + "workflow-catalog"//"catalog-7.29.0-SNAPSHOT"
+def workflow_catalog_url = scheduler_rest_url.substring(0,scheduler_rest_url.length()-4) + /*"workflow-catalog"*/"catalog-7.29.0-SNAPSHOT"
 def example_dir_path = examples_zip_path.substring(0,examples_zip_path.lastIndexOf("."))
 	
 println "examples_zip_path " + examples_zip_path
@@ -114,33 +114,20 @@ example_dir.eachDir() { dir ->
 		def list_buckets_cmd = [ "bash", "-c", "curl -X GET --header 'Accept: application/json' '" + workflow_catalog_url + "/buckets?owner=" + bucket_owner + "'"]
 		def response = new StringBuilder()
 		println "Executing " + list_buckets_cmd
-		
 		list_buckets_cmd.execute().waitForProcessOutput(response, System.err)
-
-		def bucket_id = -1
-		// Test if the buckets list is empty
-		if (slurper.parseText(response.toString()).get("_embedded") != null)
-		{
-			slurper.parseText(response.toString()).get("_embedded").get("bucketMetadataList").each { bucketMetada ->
-				if (bucketMetada.get("name") == bucket)
-					bucket_id = bucketMetada.get("id")
-					// Cannot break in a closure			
-			}
-		}
-		println "bucket_id retrieved: " + bucket_id
-		
 		
 		// Create a bucket if needed -------------
-		if (bucket_id == -1)
+		def object_found = (slurper.parseText(response.toString()).find {object -> object.name==bucket} != null)
+		println "bucket " + bucket + " found? " + object_found
+
+		if (!object_found)
 		{
 			def create_bucket_cmd = [ "bash", "-c", "curl -X POST --header 'Content-Type: application/json' --header 'Accept: application/json' '" + workflow_catalog_url + "/buckets?name=" + bucket + "&owner=" + bucket_owner + "'"]
-			response = new StringBuilder()
 			println "Executing " + create_bucket_cmd
-			create_bucket_cmd.execute().waitForProcessOutput(response, System.err)
-			bucket_id = slurper.parseText(response).get("id")
-			println "bucket_id created: " + bucket_id
+			create_bucket_cmd.execute().waitForProcessOutput(System.out, System.err)
+			println "bucket " + bucket + " created"
 		}
-		
+
 		
 		// OBJECTS SECTION /////////////////////////////
 
@@ -160,8 +147,10 @@ example_dir.eachDir() { dir ->
 				def workflow_absolute_path = workflow_file.absolutePath
 
 				// Push the workflow to the bucket
-				def push_wkw_cmd = [ "bash", "-c", "curl -X POST --header 'Content-Type: multipart/form-data' --header 'Accept: application/json' '" + workflow_catalog_url + "/buckets/" + bucket_id + "/workflows' -F 'file=@" + workflow_absolute_path + "'"]
+				// It will return a "Conflict" html response in case of an already existing workflow
+				def push_wkw_cmd = [ "bash", "-c", "curl -X POST --header 'Content-Type: application/json' --header 'Accept: application/json' '" + workflow_catalog_url + "/buckets?name=" + bucket + "&owner=" + bucket_owner + "' -F 'file=@" + workflow_absolute_path + "'"]
 				println "Executing " + push_wkw_cmd
+				
 				push_wkw_cmd.execute().waitForProcessOutput(System.out, System.err)
 				
 				if (object.get("expose_to_studio") == "yes")
@@ -184,7 +173,7 @@ example_dir.eachDir() { dir ->
 			}
 				
 		}
-		
+	
 			
 	}
 }
