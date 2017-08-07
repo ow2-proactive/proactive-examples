@@ -64,7 +64,9 @@ def templates_dirs_list = []
 new File(workflow_templates_dir_path).eachDir { dir ->
 	templates_dirs_list << dir.getName().toInteger()
 }
-def template_dir_name = (templates_dirs_list.sort().last() + 1) + ""
+def template_dir_name = "1"
+if (!templates_dirs_list.isEmpty())
+	template_dir_name = (templates_dirs_list.sort().last() + 1) + ""
 println "Next template dir name " + template_dir_name
 
 
@@ -153,21 +155,24 @@ example_dir.eachDir() { dir ->
 				
 				push_wkw_cmd.execute().waitForProcessOutput(System.out, System.err)
 				
-				if (object.get("expose_to_studio") == "yes")
+				def studio_template = object.get("studio_template")
+				if (studio_template != null)
 				{
 					// Create a new template dir in the targeted directory and copy the wkw into it
 					def template_dir = new File(workflow_templates_dir_path, template_dir_name)
 					template_dir.mkdir()
 						
 					// Copy the workflow into it
-					def file_dest = new File(template_dir, workflow_file_name)	
+					def file_dest = new File(template_dir, "job.xml")	
 					def file_dest_path = file_dest.absolutePath
-					Files.copy(Paths.get(workflow_absolute_path), Paths.get(file_dest_path), StandardCopyOption.REPLACE_EXISTING)				
+					Files.copy(Paths.get(workflow_absolute_path), Paths.get(file_dest_path))				
 
 					// Create a name file into it
-					def job_tab = new XmlSlurper().parse(workflow_file)
-					new File(template_dir,"name").text = job_tab.@name
+					new File(template_dir,"name").text = studio_template.get("name")
 
+					// Create the metadata file into it
+					new File(template_dir,"metadata").text = studio_template.get("offsets_json_string")
+					
 					template_dir_name = (template_dir_name.toInteger() + 1) + ""
 				}
 			}
