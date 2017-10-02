@@ -1,0 +1,523 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="cnes" projectName="Samples"
+    priority="normal"
+    onTaskError="suspendTask"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="product" value="S2A_MSIL1C_20170608T023551_N0205_R089_T51TXK_20170608T023818" />
+    <variable name="ql_type" value="rgb,irgb" />
+    <variable name="resolution" value="4" />
+    <variable name="opt_type" value="phys,opt" />
+  </variables>
+  <taskFlow>
+    <task name="wait">
+      <description>
+        <![CDATA[ Will run every minutes ]]>
+      </description>
+      <depends>
+        <task ref="get_status_location"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="wait">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+// Get debug_string for debugging purposes
+int replication = variables.get('PA_TASK_REPLICATION');
+def debug_string = variables.get("debug_strings").split(",")[replication]+"["+variables.get("PA_TASK_NAME")+"]";
+
+// Get process status and end loop when process is finished
+
+import org.w3c.dom.*;
+import javax.xml.parsers.*;
+import java.io.*;
+
+DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+DocumentBuilder builder = factory.newDocumentBuilder();
+
+def xmlString = variables.get("xml").toURL().text;
+
+StringBuilder xmlStringBuilder = new StringBuilder();
+xmlStringBuilder.append(xmlString);
+ByteArrayInputStream input =  new ByteArrayInputStream(xmlStringBuilder.toString().getBytes("UTF-8"));
+Document document = builder.parse(input);
+
+Element root = document.getDocumentElement();
+
+NodeList nList = root.getElementsByTagName("wps:Status");
+Node nNodeStatus = nList.item(0);
+
+if (nNodeStatus.getElementsByTagName("wps:ProcessSucceeded").item(0) != null) {
+  println(debug_string+" ProcessSucceeded - "+nNodeStatus.getElementsByTagName("wps:ProcessSucceeded").item(0).getTextContent());
+  loop = false //stop loop
+}
+
+if (nNodeStatus.getElementsByTagName("wps:ProcessStarted").item(0) != null) {
+  nNodeProcessStarted = nNodeStatus.getElementsByTagName("wps:ProcessStarted").item(0);
+  //println(nNodeStatus.getElementsByTagName("wps:ProcessStarted").item(0).getTextContent());
+  //println(debug_string+" "+nNodeProcessStarted);
+  println(debug_string+" ProcessStarted - Precentage completed: "+nNodeProcessStarted.getAttribute("percentCompleted"));
+  sleep(1000);
+  loop = true //continue loop
+}
+
+if (nNodeStatus.getElementsByTagName("wps:ProcessFailed").item(0) != null) {
+  println(debug_string+" ProcessFailed - "+nNodeStatus.getElementsByTagName("wps:ProcessFailed").item(0));
+  loop = false //stop loop
+}
+
+
+
+// Documentation on xml parser: https://www.tutorialspoint.com/java_xml/java_dom_parse_document.htm
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+    </task>
+    <task name="get_status_location">
+      <depends>
+        <task ref="submit_request_to_ext_service"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Get statusLocation
+
+// Get debug_string for debugging purposes
+int replication = variables.get('PA_TASK_REPLICATION');
+def debug_string = variables.get("debug_strings").split(",")[replication]+"["+variables.get("PA_TASK_NAME")+"]";
+
+import org.w3c.dom.*;
+import javax.xml.parsers.*;
+import java.io.*;
+
+DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+DocumentBuilder builder = factory.newDocumentBuilder();
+
+def xmlString = results[0];
+
+StringBuilder xmlStringBuilder = new StringBuilder();
+xmlStringBuilder.append(xmlString);
+ByteArrayInputStream input =  new ByteArrayInputStream(xmlStringBuilder.toString().getBytes("UTF-8"));
+Document document = builder.parse(input);
+
+Element root = document.getDocumentElement();
+
+def statusLocation = root.getAttribute("statusLocation");
+println(debug_string+" statusLocation: ["+statusLocation+"]");
+
+variables.put("xml", statusLocation);
+
+result=statusLocation
+
+// Documentation on xml parser: https://www.tutorialspoint.com/java_xml/java_dom_parse_document.htm
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="extract_tif_url">
+      <depends>
+        <task ref="wait"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Get debug_string for debugging purposes
+int replication = variables.get('PA_TASK_REPLICATION');
+def debug_string = variables.get("debug_strings").split(",")[replication]+"["+variables.get("PA_TASK_NAME")+"]";
+
+// get process status and end loop when process is finished
+
+import org.w3c.dom.*;
+import javax.xml.parsers.*;
+import java.io.*;
+
+DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+DocumentBuilder builder = factory.newDocumentBuilder();
+
+def xmlString = variables.get("xml").toURL().text;
+
+StringBuilder xmlStringBuilder = new StringBuilder();
+xmlStringBuilder.append(xmlString);
+ByteArrayInputStream input =  new ByteArrayInputStream(xmlStringBuilder.toString().getBytes("UTF-8"));
+Document document = builder.parse(input);
+
+Element root = document.getDocumentElement();
+
+NodeList nList = root.getElementsByTagName("wps:Output");
+Node nNodeOutput = nList.item(0);
+
+if (nNodeOutput != null) {
+  nNodeReference = nNodeOutput.getElementsByTagName("wps:Reference").item(0);
+  def filePath = nNodeReference.getAttribute("href");
+  println(debug_string+" tif file path: ["+filePath+"]");
+  variables.put("tif", filePath);
+  variables.put("tif_name", filePath.substring(filePath.lastIndexOf("/") + 1, filePath.length()))
+  result=filePath;
+} else {
+  println(debug_string+" Process @CNES failed, image not accessible or not generated!");
+  println(debug_string+" Check link "+variables.get("xml"));
+}
+
+// Documentation on xml parser: https://www.tutorialspoint.com/java_xml/java_dom_parse_document.htm
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="split">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def product = variables.get("product").toString()
+
+// Get arrays that the user input in variable
+def ql_type = variables.get("ql_type").toString().split(",");
+def res = variables.get("resolution").toString().split(",");
+def opt_type = variables.get("opt_type").toString().split(",");
+
+// From those arrays build a string that will be passed along the replication set
+vars="";
+debug_strings="";
+
+for(int i=0; i<ql_type.size(); i++) {
+  for(int j=0; j<res.size(); j++) {
+    for(int k=0; k<opt_type.size(); k++) {
+      
+      //println ql_type[i];
+	  //println res[j];
+	  //println opt_type[k];
+      
+  	  vars += ql_type[i]+"-"+res[j]+"-"+opt_type[k]+",";
+      debug_strings += "["+ql_type[i]+"]["+res[j]+"]["+opt_type[k]+"],";
+  	}
+  }
+}
+
+println("All options to be used on https://peps.cnes.fr/rocket/ "+debug_strings);
+variables.put("vars", vars);
+variables.put("debug_strings", debug_strings);
+
+result=vars.split(",")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("vars").split(",").size()
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="submit_request_to_ext_service">
+      <description>
+        <![CDATA[ This task will be replicated according to the 'runs' value specified in the replication script.                The replication index is used in each task's instance to select the input. ]]>
+      </description>
+      <depends>
+        <task ref="split"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//
+// Get xml
+//
+
+// Extract a value from the result variable from the previous task. 
+// Using PA_TASK_REPLICATION lets us select a different set of parameters for each replication.
+
+int replication = variables.get('PA_TASK_REPLICATION');
+input = results[0].value()[replication].split("-");
+
+def product = variables.get("product").toString()
+def ql_type = input[0].toString()
+def res = input[1].toString()
+def opt_type = input[2].toString()
+def debug_string = variables.get("debug_strings").split(",")[replication]+"["+variables.get("PA_TASK_NAME")+"]"
+
+println debug_string+"------------Variables--------"
+
+println(debug_string+" product: ["+product+"], ql_type: ["+ql_type+"], res: ["+res+"], opt_type: ["+opt_type+"]");
+
+println debug_string+"-----------Curl request----------"
+
+def url = "http://peps-vizo.cnes.fr:8081/cgi-bin/pywps.cgi?request=execute&service=WPS&version=1.0.0&identifier=QL_S2&datainputs=product=";
+url += product + ";ql_type=" + ql_type +";res=" + res + ";opt_type=" + opt_type + ";&status=true&storeExecuteResponse=true";
+
+println(debug_string+" - built url: ["+url+"]");
+
+def xmlString = url.toURL().text
+
+println debug_string+"-----------xml file-------------"
+
+println(debug_string+" - xmlString collected: ["+xmlString+"]");
+
+result=xmlString
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"></controlFlow>
+    </task>
+    <task name="dl_and_conversion">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="extract_tif_url"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'philasearch/java-imagemagick:8-jre' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+# Get debug_string for debugging purposes
+debug_strings=$variables_debug_strings
+debug_strings=(${debug_strings//,/ })
+debug_string="${debug_strings[$variables_PA_TASK_REPLICATION]}[$variables_PA_TASK_NAME]"
+
+# If the url is not blank 
+if [ $variables_tif != null ]
+then
+
+# Print the name 
+echo "$debug_string ---------------------- Variables ----------------------"
+echo "$debug_string - $variables_tif"
+               
+image=$variables_product'-'$variables_PA_TASK_REPLICATION'.jpg'
+echo "$debug_string - $image"
+
+# downloading the tiff image 
+wget $variables_tif
+
+# we convert the first img composing the tif, in a jpg (otherwise, we got an error from Imagemagick)
+convert -quality 60 $variables_tif_name'[0]' $image
+
+fi
+
+#if the url is blank
+if [ $variables_tif == null ]
+then
+
+echo "$debug_string - The url of the image is not available, please check the log"
+
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="*.jpg" accessMode="transferToUserSpace"/>
+      </outputFiles>
+    </task>
+    <task name="end_block">
+      <depends>
+        <task ref="dl_and_conversion"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Task used to end the replicate block
+
+// Get debug_string for debugging purposes
+int replication = variables.get('PA_TASK_REPLICATION');
+def debug_string = variables.get("debug_strings").split(",")[replication]+"["+variables.get("PA_TASK_NAME")+"]";
+
+// The image will be available through the 'Preview' tab in the scheduler.
+// You can download it or save it.
+import com.google.common.net.MediaType
+
+if (variables.get("tif") != null) {
+  filename = variables.get("product")+ '-' + variables.get("PA_TASK_REPLICATION") + '.jpg'
+  result = filename
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"></controlFlow>
+    </task>
+    <task name="merge">
+      <description>
+        <![CDATA[ As a merge operation, we simply print the results from previous tasks. ]]>
+      </description>
+      <depends>
+        <task ref="end_block"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("All filenames:"+results);
+imgs="";
+imgsDataspaceSelection="{";
+first=true;
+results.each {
+  if (first) {
+    first=false;
+  } else {
+    imgs+=" ";
+    imgsDataspaceSelection+=",";
+  }
+  println "img ${it}";
+  imgs+="${it}";
+  imgsDataspaceSelection+="${it}";
+}
+imgsDataspaceSelection+="}";
+variables.put("imgs", imgs)
+variables.put("imgsDataspaceSelection", imgsDataspaceSelection)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="check_if_docker_is_installed"
+    
+    
+    onTaskError="cancelJob" >
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "This task will fail if docker is not installed. Docker is required to convert the tif image into jpg."
+echo "For bigger infrastructure, a selection script can be used to target a machine where docker is installed."
+docker ps
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="jpg_merge">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="merge"/>
+      </depends>
+      <inputFiles>
+        <files  includes="*.jpg" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'philasearch/java-imagemagick:8-jre' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "imgs $variables_imgs"
+echo "imgsDataspaceSelection [$variables_imgsDataspaceSelection]"
+ls -lah
+convert $variables_imgs -append final_merge.jpg
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="final_merge.jpg" accessMode="transferToUserSpace"/>
+      </outputFiles>
+    </task>
+    <task name="preview_merged_jpg">
+      <depends>
+        <task ref="jpg_merge"/>
+      </depends>
+      <inputFiles>
+        <files  includes="*" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// The image will be available through the 'Preview' tab in the scheduler.
+// You can download it or save it.
+import com.google.common.net.MediaType
+
+file = new File('final_merge.jpg')
+result = file.getBytes()
+resultMetadata.put("file.extension", ".jpg")
+resultMetadata.put("content.type", MediaType.JPEG.toString())
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
