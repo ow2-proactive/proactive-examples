@@ -1,0 +1,402 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="Visdom_Supervised_Anomaly_Prediction_HDFS_Log" projectName="Data Visualization"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="WORKSPACE" value="/root" />
+    <variable name="PROJECT" value="log_analysis" />
+    <variable name="ALGORITHM" value="decision_tree" />
+    <variable name="DOCKER_IMAGE" value="activeeon/dlm3" />
+    <variable name="CONTAINER_NAME" value="ml" />
+    <variable name="VISDOM_DOCKER_IMAGE" value="activeeon/visdom_server" />
+    <variable name="VISDOM_CONTAINER_NAME" value="visdom" />
+    <variable name="VISDOM_PORT" value="8097" />
+  </variables>
+  <description>
+    <![CDATA[ Shows an example of supervised anomaly detection on HDFS log files and plot results using the Visdom server. ]]>
+  </description>
+  <genericInformation>
+    <info name="Documentation" value="https://www.activeeon.com/resources/activeeon-machine-learning-log-analysis.pdf"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Setup">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="StartDLM"/>
+        <task ref="VisdomUI"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Setup_Task"
+
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'rm -r -f '$variables_PROJECT
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'if [ ! -d "'$variables_PROJECT'" ]; then git clone https://bitbucket.org/activeeon/log_analysis_public.git '$variables_PROJECT' ; else echo '$variables_PROJECT' already exists ; fi'
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'ls '$variables_PROJECT
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'cd '$variables_PROJECT' && git pull'
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'cd '$variables_PROJECT' && ./download_data.sh'
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'ls '$variables_PROJECT'/data'
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'cd '$variables_PROJECT' && ./download_model.sh'
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'ls '$variables_PROJECT'/model'
+docker cp $variables_CONTAINER_NAME:$variables_WORKSPACE'/'$variables_PROJECT/data/HDFS_2k.log /tmp
+
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'pip install graphviz'
+
+echo "Setup_Task task finished"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Log_Parse">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="Setup"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Parsing log file"
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'cd '$variables_WORKSPACE'/'$variables_PROJECT/python' && python log_parser.py --log=../data/HDFS_2k.log --out=../data/log_structured_HDFS_2K.csv'
+docker cp $variables_CONTAINER_NAME:$variables_WORKSPACE'/'$variables_PROJECT/data/log_structured_HDFS_2K.csv.html /tmp
+echo "Log_Parse task finished"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Feature_Extraction">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="Log_Parse"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Performing log feature extraction"
+docker exec $variables_CONTAINER_NAME /bin/bash -c 'cd '$variables_WORKSPACE'/'$variables_PROJECT/python' && python dynamic_feature_extractor.py --structured_logs=../data/log_structured_HDFS_2K.csv --features=../data/features_TFV_HDFS_2K.txt --idx=../data/idx_HDFS_2K.txt'
+docker cp $variables_CONTAINER_NAME:$variables_WORKSPACE'/'$variables_PROJECT/data/features_TFV_HDFS_2K.txt /tmp
+echo "Feature_Extraction task finished"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Supervised_Classification">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="Feature_Extraction"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+# export variables_VISDOM_PORT=8097
+# export variables_VISDOM_CONTAINER_NAME=visdom
+export variables_VISDOM_CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $variables_VISDOM_CONTAINER_NAME)
+echo "Visdom server container IP ($variables_VISDOM_CONTAINER_NAME): $variables_VISDOM_CONTAINER_IP"
+
+echo "Performing supervised prediction"
+docker exec $variables_CONTAINER_NAME /bin/bash -c "cd $variables_WORKSPACE/$variables_PROJECT/python && python supervised_prediction_visdom.py --model $variables_ALGORITHM --features ../data/X_test.txt --host=$variables_VISDOM_CONTAINER_IP --port=$variables_VISDOM_PORT"
+
+#docker cp $variables_CONTAINER_NAME:$variables_WORKSPACE'/'$variables_PROJECT/data/AnomalyTFV.txt /tmp
+docker cp $variables_CONTAINER_NAME:$variables_WORKSPACE'/'$variables_PROJECT/output/result.txt /tmp
+echo "Supervised_Classification task finished"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Preview_Raw_Data">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="Setup"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+file_path = "/tmp/HDFS_2k.log"
+println "file_path: " + file_path  
+
+def file = new File(file_path)
+println "file exists? " + file.exists()
+
+if(file.exists())
+{
+  result = file.text
+  resultMetadata.put("file.name", "log.txt")
+  resultMetadata.put("content.type", "text/plain")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Preview_Structured_Data">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="Log_Parse"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+file_path = "/tmp/log_structured_HDFS_2K.csv.html"
+println "file_path: " + file_path  
+
+def file = new File(file_path)
+println "file exists? " + file.exists()
+
+if(file.exists())
+{
+  result = file.text
+  resultMetadata.put("file.name", "log_structured.html")
+  resultMetadata.put("content.type", "text/html")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Preview_Features">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="Feature_Extraction"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+file_path = "/tmp/features_TFV_HDFS_2K.txt"
+println "file_path: " + file_path  
+
+def file = new File(file_path)
+println "file exists? " + file.exists()
+
+if(file.exists())
+{
+  result = file.text
+  resultMetadata.put("file.name", "log_features.txt")
+  resultMetadata.put("content.type", "text/plain")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Preview_prediction">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="Supervised_Classification"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+file_path = "/tmp/result.txt"
+println "file_path: " + file_path  
+
+def file = new File(file_path)
+println "file exists? " + file.exists()
+
+if(file.exists())
+{
+  result = file.text
+  resultMetadata.put("file.name", "results.txt")
+  resultMetadata.put("content.type", "text/plain")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <cleaning>
+        <script>
+          <code language="bash">
+            <![CDATA[
+docker stop $variables_CONTAINER_NAME
+]]>
+          </code>
+        </script>
+      </cleaning>
+    </task>
+    <task name="VisdomUI">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="StartVisdom"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.time.*
+
+def visdom_host = InetAddress.localHost.hostName
+def visdom_port = variables.get("VISDOM_PORT").toInteger()
+def server_started = 0
+def limit = 1
+def i = 0
+
+if(visdom_host.endsWith(".local"))
+  visdom_host = "127.0.0.1"
+
+println GroovySystem.version
+while(true){
+  i = i + 1
+  try{
+    Socket socket = new Socket(visdom_host, visdom_port)
+    println("Host ${visdom_host} Port ${visdom_port}: IS OPEN")
+    server_started = 1
+    break
+  }
+  catch(e){
+    println("(try ${i}) Host ${visdom_host} Port ${visdom_port}: IS CLOSED, waiting server for startup...")
+  }
+  if(i == limit)
+    break
+  else
+    sleep(2000)
+}
+
+if(server_started){
+  result = "<meta http-equiv=\"refresh\" content=\"1; url=http://"+visdom_host+":"+visdom_port+"/\" /> \n"
+  //result+= "<img src=\"https://s3.eu-central-1.amazonaws.com/activeeonpublic/public/images/please_wait.jpg\" />" 
+  result+= "<h2><span style=\"color:black\">Please wait while redirecting...</span></h2>"
+}
+else
+  result+= "<h2><span style=\"color:red\">Visdom server is down.</span></h2>"
+  //result = "<img src=\"https://s3.eu-central-1.amazonaws.com/activeeonpublic/public/images/server_down.jpg\" />"
+println(result)
+
+variables.put("VISDOM_HOST", visdom_host)
+variables.put("VISDOM_STATUS", server_started)
+//if(!server_started)
+  //throw new Exception("Visdom server could not be started!")
+
+resultMetadata.put("content.type", "text/html")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="StartVisdom">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Starting visdom server"
+
+export variables_DOCKER_IMAGE=$variables_VISDOM_DOCKER_IMAGE
+export variables_CONTAINER_NAME=$variables_VISDOM_CONTAINER_NAME
+
+docker pull $variables_DOCKER_IMAGE
+#export RUN_DOCKER="docker run -dit -h dlm -w /root --name=$variables_CONTAINER_NAME $variables_DOCKER_IMAGE"
+#docker run -d -p 8097:8097 -h visdom -w /root --name=visdom activeeon/visdom_server python -m visdom.server -port 8097
+export RUN_DOCKER="docker run -d -p $variables_VISDOM_PORT:$variables_VISDOM_PORT -h visdom -w /root --name=$variables_CONTAINER_NAME $variables_DOCKER_IMAGE python -m visdom.server -port $variables_VISDOM_PORT"
+echo "Checking if docker container is running"
+if [ $(docker inspect -f '{{.State.Running}}' $variables_CONTAINER_NAME) = "true" ]; 
+then 
+  echo "OK. The $variables_CONTAINER_NAME container is running!"
+else 
+  echo "$variables_CONTAINER_NAME container is not running."
+  if [ $(docker inspect -f '{{.State.Running}}' $variables_CONTAINER_NAME) = "false" ]; 
+  then 
+    echo "Starting it..."
+    docker start $variables_CONTAINER_NAME
+  else 
+    echo "Running it..."
+    echo $RUN_DOCKER
+    $($RUN_DOCKER)
+    sleep 5
+  fi
+  if [ $(docker inspect -f '{{.State.Running}}' $variables_CONTAINER_NAME) = "true" ]; 
+  then 
+    echo "OK. The $variables_CONTAINER_NAME container is running now!"
+  else 
+    echo "$variables_CONTAINER_NAME container is not running."
+    echo "An error occurred while running the container."
+    exit
+  fi
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="StartDLM">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Start_DLM"
+
+docker pull $variables_DOCKER_IMAGE
+export RUN_DOCKER="docker run -dit -h dlm -w /root --name=$variables_CONTAINER_NAME $variables_DOCKER_IMAGE"
+echo "Checking if docker container is running"
+if [ $(docker inspect -f '{{.State.Running}}' $variables_CONTAINER_NAME) = "true" ]; 
+then 
+  echo "OK. The $variables_CONTAINER_NAME container is running!"
+else 
+  echo "$variables_CONTAINER_NAME container is not running."
+  if [ $(docker inspect -f '{{.State.Running}}' $variables_CONTAINER_NAME) = "false" ]; 
+  then 
+    echo "Starting it..."
+    docker start $variables_CONTAINER_NAME
+  else 
+    echo "Running it..."
+    echo $RUN_DOCKER
+    $($RUN_DOCKER)
+    sleep 5
+  fi
+  if [ $(docker inspect -f '{{.State.Running}}' $variables_CONTAINER_NAME) = "true" ]; 
+  then 
+    echo "OK. The $variables_CONTAINER_NAME container is running now!"
+  else 
+    echo "$variables_CONTAINER_NAME container is not running."
+    echo "An error occurred while running the container."
+    exit
+  fi
+fi
+
+echo "Start_DLM task finished"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
