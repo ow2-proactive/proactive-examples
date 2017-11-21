@@ -46,7 +46,7 @@ If the "studio_template" section is specified, the object/workflow is also consi
 
 3.2) Update the `catalog` fields:
 
-* * catalog->**bucket** - Set the name of the bucket for this package.
+* * catalog->**bucket** - Set the name of the bucket(s) for this package. A package can be installed in one or multiple buckets. Therefore, the bucket name can be a String value as in the example above (i.e `"Machine_Learning"`) or a JSON array value as in `["Bucket_1","Bucket_2","Bucket_X"]`.
 * * catalog->**objects** - Add an object of each workflow of the package.
 
 An example of a catalog object that represents a workflow:
