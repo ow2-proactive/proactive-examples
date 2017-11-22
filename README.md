@@ -21,7 +21,7 @@ If the "studio_template" section is specified, the object/workflow is also consi
 		"version": "1.0"
 	},
 	"catalog" : {
-		"bucket" : "Machine_Learning",
+		"bucket" : "machine-learning",
 		"objects" : [
 			{
 				"name" : "text_analysis",
