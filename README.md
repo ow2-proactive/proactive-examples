@@ -1,6 +1,6 @@
 # ProActive Examples
 
-This repository includes a sub directory per bucket, in which a metadata file centralizes object-related-informations: bucket name, object name, object kind,..
+This repository includes a sub directory per bucket, in which a metadata file centralizes object-related-information: bucket name, object name, object kind,..
 If the "studio_template" section is specified, the object/workflow is also considered as a studio template.
 
 # How to add a new package
@@ -46,7 +46,7 @@ If the "studio_template" section is specified, the object/workflow is also consi
 
 3.2) Update the `catalog` fields:
 
-* * catalog->**bucket** - Set the name of the bucket for this package.
+* * catalog->**bucket** - Set the name of the bucket(s) for this package. A package can be installed in one or multiple buckets. Therefore, the bucket name can be a String value as in the example above (i.e `"Machine_Learning"`) or a JSON array value as in `["Bucket_1","Bucket_2","Bucket_X"]`.
 * * catalog->**objects** - Add an object of each workflow of the package.
 
 An example of a catalog object that represents a workflow:
