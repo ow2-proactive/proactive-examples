@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="Predict_Model" projectName="7. Predict"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <description>
+    <![CDATA[ Generate predictions using a trained model. ]]>
+  </description>
+        <genericInformation>
+    <info name="bucketName" value="machine-learning"/>
+    <info name="pca.action.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/predict.png"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Predict_Model">
+      <description>
+        <![CDATA[ Generate predictions using a trained model. ]]>
+      </description>
+      <genericInformation>
+        <info name="pca.action.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/predict.png"/>
+      </genericInformation>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Predict_Model")
+
+import os
+import pickle
+import pandas as pd
+
+from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import r2_score
+
+MODEL_BIN = variables.get("MODEL")
+DATA_TEST_DF_JSON = variables.get("DATA_TEST_DF_JSON")
+
+if MODEL_BIN != None and DATA_TEST_DF_JSON != None:
+  LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
+
+  data_test_df = pd.read_json(DATA_TEST_DF_JSON, orient='split')
+  label_test_df = pd.read_json(LABEL_TEST_DF_JSON, orient='split')
+  loaded_model = pickle.loads(MODEL_BIN)
+  score = loaded_model.score(data_test_df.values, label_test_df.values.ravel())
+  predict_data = list(loaded_model.predict(data_test_df.values))
+  predict_data_df = pd.DataFrame(predict_data)
+
+  # CLASSIFICATION MEASURES
+  try: 
+    is_classification_algorithm = variables.get("CLASSIFICATION_MEASURE")
+    if is_classification_algorithm == 'True':
+      print("**********************CLASSIFICATION MEASURES**********************")
+      accuracy_score_result = accuracy_score(label_test_df.values.ravel(), predict_data)
+      precision_score_result = precision_score(label_test_df.values.ravel(), predict_data, average='micro')
+      confusion_matrix_result = confusion_matrix(label_test_df.values.ravel(), predict_data)
+      print("ACCURACY SCORE: %.2f" % accuracy_score_result)
+      print("PRECISION SCORE: %.2f" % precision_score_result)
+      print("CONFUSION MATRIX:\n%s" % confusion_matrix_result)
+      print("*********************************************************************************")
+      
+  except NameError:
+    classification_algorithm = None
+    print("SCORE: %.2f" % score)
+
+  # REGRESSION MEASURES
+  try:
+    is_regression_algorithm = variables.get("REGRESSION_MEASURE")
+    if is_regression_algorithm == 'True':
+      mean_squared_error_result = mean_squared_error(label_test_df.values.ravel(), predict_data)
+      mean_absolute_error_result = mean_absolute_error(label_test_df.values.ravel(), predict_data)
+      mean_absolute_error_result = mean_absolute_error(label_test_df.values.ravel(), predict_data)
+      r2_score_result = r2_score(label_test_df.values.ravel(), predict_data) 
+      print("**********************REGRESSION MEASURES**********************")
+      print("MEAN SQUARED ERROR: %.2f" % mean_squared_error_result)
+      print("MEAN ABSOLUTE ERROR: %.2f" % mean_absolute_error_result)
+      print("COEFFICIENT DE DETERMINATION: %.2f" % r2_score_result)
+      print("*****************************************************************************")
+  except NameError:        
+    is_regression_algorithm = None
+    print("SCORE: %.2f" % score)
+        
+  variables.put("PREDICT_DATA_JSON", predict_data_df.to_json(orient='split'))
+  print("END Predict_Model")
+  
+else:
+  print('Please check your ML pipeline')
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>
