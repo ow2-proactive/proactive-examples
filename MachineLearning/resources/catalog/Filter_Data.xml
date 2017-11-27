@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="Filter_Data" projectName="3. Data Preprocessing"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <description>
+    <![CDATA[ Filter data according to your query. ]]>
+  </description>
+        <genericInformation>
+    <info name="bucketName" value="machine-learning"/>
+    <info name="pca.action.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/filled_filter.png"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Filter_Data">
+      <description>
+        <![CDATA[ Filter data according to your query. ]]>
+      </description>
+      <variables>
+        <variable name="QUERY" value="date==1" inherited="false" />
+        <variable name="FILTERED_FILE_OUT" value="result.html" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="pca.action.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/filled_filter.png"/>
+      </genericInformation>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Data Filtering")
+
+import pandas as pd
+
+DATAFRAME = variables.get("DATAFRAME_JSON")
+STATEMENT = str(variables.get("QUERY"))
+FILTERED_FILE_OUT = variables.get("FILTERED_FILE_OUT")
+IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
+dataframe = pd.read_json(DATAFRAME, orient='split')
+
+print("The processing of your query " + STATEMENT + " is in progress")
+
+try:
+  df_filtered = dataframe.query(STATEMENT)
+  columns_name = df_filtered.columns
+  columns_number = len(columns_name)
+  print("The syntax of your query is valid")
+
+  if FILTERED_FILE_OUT.endswith('.csv'):
+    result = df_filtered.to_csv()
+    resultMetadata.put("file.extension", ".csv")
+    resultMetadata.put("file.name", result+".csv")
+    resultMetadata.put("content.type", "text/csv")
+
+  elif FILTERED_FILE_OUT.endswith('.html'):
+    result = df_filtered.to_html()
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", result+".html")
+    resultMetadata.put("content.type", "text/html")
+
+  else:
+  print('Your data is empty')
+
+except Exception as e:
+  print("please check the syntax of your query" + ': ' + STATEMENT)
+
+if IS_LABELED_DATA:
+  data  = df_filtered.values[:,0:columns_number-1]
+  label = df_filtered.values[:,columns_number-1]
+  data_df = pd.DataFrame(data=data,columns=columns_name[0:columns_number-1])
+  label_df = pd.DataFrame(data=label,columns=[columns_name[columns_number-1]])
+  variables.put("DATAFRAME_JSON", df_filtered.to_json(orient='split'))
+  variables.put("DATA_TRAIN_DF_JSON", data_df.to_json(orient='split'))
+  variables.put("LABEL_TRAIN_DF_JSON", label_df.to_json(orient='split'))
+  variables.put("DATA_TEST_DF_JSON",data_df.to_json(orient='split'))
+  variables.put("LABEL_TEST_DF_JSON", label_df.to_json(orient='split'))
+  variables.put("IS_LABELED_DATA", IS_LABELED_DATA)   
+
+elif not IS_LABELED_DATA:
+  variables.put("DATAFRAME_JSON", df_filtered.to_json(orient='split'))
+  variables.put("DATA_TRAIN_DF_JSON", df_filtered.to_json(orient='split'))
+  variables.put("DATA_TEST_DF_JSON", df_filtered.to_json(orient='split'))
+  variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
+
+else:
+  print('Data transgering failed')
+
+print("END Data Filtering")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("PREVIOUS_PA_TASK_NAME", variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
+    </task>
+  </taskFlow>
+</job>

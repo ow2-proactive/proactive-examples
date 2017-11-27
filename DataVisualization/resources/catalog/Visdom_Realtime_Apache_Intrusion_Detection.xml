@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="Visdom_Realtime_Apache_Intrusion_Detection" projectName="Visdom Workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="instance_name" value="visdom" />
+    <variable name="LOG_FILE" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/apache_log.csv" />
+    <variable name="ALGORITHM_NAME" value="decision_tree" />
+  </variables>
+  <description>
+    <![CDATA[ Performs real-time intrusion detection on Apache log files and plot results using Visdom. ]]>
+  </description>
+    <genericInformation>
+    <info name="bucketName" value="Data_Visualization"/>
+    <info name="Documentation" value="https://www.activeeon.com/resources/activeeon-machine-learning-visualization-with-visdom.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Bind_or_Start_Visdom_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <variables>
+        <variable name="service_model" value="http://models.activeeon.com/pca/visdom" inherited="false" />
+        <variable name="instance_name" value="visdom1" inherited="true" />
+      </variables>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+
+schedulerapi.connect()
+
+pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
+sessionId = schedulerapi.getSession();
+
+api = new CloudAutomationApi(pcaUrl, sessionId);
+
+endpoint = api.getServiceEndpointOrCreate(variables.get("service_model"), variables.get("instance_name"));
+endpoint = endpoint.replaceAll("\n",'');
+
+println "Service " + variables.get("service_model") + " is available on " + endpoint
+
+variables.put("endpoint", endpoint)
+result = '<meta http-equiv="refresh" content="1; url=http://' + endpoint + '/" />'
+result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+resultMetadata.put("content.type", "text/html")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Wait_Until_Validation"
+    
+    
+    onTaskError="pauseJob" >
+      <description>
+        <![CDATA[ Task to pause the job and send a validation message to the notification service ]]>
+      </description>
+      <depends>
+        <task ref="Apache_Log_Analysis"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="python">
+            <![CDATA[
+# Please fill variables
+notification_message = 'Please validate to terminate the service'
+
+# Don't change code below unless you know what you are doing
+from org.ow2.proactive.addons.webhook import Webhook
+
+jobid = variables.get("PA_JOB_ID")
+schedulerURL =  variables.get("PA_SCHEDULER_REST_URL")
+
+print schedulerURL
+# get sessionid
+schedulerapi.connect()
+
+# pause job
+schedulerapi.pauseJob(jobid)
+
+
+# send web validation
+print "Sending web validation..."
+url = schedulerURL.replace("/rest", "") +'/notification-service/notifications'
+headers = '{\"Content-Type\" : \"application/json\" }'
+notification_content = '{\"description\": \"'+notification_message+'\", \"jobId\": \"'+jobid+'\" , \"validation\": \"true\"}'
+Webhook.execute ( 'POST', url, headers, notification_content);
+print "Web Validation sent"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Terminate_Visdom_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <variables>
+        <variable name="service_model" value="http://models.activeeon.com/pca/visdom" inherited="false" />
+        <variable name="instance_name" value="visdom1" inherited="true" />
+      </variables>
+      <depends>
+        <task ref="Wait_Until_Validation"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+
+schedulerapi.connect()
+pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
+sessionId = schedulerapi.getSession();
+
+api = new CloudAutomationApi(pcaUrl, sessionId);
+
+println "Terminating " + variables.get("service_model") + " / " + variables.get("instance_name");
+try{
+  api.terminateServiceFromInstanceName(variables.get("service_model"), variables.get("instance_name"));
+}catch(Exception ex){
+  println "Service was already terminated"
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Apache_Log_Analysis">
+      <description>
+        <![CDATA[ The simplest task, ran by a python engine. ]]>
+      </description>
+      <depends>
+        <task ref="Bind_or_Start_Visdom_Service"/>
+      </depends>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre/" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import io
+import numpy as np
+import wget
+
+from sklearn.externals import joblib
+from visdom import Visdom
+
+result = ''
+try:
+  VISDOM_HOST,VISDOM_PORT = variables.get("endpoint").split(":")
+  ALGORITHM_NAME = variables.get("ALGORITHM_NAME")
+  LOG_FILE = variables.get("LOG_FILE")
+  print("Using workflow variables.")
+except NameError:
+  VISDOM_HOST,VISDOM_PORT = ("localhost", 8097)
+  ALGORITHM_NAME = 'decision_tree' # decision_tree, logistic_regression
+  LOG_FILE = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/apache_log.csv'
+  print("Using local variables.")
+
+
+def get_data_details(filename):
+  data = np.genfromtxt(filename, delimiter=",")
+  features = data[:,[0,1,2]]
+  labels = data[:,3]
+  with open(filename) as f:
+    content = f.readlines()
+  return features, labels, content
+
+
+def prediction(filename, features, labels, text, viz):
+  modelfile = None
+
+  if ALGORITHM_NAME.startswith('decision_tree'):
+    modelfile = wget.download('https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/model/apache/decision_tree_model.pkl')
+  
+  if ALGORITHM_NAME.startswith('logistic_regression'):
+    modelfile = wget.download('https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/model/apache/logistic_regression_model.pkl')
+  
+  if modelfile is not None:
+    loaded_model = joblib.load(modelfile)
+    predictions = loaded_model.predict(features)
+    show_anomaly(filename, predictions, 1, text, viz)
+
+
+def show_anomaly(filename, predictions, fltr, content, viz):
+  global result
+  
+  WIN_TEXT = viz.text("List of detected intrusions :\n")
+  WIN_LINE = viz.line(Y = np.array([1]), X = np.array([1]), opts = dict(xlabel = 'Log index', ylabel = 'Intrusion', title = 'Intrusion detection'))
+  WIN_PIE = viz.pie(X=[0,0], opts = dict(legend=['Intrusions', 'Regular'],  title = 'Percentage of detected inftrusions'))
+  WIN_BAR = viz.bar(X=[0,0], opts = dict(rownames=['Intrusion', 'Regular'], title = 'Classification results'))
+  
+  output = io.StringIO()
+  
+  count = 0
+  nb_intrusions = 0
+  nb_regular = 0
+  #print(predictions)
+  for x in range(0, len(predictions)):
+    if predictions[x] == fltr:
+      #print("Anomaly detected in the sample %d" % (x))
+      text = content[x].split(',')
+      text = text[4]
+      message = "Anomaly detected in the block %s at line %d: %s" % (filename, x+1, text)
+      viz.text(message, win=WIN_TEXT, append=True)
+      output.write("Anomaly detected in the block %s at line %d: %s" % (filename, x+1, text))
+      #print("Anomaly detected in the block %s at line %d: %s" % (filename, x+1, text))
+      count+=1
+      nb_intrusions+=1
+      viz.line(Y = np.array([1]), X = np.array([count]), win=WIN_LINE, update='append')
+      viz.pie(X = np.asarray([nb_intrusions, nb_regular]), win=WIN_PIE, opts=dict(legend=['Intrusions', 'Regular'],  title = 'Percentage of detected inftrusions'))
+    else:
+      count+=1
+      nb_regular+=1
+      viz.line(Y = np.array([0]), X = np.array([count]), win=WIN_LINE, update='append')
+      viz.pie(X = np.asarray([nb_intrusions, nb_regular]), win=WIN_PIE, opts=dict(legend=['Intrusions', 'Regular'],  title = 'Percentage of detected inftrusions'))
+    viz.bar(X = [nb_intrusions, nb_regular], win=WIN_BAR, opts=dict(rownames=['Intrusions', 'Regular'], title = 'Classification results'))
+  #print("Predicted number of attacks: "+str(nb_intrusions))
+  output.write("Predicted number of attacks: "+str(nb_intrusions))
+  
+  result = output.getvalue()
+  output.close()
+
+
+def main():
+  print("Connecting to %s" % VISDOM_PORT)
+  viz = Visdom(server="http://"+VISDOM_HOST,port=VISDOM_PORT)
+  assert viz.check_connection()
+  
+  filename = wget.download(LOG_FILE)
+  features, labels, text = get_data_details(filename)
+  prediction(filename, features, labels, text, viz)
+
+
+if __name__ == '__main__':
+  main()
+
+
+print(result)
+try:
+  resultMetadata.put("file.name", "output.txt")
+  resultMetadata.put("content.type", "text/plain")
+  print("The results are available for download.")
+except NameError:
+  pass
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>

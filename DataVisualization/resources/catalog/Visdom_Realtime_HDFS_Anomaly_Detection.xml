@@ -1,0 +1,975 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="Visdom_Realtime_HDFS_Anomaly_Detection" projectName="Visdom Workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="instance_name" value="visdom" />
+    <variable name="LOG_FILE" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/HDFS_2k.log" />
+    <variable name="ALGORITHM_NAME" value="decision_tree" />
+  </variables>
+  <description>
+    <![CDATA[ Shows an example of supervised anomaly detection on HDFS log files and plot results using the Visdom server. ]]>
+  </description>
+    <genericInformation>
+    <info name="bucketName" value="Data_Visualization"/>
+    <info name="Documentation" value="https://www.activeeon.com/resources/activeeon-machine-learning-visualization-with-visdom.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Bind_or_Start_Visdom_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <variables>
+        <variable name="service_model" value="http://models.activeeon.com/pca/visdom" inherited="false" />
+        <variable name="instance_name" value="visdom1" inherited="true" />
+      </variables>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+
+schedulerapi.connect()
+
+pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
+sessionId = schedulerapi.getSession();
+
+api = new CloudAutomationApi(pcaUrl, sessionId);
+
+endpoint = api.getServiceEndpointOrCreate(variables.get("service_model"), variables.get("instance_name"));
+endpoint = endpoint.replaceAll("\n",'');
+
+println "Service " + variables.get("service_model") + " is available on " + endpoint
+
+variables.put("endpoint", endpoint)
+result = '<meta http-equiv="refresh" content="1; url=http://' + endpoint + '/" />'
+result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+resultMetadata.put("content.type", "text/html")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Wait_Until_Validation"
+    
+    
+    onTaskError="pauseJob" >
+      <description>
+        <![CDATA[ Task to pause the job and send a validation message to the notification service ]]>
+      </description>
+      <depends>
+        <task ref="HDFS_Anomaly_Prediction"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="python">
+            <![CDATA[
+# Please fill variables
+notification_message = 'Please validate to terminate the service'
+
+# Don't change code below unless you know what you are doing
+from org.ow2.proactive.addons.webhook import Webhook
+
+jobid = variables.get("PA_JOB_ID")
+schedulerURL =  variables.get("PA_SCHEDULER_REST_URL")
+
+print schedulerURL
+# get sessionid
+schedulerapi.connect()
+
+# pause job
+schedulerapi.pauseJob(jobid)
+
+
+# send web validation
+print "Sending web validation..."
+url = schedulerURL.replace("/rest", "") +'/notification-service/notifications'
+headers = '{\"Content-Type\" : \"application/json\" }'
+notification_content = '{\"description\": \"'+notification_message+'\", \"jobId\": \"'+jobid+'\" , \"validation\": \"true\"}'
+Webhook.execute ( 'POST', url, headers, notification_content);
+print "Web Validation sent"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Terminate_Visdom_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <variables>
+        <variable name="service_model" value="http://models.activeeon.com/pca/visdom" inherited="false" />
+        <variable name="instance_name" value="visdom1" inherited="true" />
+      </variables>
+      <depends>
+        <task ref="Wait_Until_Validation"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+
+schedulerapi.connect()
+pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
+sessionId = schedulerapi.getSession();
+
+api = new CloudAutomationApi(pcaUrl, sessionId);
+
+println "Terminating " + variables.get("service_model") + " / " + variables.get("instance_name");
+try{
+  api.terminateServiceFromInstanceName(variables.get("service_model"), variables.get("instance_name"));
+}catch(Exception ex){
+  println "Service was already terminated"
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="HDFS_Log_Parser">
+      <description>
+        <![CDATA[ The simplest task, ran by a python engine. ]]>
+      </description>
+      <depends>
+        <task ref="Bind_or_Start_Visdom_Service"/>
+      </depends>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre/" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+#import io
+import re
+import wget
+import random
+import validators
+import time as clock
+import pandas as pd
+
+from visdom import Visdom
+from datetime import datetime #, timedelta
+#from time import gmtime, strftime
+from argparse import ArgumentParser
+
+
+# General parameters
+FILE_OUT   = "log_structured.csv"
+INTERVAL   = 500
+DF_COLUMNS = ('date', 'time', 'pid', 'status', 'id_pattern', 'id_block', 'ip_from', 'port_from', 'ip_to', 'port_to')
+WIN_LOG    = 'win_' + str(random.randrange(100000, 999999))
+result = ''
+try:
+  VISDOM_HOST,VISDOM_PORT = variables.get("endpoint").split(":")
+  ALGORITHM_NAME = variables.get("ALGORITHM_NAME")
+  FILE_LOG = variables.get("LOG_FILE")
+  print("Using workflow variables.")
+except NameError:
+  VISDOM_HOST,VISDOM_PORT = ("localhost", 8097)
+  ALGORITHM_NAME = 'decision_tree' # decision_tree, logistic_regression
+  FILE_LOG = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/HDFS_2k.log'
+  print("Using local variables.")
+print("Connecting to %s" % VISDOM_PORT)
+viz = Visdom(server="http://"+VISDOM_HOST,port=VISDOM_PORT)
+assert viz.check_connection()
+
+
+def main(args):
+  global result
+  
+  FILE_LOG = args.log
+  FILE_OUT = args.out
+  INTERVAL = args.int
+  
+  try:
+    if validators.url(FILE_LOG):
+      FILE_LOG = wget.download(FILE_LOG)
+  except Exception:
+    pass
+
+  p = re.compile('([0-9]+) ([0-9]+) ([0-9]+) ([A-Z]+) (.*)', re.IGNORECASE)
+  df = pd.DataFrame(columns = DF_COLUMNS)
+  message = "Processing " + FILE_LOG + "\n"
+  print(message)
+  viz.text(message, win=WIN_LOG)
+  k = 0
+  t = clock.time()
+  with open(FILE_LOG) as infile:
+    for line in infile:
+      k = k + 1
+      
+      if k % INTERVAL == 0:
+        elapsed_time = clock.time() - t
+        #message = str(k) + " " + str(elapsed_time) + "sec " + line + "\n\n"
+        message = str(k) + " " + str(elapsed_time) + "sec " + "\n"
+        print(message)
+        viz.text(message, win=WIN_LOG, append=True)
+      
+      m1 = p.match(line)
+      if m1:
+        #print('Match found: ', m1.group())
+        date   = m1.group(1)
+        time   = m1.group(2)
+        pid    = m1.group(3)
+        status = m1.group(4)
+        msg    = m1.group(5)
+        if len(date)==5:
+          idx=3
+        else:
+          idx=4
+        str1_split1 = date[:idx]
+        str1_split2 = date[idx:]
+        date_converted = str1_split1 + '20' + str1_split2
+        date = datetime.strptime(date_converted, '%d%m%Y')
+        time = datetime.strptime(time, '%H%M%S').time()
+        #print('date: ', date)
+        #print('time: ', time)
+        #print('pid: ', pid)
+        #print('status: ', status)
+        #print('msg: ', msg)
+        id_pattern = 0
+        id_block   = ''
+        ip_from    = ''
+        port_from  = ''
+        ip_to      = ''
+        port_to    = ''
+
+        # 1. Adding an already existing block (.*)
+        # dfs.DataBlockScanner: Adding an already existing block blk_-2074647664485597823
+        p1 = re.compile('(.*) Adding an already existing block (.*)', re.IGNORECASE)
+        m2 = p1.match(msg)
+        if m2:
+          id_pattern = 1
+          id_block  = m2.group(2)
+        
+        # 2. Verification succeeded for (.*)
+        # dfs.DataBlockScanner: Verification succeeded for blk_-9073992586687739851
+        p2 = re.compile('(.*) Verification succeeded for (.*)', re.IGNORECASE)
+        m2 = p2.match(msg)
+        if m2:
+          id_pattern = 2
+          id_block  = m2.group(2)
+        
+        # 3. Served block (.*) to (.*)
+        # dfs.DataNode$DataXceiver: 10.250.11.100:50010 Served block blk_-3544583377289625738 to /10.250.19.102
+        p3 = re.compile('(.*): (.*):(.*) Served block (.*) to /(.*)', re.IGNORECASE)
+        m2 = p3.match(msg)
+        if m2:
+          id_pattern = 3
+          ip_from   = m2.group(2)
+          port_from = m2.group(3)
+          id_block  = m2.group(4)
+          ip_to     = m2.group(5)
+
+        # 4. Got exception while serving (.*) to (.*):(.*)
+        # dfs.DataNode$DataXceiver: 10.251.71.68:50010:Got exception while serving blk_-8781759536960110370 to /10.250.17.225:
+        p4 = re.compile('(.*): (.*):(.*):Got exception while serving (.*) to /(.*):(.*)', re.IGNORECASE)
+        m2 = p4.match(msg)
+        if m2:
+          id_pattern = 4
+          ip_from   = m2.group(2)
+          port_from = m2.group(3)
+          id_block  = m2.group(4)
+          ip_to     = m2.group(5)
+          port_to   = m2.group(6)
+
+        # 5. Receiving block (.*) src: (.*) dest: (.*)
+        # dfs.DataNode$DataXceiver: Receiving block blk_-1608999687919862906 src: /10.250.19.102:54106 dest: /10.250.19.102:50010
+        p5 = re.compile('(.*) Receiving block (.*) src: /(.*):(.*) dest: /(.*):(.*)', re.IGNORECASE)
+        m2 = p5.match(msg)
+        if m2:
+          id_pattern = 5
+          id_block   = m2.group(2)
+          ip_from    = m2.group(3)
+          port_from  = m2.group(4)
+          ip_to      = m2.group(5)
+          port_to    = m2.group(6)
+
+        # 6. Received block (.*) src: (.*) dest: (.*) of size ([-]?[0-9]+)
+        # dfs.DataNode$DataXceiver: Received block blk_-1608999687919862906 src: /10.251.215.16:52002 dest: /10.251.215.16:50010 of size 91178
+        p6 = re.compile('(.*) Received block (.*) src: /(.*):(.*) dest: /(.*):(.*) of size ([-]?[0-9]+)', re.IGNORECASE)
+        m2 = p6.match(msg)
+        if m2:
+          id_pattern = 6
+          id_block   = m2.group(2)
+          ip_from    = m2.group(3)
+          port_from  = m2.group(4)
+          ip_to      = m2.group(5)
+          port_to    = m2.group(6)
+
+        # 7.writeBlock (.*) received exception (.*)
+        # dfs.DataNode$DataXceiver: writeBlock blk_-3934605060787636904 received exception java.io.IOException: Could not read from stream
+        p7 = re.compile('(.*): writeBlock (.*) received exception (.*)', re.IGNORECASE)
+        m2 = p7.match(msg)
+        if m2:
+          id_pattern = 7
+          id_block   = m2.group(2)
+
+        # 8.PacketResponder ([-]?[0-9]+) for block (.*) Interrupted\.
+        # dfs.DataNode$PacketResponder: PacketResponder 0 for block blk_4241467193520768333 Interrupted.
+        p8 = re.compile('(.*): PacketResponder ([-]?[0-9]+) for block (.*) Interrupted\.', re.IGNORECASE)
+        m2 = p8.match(msg)
+        if m2:
+          id_pattern = 8
+          id_block   = m2.group(3)
+
+        # 9. Received block (.*) of size ([-]?[0-9]+) from (.*)
+        # dfs.DataNode$PacketResponder: Received block blk_-6720641661876207381 of size 67108864 from /10.251.39.160
+        p9 = re.compile('(.*) Received block (.*) of size ([-]?[0-9]+) from /(.*)', re.IGNORECASE)
+        m2 = p9.match(msg)
+        if m2:
+          id_pattern = 9
+          id_block  = m2.group(2)
+          ip_from  = m2.group(4)
+
+        # 10. PacketResponder (.*) ([-]?[0-9]+) Exception (.*)
+        # dfs.DataNode$PacketResponder: PacketResponder blk_-3102267849859399193 2 Exception java.io.EOFException
+        p10 = re.compile('(.*): PacketResponder (.*) ([-]?[0-9]+) Exception (.*)', re.IGNORECASE)
+        m2 = p10.match(msg)
+        if m2:
+          id_pattern = 10
+          id_block   = m2.group(2)
+
+        # 11. PacketResponder ([-]?[0-9]+) for block (.*) terminating
+        # dfs.DataNode$PacketResponder: PacketResponder 1 for block blk_-1608999687919862906 terminating
+        p11 = re.compile('(.*): PacketResponder ([-]?[0-9]+) for block (.*) terminating', re.IGNORECASE)
+        m2 = p11.match(msg)
+        if m2:
+          id_pattern = 11
+          id_block   = m2.group(3)
+
+        # 12. (.*):Exception writing block (.*) to mirror (.*)(.*)  
+        # dfs.DataNode$BlockReceiver: 10.250.13.188:50010:Exception writing block blk_3858821904894294369 to mirror 10.251.39.160:50010
+        p12 = re.compile('(.*): (.*):(.*):Exception writing block (.*) to mirror (.*):(.*)', re.IGNORECASE)
+        m2 = p12.match(msg)
+        if m2:
+          id_pattern = 12
+          ip_from    = m2.group(2)
+          port_from  = m2.group(3)
+          id_block   = m2.group(4)
+          ip_to      = m2.group(5)
+          port_to    = m2.group(6)
+
+        # 13. Receiving empty packet for block (.*)
+        # dfs.DataNode$BlockReceiver: Receiving empty packet for block blk_-3842070622043972712
+        p13 = re.compile('(.*) Receiving empty packet for block (.*)', re.IGNORECASE)
+        m2 = p13.match(msg)
+        if m2:
+          id_pattern = 13
+          id_block   = m2.group(2)
+
+        # 14. Exception in receiveBlock for block (.*) (.*)
+        # dfs.DataNode$BlockReceiver: Exception in receiveBlock for block blk_-3102267849859399193 java.io.IOException: Connection reset by peer
+        p14 = re.compile('(.*) Exception in receiveBlock for block (.*) java.(.*)', re.IGNORECASE)
+        m2 = p14.match(msg)
+        if m2:
+          id_pattern = 14
+          id_block   = m2.group(2)
+
+        # 15. Changing block file offset of block (.*) from ([-]?[0-9]+) to ([-]?[0-9]+) meta file offset to ([-]?[0-9]+)
+        # dfs.DataNode$BlockReceiver: Changing block file offset of block blk_4241467193520768333 from 0 to 30867456 meta file offset to 241159
+        p15 = re.compile('(.*): Changing block file offset of block (.*) from ([-]?[0-9]+) to ([-]?[0-9]+) meta file offset to ([-]?[0-9]+)', re.IGNORECASE)
+        m2 = p15.match(msg)
+        if m2:
+          id_pattern = 15
+          id_block   = m2.group(2)
+
+        # 16. (.*):Transmitted block (.*) to (.*)
+        # dfs.DataNode$DataTransfer: 10.250.14.224:50010:Transmitted block blk_-1608999687919862906 to /10.251.215.16:50010
+        p16 = re.compile('(.*): (.*):(.*):Transmitted block (.*) to /(.*):(.*)', re.IGNORECASE)
+        m2 = p16.match(msg)
+        if m2:
+          id_pattern = 16
+          ip_from    = m2.group(2)
+          port_from  = m2.group(3)
+          id_block   = m2.group(4)
+          ip_to      = m2.group(5)
+          port_to    = m2.group(6)
+
+        # 17. (.*):Failed to transfer (.*) to (.*) got (.*)
+        # dfs.DataNode$DataTransfer: 10.251.194.147:50010:Failed to transfer blk_992101295951175683 to 10.251.214.112:50010 got java.io.IOException: Connection reset by peer
+        p17 = re.compile('(.*): (.*):(.*):Failed to transfer (.*) to (.*):(.*) got (.*)', re.IGNORECASE)
+        m2 = p17.match(msg)
+        if m2:
+          id_pattern = 17
+          ip_from    = m2.group(2)
+          port_from  = m2.group(3)
+          id_block   = m2.group(4)
+          ip_to      = m2.group(5)
+          port_to    = m2.group(6)
+
+        # 18. (.*) Starting thread to transfer block (.*) to (.*)
+        # dfs.DataNode: 10.250.14.224:50010 Starting thread to transfer block blk_-1608999687919862906 to 10.251.215.16:50010, 10.251.71.193:50010
+        p18 = re.compile('(.*): (.*):(.*) Starting thread to transfer block (.*) to (.*)', re.IGNORECASE)
+        m2 = p18.match(msg)
+        if m2:
+          id_pattern = 18
+          ip_from    = m2.group(2)
+          port_from  = m2.group(3)
+          id_block   = m2.group(4)
+          ip_to      = m2.group(5)
+
+        # 19. Reopen Block (.*)
+        # dfs.FSDataset: Reopen Block blk_8006271611835981128
+        p19 = re.compile('(.*)Reopen Block (.*)', re.IGNORECASE)
+        m2 = p19.match(msg)
+        if m2:
+          id_pattern = 19
+          id_block   = m2.group(2)
+
+        # 20. Unexpected error trying to delete block (.*)\. BlockInfo not found in volumeMap\.
+        # dfs.FSDataset: Unexpected error trying to delete block blk_-4888398266379412236. BlockInfo not found in volumeMap.
+        p20 = re.compile('(.*)Unexpected error trying to delete block (.*)\. BlockInfo not found in volumeMap\.', re.IGNORECASE)
+        m2 = p20.match(msg)
+        if m2:
+          id_pattern = 20
+          id_block   = m2.group(2)
+
+        # 21. Deleting block (.*) file (.*)
+        # dfs.FSDataset: Deleting block blk_-8213344449220111733 file /mnt/hadoop/dfs/data/current/subdir39/blk_-8213344449220111733
+        p21 = re.compile('(.*)Deleting block (.*) file (.*)', re.IGNORECASE)
+        m2 = p21.match(msg)
+        if m2:
+          id_pattern = 21
+          id_block   = m2.group(2)
+
+        # 22. BLOCK\* NameSystem\.allocateBlock: (.*)\. (.*)
+        # dfs.FSNamesystem: BLOCK* NameSystem.allocateBlock: /mnt/hadoop/mapred/system/job_200811092030_0001/job.jar. blk_-1608999687919862906
+        p22 = re.compile('(.*)BLOCK\* NameSystem\.allocateBlock: (.*)\. (.*)', re.IGNORECASE)
+        m2 = p22.match(msg)
+        if m2:
+          id_pattern = 22
+          id_block   = m2.group(3)
+
+        # 23. BLOCK\* NameSystem\.delete: (.*) is added to invalidSet of (.*)
+        # dfs.FSNamesystem: BLOCK* NameSystem.delete: blk_-1608999687919862906 is added to invalidSet of 10.250.10.6:50010
+        p23 = re.compile('(.*)BLOCK\* NameSystem\.delete: (.*) is added to invalidSet of (.*):(.*)', re.IGNORECASE)
+        m2 = p23.match(msg)
+        if m2:
+          id_pattern = 23
+          id_block   = m2.group(2)
+          ip_from    = m2.group(3)
+          port_from  = m2.group(4)
+
+        # 24. BLOCK\* Removing block (.*) from neededReplications as it does not belong to any file\.
+        # dfs.FSNamesystem: BLOCK* Removing block blk_-3530301067936445915 from neededReplications as it does not belong to any file.
+        p24 = re.compile('(.*)BLOCK\* Removing block (.*) from neededReplications as it does not belong to any file\.', re.IGNORECASE)
+        m2 = p24.match(msg)
+        if m2:
+          id_pattern = 24
+          id_block   = m2.group(2)
+
+        # 25. BLOCK\* ask (.*) to replicate (.*) to (.*)  
+        # dfs.FSNamesystem: BLOCK* ask 10.250.14.224:50010 to replicate blk_-1608999687919862906 to datanode(s) 10.251.215.16:50010 10.251.71.193:50010
+        p25 = re.compile('(.*)BLOCK\* ask (.*):(.*) to replicate (.*) to datanode\(s\) (.*)', re.IGNORECASE)
+        m2 = p25.match(msg)
+        if m2:
+          id_pattern = 25
+          ip_from    = m2.group(2)
+          port_from  = m2.group(3)
+          id_block   = m2.group(4)
+          ip_to      = m2.group(5)
+
+        # 26. BLOCK\* NameSystem\.addStoredBlock: blockMap updated: (.*) is added to (.*) size ([-]?[0-9]+) 
+        # dfs.FSNamesystem: BLOCK* NameSystem.addStoredBlock: blockMap updated: 10.250.10.6:50010 is added to blk_-1608999687919862906 size 91178
+        p26 = re.compile('(.*)BLOCK\* NameSystem\.addStoredBlock: blockMap updated: (.*):(.*) is added to (.*) size ([-]?[0-9]+)', re.IGNORECASE)
+        m2 = p26.match(msg)
+        if m2:
+          id_pattern = 26
+          ip_from    = m2.group(2)
+          port_from  = m2.group(3)
+          id_block   = m2.group(4)
+
+        # 27. BLOCK\* NameSystem\.addStoredBlock: Redundant addStoredBlock request received for (.*) on (.*) size ([-]?[0-9]+)  
+        # dfs.FSNamesystem: BLOCK* NameSystem.addStoredBlock: Redundant addStoredBlock request received for blk_3888635850409849568 on 10.251.107.227:50010 size 67108864
+        p27 = re.compile('(.*)BLOCK\* NameSystem\.addStoredBlock: Redundant addStoredBlock request received for (.*) on (.*):(.*) size ([-]?[0-9]+)', re.IGNORECASE)
+        m2 = p27.match(msg)
+        if m2:
+          id_pattern = 27
+          id_block   = m2.group(2)
+          ip_from    = m2.group(3)
+          port_from  = m2.group(4)
+
+        # 28. BLOCK\* NameSystem\.addStoredBlock: addStoredBlock request received for (.*) on (.*) size ([-]?[0-9]+) But it does not belong to any file\. 
+        # dfs.FSNamesystem: BLOCK* NameSystem.addStoredBlock: addStoredBlock request received for blk_5398314277015661293 on 10.251.199.86:50010 size 67108864 But it does not belong to any file.
+        p28 = re.compile('(.*)BLOCK\* NameSystem\.addStoredBlock: addStoredBlock request received for (.*) on (.*):(.*) size ([-]?[0-9]+) But it does not belong to any file\.', re.IGNORECASE)
+        m2 = p28.match(msg)
+        if m2:
+          id_pattern = 28
+          id_block   = m2.group(2)
+          ip_from    = m2.group(3)
+          port_from  = m2.group(4)
+
+        # 29. PendingReplicationMonitor timed out block (.*)
+        # dfs.PendingReplicationBlocks$PendingReplicationMonitor: PendingReplicationMonitor timed out block blk_-5057834626410636236
+        p29 = re.compile('(.*)PendingReplicationMonitor timed out block (.*)', re.IGNORECASE)
+        m2 = p29.match(msg)
+        if m2:
+          id_pattern = 29
+          id_block   = m2.group(2)
+
+        # 30. BLOCK\* ask (.*) to delete (.*)
+        # dfs.FSNamesystem: BLOCK* ask 10.250.10.144:50010 to delete  blk_2260576740749849268
+        p30 = re.compile('(.*)BLOCK\* ask (.*):(.*) to delete (.*)', re.IGNORECASE)
+        m2 = p30.match(msg)
+        if m2:
+          id_pattern = 30
+          ip_from    = m2.group(2)
+          port_from  = m2.group(3)
+          id_block   = m2.group(4)
+
+        if id_pattern == 0:
+          print(str(k) + " [error: id_pattern == 0] " + " " + line)
+          continue
+
+        # 'date', 'time', 'pid', 'status', 'id_pattern', 'id_block', 'ip_from', 'port_from', 'ip_to', 'port_to'
+        df_aux = pd.DataFrame([[date, time, pid, status, id_pattern, id_block, ip_from, port_from, ip_to, port_to]], columns=DF_COLUMNS)
+        df = df.append(df_aux, ignore_index=True)
+      #else:
+      #  print 'No match'
+      #  break
+      if (args.sav == 1) and (k % INTERVAL == 0):
+        df.to_csv(FILE_OUT+"."+str(k), index=True)
+  
+  message = df.head().to_string()
+  print(message)
+  #viz.text(message)
+  
+  #df.to_csv(FILE_OUT, index=False)
+  #df.to_csv(FILE_OUT, index=True)
+  #df.to_html(FILE_OUT+".html", index=True)
+  result = df.to_html()
+  
+  message = "\nLog parser finished!"
+  print(message)
+  viz.text(message, win=WIN_LOG, append=True)
+
+
+if __name__ == '__main__':
+  parser = ArgumentParser()
+  parser.add_argument('--log', required=False, type=str, help="input log file to be parsed")
+  parser.add_argument('--out', required=False, type=str, help="output CSV file")
+  parser.add_argument('--int', required=False, type=int, help="number of iterations for debugging")
+  parser.add_argument('--sav', required=False, type=int, help="enable periodic save (0 - False, 1 - True)")
+  parser.set_defaults(log=FILE_LOG, out=FILE_OUT, int=INTERVAL, sav=0)
+  main(parser.parse_args())
+
+
+#print(result)
+try:
+  print(WIN_LOG)
+  variables.put('WIN_LOG', WIN_LOG)
+  resultMetadata.put("file.name", "log_structured.html")
+  resultMetadata.put("content.type", "text/html")
+  print("The results are available for download.")
+except NameError:
+  pass
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="HDFS_Feature_Extraction">
+      <description>
+        <![CDATA[ The simplest task, ran by a python engine. ]]>
+      </description>
+      <depends>
+        <task ref="HDFS_Log_Parser"/>
+      </depends>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre/" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import io
+import wget
+import random
+import validators
+import numpy as np
+import pandas as pd
+
+from visdom import Visdom
+from argparse import ArgumentParser
+
+
+FILE_IN_LOG = "https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/HDFS_2K.csv"
+WIN_LOG = 'win_119660' # from log_parser.py
+result = ''
+try:
+  WIN_LOG = variables.get('WIN_LOG')
+  VISDOM_HOST,VISDOM_PORT = variables.get("endpoint").split(":")
+  print("Using workflow variables.")
+except NameError:
+  #WIN_LOG = 'win_' + str(random.randrange(100000, 999999))
+  VISDOM_HOST,VISDOM_PORT = ("localhost", 8097)
+  print("Using local variables.")
+print("Connecting to %s" % VISDOM_PORT)
+viz = Visdom(server="http://"+VISDOM_HOST,port=VISDOM_PORT)
+assert viz.check_connection()
+
+
+def blocks_id_extraction(block_col=None):
+  blk_ids = str(block_col)
+  blk = blk_ids.split(' ')
+  return blk
+
+
+def feature_extraction(logs_csv):
+  features = []
+  dict_block_features = {}
+  for index,row in logs_csv.iterrows():
+    blocks = blocks_id_extraction(block_col=row[6])
+    j = int(row[5]-1)
+    for i in range(len(blocks)):
+      arr = [0] * 30
+      # update existing entry
+      if blocks[i] in dict_block_features:
+        features = dict_block_features.get(blocks[i])
+        features[j] = features[j] + 1
+        dict_block_features[blocks[i]] = features
+      # add new entry
+      else:
+        arr[j] = arr[j] + 1
+        dict_block_features[blocks[i]] = arr
+  return dict_block_features
+
+
+def main(args):
+  global result, WIN_LOG
+  
+  FILE_IN_LOG = args.input
+  try:
+    if validators.url(FILE_IN_LOG):
+      FILE_IN_LOG = wget.download(FILE_IN_LOG)
+  except Exception:
+    pass
+  
+  message = "Processing " + FILE_IN_LOG + "\n"
+  print(message)
+  viz.text(message, win=WIN_LOG, append=True)
+  
+  logs = pd.read_csv(FILE_IN_LOG)
+  dict_block_features = feature_extraction(logs_csv=logs)
+  features = dict_block_features.values()
+  block_ids = dict_block_features.keys()
+  
+  output = io.BytesIO()
+  data = np.column_stack((list(block_ids), list(features)))
+  np.savetxt(output, data, delimiter=" ", fmt="%s")
+  result = output.getvalue().decode('UTF-8')
+  
+  message = "Log feature extraction finished!"
+  print(message)
+  viz.text(message, win=WIN_LOG, append=True)
+
+
+if __name__ == '__main__':
+  parser = ArgumentParser()
+  parser.add_argument('--input', required=False)
+  parser.set_defaults(input=FILE_IN_LOG)
+  main(parser.parse_args())
+
+
+#print(result)
+try:
+  print(WIN_LOG)
+  variables.put('WIN_LOG', WIN_LOG)
+  resultMetadata.put("file.name", "output.txt")
+  resultMetadata.put("content.type", "text/plain")
+  print("The results are available for download.")
+except NameError:
+  pass
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="HDFS_Anomaly_Prediction">
+      <description>
+        <![CDATA[ The simplest task, ran by a python engine. ]]>
+      </description>
+      <depends>
+        <task ref="HDFS_Feature_Extraction"/>
+      </depends>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre/" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import io
+import wget
+import numpy as np
+import pandas as pd
+
+from argparse import ArgumentParser
+from sklearn import metrics
+from sklearn.externals import joblib
+from visdom import Visdom
+
+
+result = ''
+PREDICTION_LIMIT = 2000
+try:
+  VISDOM_HOST,VISDOM_PORT = variables.get("endpoint").split(":")
+  ALGORITHM_NAME = variables.get("ALGORITHM_NAME")
+  print("Using workflow variables.")
+except NameError:
+  VISDOM_HOST,VISDOM_PORT = ("localhost", 8097)
+  ALGORITHM_NAME = 'logistic_regression' # decision_tree, logistic_regression
+  print("Using local variables.")
+
+
+def load_data():
+  HDFS_X_test = wget.download('https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/HDFS_X_test.txt')
+  HDFS_Y_test = wget.download('https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/HDFS_Y_test.txt')
+  HDFS_idx_test = wget.download('https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/data/HDFS_idx_test.txt')
+  
+  X_test = pd.read_csv(HDFS_X_test, delimiter=' ', header = None, usecols=range(0,29))
+  Y_test = pd.read_csv(HDFS_Y_test, delimiter=' ', header = None)
+  idx_test = pd.read_csv(HDFS_idx_test, delimiter='\n', header = None)
+  
+  idx_test = np.ravel(idx_test)
+  Y_test = np.ravel(Y_test)
+  X_test = X_test.values
+  
+  return X_test, Y_test, idx_test
+
+
+def prediction(args, X_test):
+  modelfile = None
+  
+  if args.algorithm.startswith('decision_tree'):
+    modelfile = wget.download('https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/model/hdfs/decision_tree_model.pkl')
+  
+  if args.algorithm.startswith('logistic_regression'):
+    modelfile = wget.download('https://s3.eu-west-2.amazonaws.com/activeeon-public/log_analysis/model/hdfs/logistic_regression_model.pkl')
+  
+  model = joblib.load(modelfile)
+  predicted = model.predict(X_test)
+
+  return predicted
+
+
+def show_results(predicted, Y_test, idx_test, X_test, viz):
+  global result, PREDICTION_LIMIT
+  
+  count = 0 
+  nb_anomalies = 0
+  nb_regular = 0
+  X_matrix = [[0, 0],[0, 0]]
+  M = [[0, 0],[0, 0]]
+  
+  updatetextwindow = viz.text("List of detected anomalies :\n", opts = dict(title = 'List of detected anomalies'))
+  anomaly_time_line = viz.line(Y = np.array([0]), X = np.array([0]), opts = dict(xlabel = 'Block index', ylabel = 'Anomaly', title = 'Anomalies detected'))
+  statistic_pie = viz.pie(X=[0,0], opts=dict(legend=['Anomalies', 'No Anomalies'],  title = 'Percentage of detected anomalies',))
+  confusion_bar = viz.bar(X=X_matrix, opts=dict(stacked=True, legend=['False', 'True'], rownames=['Anomalies', 'No Anomalies'], title = 'Log classifier performance'))
+  win = viz.line(X=np.column_stack(([0]*29)), Y=np.column_stack((np.asarray(X_test[0][:]))), opts=dict(xlabel = 'Block Index', ylabel = 'Feature Value', title = 'Values of extracted features for each HDFS Block'))
+
+  #for x in range(1, len(predicted)):
+  for x in range(1, PREDICTION_LIMIT):
+    M = metrics.confusion_matrix(Y_test[0:x], predicted[0:x], labels=[1,0])
+    X_matrix = [[M[1][0], M[1][1]],[M[0][1], M[0][0]]]
+    count += 1
+    
+    if predicted[x] == 1:
+      nb_anomalies += 1
+      message = "%s\n"%(idx_test[x])
+      viz.text(message, win=updatetextwindow, append=True)
+      viz.line(Y = np.array([1]), X = np.array([count]), win = anomaly_time_line, update = 'append')
+      viz.pie(X = np.asarray([nb_anomalies, nb_regular]), win = statistic_pie, opts=dict(legend=['Anomalies', 'No Anomalies'],  title = 'Percentage of detected anomalies'))
+    else:
+      nb_regular += 1
+      viz.line(Y = np.array([0]), X = np.array([count]), win = anomaly_time_line, update = 'append')
+      viz.pie(X = np.asarray([nb_anomalies, nb_regular]), win = statistic_pie, opts=dict(legend=['Anomalies', 'No Anomalies'],  title = 'Percentage of detected anomalies'))
+    
+    viz.bar( X=X_matrix, win = confusion_bar, opts=dict( stacked=True, legend=['False', 'True'], rownames=['No Anomalies', 'Anomalies'], append = True, title = 'Log classifier performance'))
+    viz.line(X=np.column_stack(([count]*29)), Y=np.column_stack((np.asarray(X_test[x][:]))), win=win, update='append')
+  
+  precision = metrics.precision_score(Y_test, predicted)
+  recall = metrics.recall_score(Y_test, predicted)
+  F_measure = 2*precision*recall/(precision+recall)
+  
+  output = io.StringIO()
+  output.write("\nPrecision: %.3f" % precision)
+  output.write("\nRecall: %.3f" % recall)
+  output.write("\nF_measure: %.3f" % F_measure)
+
+  output.write("\n\nConfusion matrix:\n\n %s" % metrics.confusion_matrix(Y_test, predicted))
+  output.write("\n\nClassification report:\n\n %s" % metrics.classification_report(Y_test, predicted))
+  
+  result = output.getvalue()
+  output.close()
+
+
+def identify_anomaly_blk(predicted,X_test,Y_test,idx_test):
+  anomalyVec = []
+  id1 = []
+  label = []
+  
+  for i in range(len(predicted)):
+    row = []
+    if (predicted[i]):
+      for y in X_test[i,:]:
+        row.append(np.float64(y))
+      anomalyVec.append(row)
+      id1.append(idx_test[i])
+      label.append(Y_test[i])
+  
+  anomalyVec = np.array(anomalyVec)
+  anomalyVec = pd.DataFrame(anomalyVec)
+  
+  return id1, anomalyVec
+
+
+def output_file_writer(args, idx, anomalyVec):
+  output_file = open(args.output,'w')
+  np.savetxt(r'AnomalyTFV.txt', anomalyVec)
+  for i in range(len(idx)):
+    output_file.write(idx[i])
+    output_file.write('\n')
+  output_file.close()
+
+
+def main(args):
+  print("Connecting to %s" % args.visdom_port)
+  viz = Visdom(server="http://"+args.visdom_host,port=args.visdom_port)
+  assert viz.check_connection()
+  
+  X_test, Y_test, idx_test = load_data()
+  predicted = prediction(args, X_test)
+  show_results(predicted, Y_test, idx_test, X_test, viz)
+  
+  #idx_anomaly, anomalyVec = identify_anomaly_blk(predicted, X_test, Y_test, idx_test)
+  #output_file_writer(args, idx_anomaly, anomalyVec)
+
+
+if __name__ == '__main__':
+  parser = ArgumentParser()
+  parser.add_argument('--algorithm',   required=False, type=str, help="algorithm name")
+  parser.add_argument('--output',      required=False, type=str, help="output file")
+  parser.add_argument('--visdom_host', required=False, type=str, help="visdom server host")
+  parser.add_argument('--visdom_port', required=False, type=str, help="visdom server port")
+  parser.set_defaults(algorithm=ALGORITHM_NAME, output='', visdom_host=VISDOM_HOST, visdom_port=VISDOM_PORT)
+  main(parser.parse_args())
+
+
+print(result)
+try:
+  resultMetadata.put("file.name", "output.txt")
+  resultMetadata.put("content.type", "text/plain")
+  print("The results are available for download.")
+except NameError:
+  pass
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
