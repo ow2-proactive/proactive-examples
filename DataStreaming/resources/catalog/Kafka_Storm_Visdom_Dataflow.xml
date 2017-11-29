@@ -1,0 +1,514 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="Kafka_Storm_Visdom_Dataflow" projectName="Data Stream Processing"
+    priority="normal"
+    onTaskError="pauseJob"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="zookeeper_instance_name" value="zookeeper-server-1" />
+    <variable name="kafka_instance_name" value="kafka-server-1" />
+    <variable name="storm_instance_name" value="storm-cluster-1" />
+    <variable name="visdom_instance_name" value="visdom-server-1" />
+    <variable name="visdom_service_model" value="http://models.activeeon.com/pca/visdom" />
+    <variable name="storm_service_model" value="http://models.activeeon.com/pca/storm" />
+    <variable name="kafka_service_model" value="http://models.activeeon.com/pca/kafka" />
+    <variable name="zookeeper_service_model" value="http://models.activeeon.com/pca/zookeeper" />
+    <variable name="message_topic" value="BitCoinExchangeTopic" />
+    <variable name="dataflow_name" value="BitcoinExchangeDataflow" />
+    <variable name="execution_duration" value="120" />
+    <variable name="automatic_kill" value="true" model="PA:Boolean"/>
+  </variables>
+  <genericInformation>
+    <info name="bucketName" value="big-data"/>
+    <info name="pca.action.icon" value="/cloud-automation/styles/patterns/streaming.png"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_Services">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+import java.util.Optional;
+
+zookeeper_model = variables.get("zookeeper_service_model")
+zookeeper_instanceName = variables.get("zookeeper_instance_name")
+
+visdom_model = variables.get("visdom_service_model")
+visdom_instanceName = variables.get("visdom_instance_name")
+
+kafka_model = variables.get("kafka_service_model")
+kafka_instanceName = variables.get("kafka_instance_name")
+
+storm_model = variables.get("storm_service_model")
+storm_instanceName = variables.get("storm_instance_name")
+
+schedulerapi.connect();
+
+pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
+sessionId = schedulerapi.getSession();
+api = new CloudAutomationApi(pcaUrl, sessionId);
+
+//Start Zookeeper
+Optional<String> zookeeper_endpoint  = api.getServiceEndpoint(zookeeper_model,zookeeper_instanceName);
+if( !zookeeper_endpoint.isPresent()) {
+            api.createServiceInstance(zookeeper_model, zookeeper_instanceName);
+            zookeeper_endpoint = api.waitForServiceEndpoint(zookeeper_model, zookeeper_instanceName, 60);
+}
+
+//Start Visdom
+Optional<String> visdom_endpoint  = api.getServiceEndpoint(visdom_model,visdom_instanceName);
+if( !visdom_endpoint.isPresent()) {
+            api.createServiceInstance(visdom_model, visdom_instanceName);
+            visdom_endpoint = api.waitForServiceEndpoint(visdom_model, visdom_instanceName, 60);
+}
+
+//Start Kafka
+Optional<String> kafka_endpoint  = api.getServiceEndpoint(kafka_model,kafka_instanceName);
+if( !kafka_endpoint.isPresent()) {
+            api.createServiceInstance(kafka_model, kafka_instanceName);
+            kafka_endpoint = api.waitForServiceEndpoint(kafka_model, kafka_instanceName, 60);
+}
+
+//Start Storm
+Optional<String> storm_endpoint  = api.getServiceEndpoint(storm_model,storm_instanceName);
+if( !storm_endpoint.isPresent()) {
+            api.createServiceInstance(storm_model, storm_instanceName);
+            storm_endpoint = api.waitForServiceEndpoint(storm_model, storm_instanceName, 120);
+}
+
+println "Scheduler REST URL " + variables.get("PA_SCHEDULER_REST_URL")
+println "Zookeeper Service "  + variables.get("zookeeper_service_model") + " is available on " + zookeeper_endpoint.get()
+println "Visdom Service "     + variables.get("visdom_service_model")    + " is available on " + visdom_endpoint.get()
+println "Kafka Service "      + variables.get("kafka_service_model")     + " is available on " + kafka_endpoint.get()
+println "Storm Service "      + variables.get("storm_service_model")     + " is available on " + storm_endpoint.get()
+
+variables.put("zookeeper_endpoint", zookeeper_endpoint.get())
+variables.put("visdom_endpoint", visdom_endpoint.get())
+variables.put("kafka_endpoint", kafka_endpoint.get())
+variables.put("storm_endpoint", storm_endpoint.get())
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Create_Topic">
+      <description>
+        <![CDATA[ Create Kafa topic (input of the dataflow) ]]>
+      </description>
+      <depends>
+        <task ref="Start_Services"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+ZOOKEEPER=$variables_zookeeper_endpoint
+KAFKA=$variables_kafka_instance_name
+TOPIC=$variables_message_topic
+
+res=$(docker exec $KAFKA /opt/kafka/bin/kafka-topics.sh --list --zookeeper $ZOOKEEPER | grep $TOPIC)
+
+echo $res
+
+if [[ $res != $TOPIC ]]; then
+echo "create kafka topic: $TOPIC"
+   docker exec $KAFKA /opt/kafka/bin/kafka-topics.sh --create --topic $TOPIC --replication-factor 1 --partitions 1 --zookeeper $ZOOKEEPER --config compression.type=lz4
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Submit_Dataflow">
+      <description>
+        <![CDATA[ Submit Storm topology ]]>
+      </description>
+      <depends>
+        <task ref="Create_Topic"/>
+      </depends>
+      <inputFiles>
+        <files  includes="BitcoinExchangeDataflow-1.0.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="BitcoinExchangeDataflow.yaml" accessMode="transferFromGlobalSpace"/>
+        <files  includes="BitcoinExchangeDataflow.properties" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+NIMBUS=$variables_storm_instance_name"-nimbus"
+DATAFLOW=$variables_dataflow_name
+
+ZOOKEEPER_ENDPOINT=$variables_zookeeper_endpoint
+KAFKA_ENDPOINT=$variables_kafka_endpoint
+
+echo "kafka.zookeeper.hosts: $ZOOKEEPER_ENDPOINT" >> BitcoinExchangeDataflow.properties  
+echo "kafka.bootstrap.servers: $KAFKA_ENDPOINT" >> BitcoinExchangeDataflow.properties  
+
+docker exec $NIMBUS mkdir -p /topologies
+
+docker cp BitcoinExchangeDataflow-1.0.jar $NIMBUS:/topologies/
+docker cp BitcoinExchangeDataflow.yaml $NIMBUS:/topologies/
+docker cp BitcoinExchangeDataflow.properties $NIMBUS:/topologies/
+
+##test if dataflow exists
+docker exec -i  $NIMBUS storm list | grep -w "$DATAFLOW" && result=$?
+
+if [[ "$result" == 0 ]]; then
+	echo "Dataflow $DATAFLOW already exists, killing it"
+    docker exec -i  $NIMBUS storm kill $DATAFLOW -w 1
+    sleep 10    
+fi
+
+## deploy dataflow
+docker exec -i $NIMBUS storm jar /topologies/BitcoinExchangeDataflow-1.0.jar org.apache.storm.flux.Flux --remote /topologies/BitcoinExchangeDataflow.yaml --filter /topologies/BitcoinExchangeDataflow.properties
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Vis-Rate">
+      <description>
+        <![CDATA[ Send bitcoin rate data to Visdom server ]]>
+      </description>
+      <depends>
+        <task ref="Submit_Dataflow"/>
+      </depends>
+      <inputFiles>
+        <files  includes="visdomRateClient.py" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+KAFKA=$variables_kafka_instance_name
+VISDOM=$variables_visdom_instance_name
+TOPIC=BitCoinRateTopic
+
+pyscript=visdomRateClient.py
+timeout=$variables_execution_duration
+
+docker cp $pyscript $VISDOM:/root/$pyscript
+
+docker exec $VISDOM /bin/bash -c 'rm rate.pckl'
+
+timeout $timeout docker exec -i $KAFKA /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic $TOPIC | \
+while read LINE; do
+    docker exec $VISDOM /bin/bash -c "python $pyscript --value $LINE"
+done
+
+exit 0
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Vis_Variation">
+      <description>
+        <![CDATA[ Send bitcoin rate variation to Visdom server ]]>
+      </description>
+      <depends>
+        <task ref="Submit_Dataflow"/>
+      </depends>
+      <inputFiles>
+        <files  includes="visdomGapClient.py" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+KAFKA=$variables_kafka_instance_name
+VISDOM=$variables_visdom_instance_name
+TOPIC=BitCoinGapTopic
+
+pyscript=visdomGapClient.py
+timeout=$variables_execution_duration
+
+docker cp $pyscript $VISDOM:/root/$pyscript
+
+docker exec $VISDOM /bin/bash -c 'rm gap.pckl'
+
+timeout $timeout docker exec -i $KAFKA /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic $TOPIC | \
+while read LINE; do
+    docker exec $VISDOM /bin/bash -c "python $pyscript --value $LINE"
+done
+
+exit 0
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="View_Result">
+      <description>
+        <![CDATA[ Give link to view results on Visdom and dataflow status on Storm ]]>
+      </description>
+      <depends>
+        <task ref="Submit_Dataflow"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+String visdom_endpoint = variables.get("visdom_endpoint");
+
+result = '<meta http-equiv="refresh" content="1; url=http://' + visdom_endpoint + '/" />'
+result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+resultMetadata.put("content.type", "text/html")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Poll_Data">
+      <description>
+        <![CDATA[ Poll online data and send it to Kafka topic (input of the dataflow) ]]>
+      </description>
+      <depends>
+        <task ref="Create_Topic"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+ZOOKEEPER=$variables_zookeeper_endpoint
+KAFKA=$variables_kafka_instance_name
+TOPIC=$variables_message_topic
+
+end=$((SECONDS+$variables_execution_duration))
+
+counter=0
+while [ $SECONDS -lt $end ]; do
+
+	message1=$(curl -s "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=BTC&to_currency=CNY&apikey=38MRHIBEOPKKZXAT")
+	message2=$(curl -s "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=BTC&to_currency=CNY&apikey=38MRHIBEOPKKZXAT")
+	message3=$(curl -s "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=BTC&to_currency=CNY&apikey=38MRHIBEOPKKZXAT")
+	
+ 	docker exec -i $KAFKA /opt/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic $TOPIC <<< $message1$'\n'$message2$'\n'$message3	
+    (( counter=counter+3 ))
+    
+done
+echo $counter
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Vis_Alerts">
+      <description>
+        <![CDATA[ Send bitcoin alerts to Visdom server ]]>
+      </description>
+      <depends>
+        <task ref="Submit_Dataflow"/>
+      </depends>
+      <inputFiles>
+        <files  includes="visdomAlertClient.py" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+KAFKA=$variables_kafka_instance_name
+VISDOM=$variables_visdom_instance_name
+TOPIC=BitCoinAlertTopic
+
+pyscript=visdomAlertClient.py
+timeout=$variables_execution_duration
+
+docker cp $pyscript $VISDOM:/root/$pyscript
+
+docker exec $VISDOM /bin/bash -c 'rm alerts.pckl'
+
+timeout $timeout docker exec -i $KAFKA /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic $TOPIC | \
+while read LINE; do
+    docker exec $VISDOM /bin/bash -c "python $pyscript --value '$LINE'"
+done
+
+exit 0
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Kill_Services">
+      <depends>
+        <task ref="Kill_Dataflow"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+import java.util.Optional;
+
+zookeeper_model = variables.get("zookeeper_service_model")
+zookeeper_instanceName = variables.get("zookeeper_instance_name")
+
+visdom_model = variables.get("visdom_service_model")
+visdom_instanceName = variables.get("visdom_instance_name")
+
+kafka_model = variables.get("kafka_service_model")
+kafka_instanceName = variables.get("kafka_instance_name")
+
+storm_model = variables.get("storm_service_model")
+storm_instanceName = variables.get("storm_instance_name")
+
+schedulerapi.connect();
+
+pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
+sessionId = schedulerapi.getSession();
+api = new CloudAutomationApi(pcaUrl, sessionId);
+
+//Stop Zookeeper
+Optional<String> zookeeper_endpoint  = api.getServiceEndpoint(zookeeper_model,zookeeper_instanceName);
+if( zookeeper_endpoint.isPresent()) {
+            api.terminateServiceFromInstanceName(zookeeper_model, zookeeper_instanceName);
+}
+
+//Stop Visdom
+Optional<String> visdom_endpoint  = api.getServiceEndpoint(visdom_model,visdom_instanceName);
+if( visdom_endpoint.isPresent()) {
+            api.terminateServiceFromInstanceName(visdom_model, visdom_instanceName);
+}
+
+//Stop Kafka
+Optional<String> kafka_endpoint  = api.getServiceEndpoint(kafka_model,kafka_instanceName);
+if( kafka_endpoint.isPresent()) {
+            api.terminateServiceFromInstanceName(kafka_model, kafka_instanceName);
+}
+
+//Stop Storm
+Optional<String> storm_endpoint  = api.getServiceEndpoint(storm_model,storm_instanceName);
+if( storm_endpoint.isPresent()) {
+            api.terminateServiceFromInstanceName(storm_model, storm_instanceName);
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Finish">
+      <depends>
+        <task ref="Vis-Rate"/>
+        <task ref="Vis_Variation"/>
+        <task ref="Vis_Alerts"/>
+        <task ref="View_Result"/>
+        <task ref="Poll_Data"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <if target="Immediately"
+        else="After_Web_Validation"
+        continuation="Kill_Dataflow">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+kill=variables.get("automatic_kill")
+if(kill=="true"){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+    </task>
+    <task name="Immediately">
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Stopping dataflow and removing PCA platforms immediately"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="After_Web_Validation">
+      <scriptExecutable>
+        <script>
+          <code language="python">
+            <![CDATA[
+# Please fill variables
+notification_message = 'Please validate to terminate the Kafka-Storm-Visdom Dataflow'
+
+# Don't change code below unless you know what you are doing
+from org.ow2.proactive.addons.webhook import Webhook
+
+jobid = variables.get("PA_JOB_ID")
+schedulerURL =  variables.get("PA_SCHEDULER_REST_URL")
+
+# get sessionid
+schedulerapi.connect()
+
+# pause job
+schedulerapi.pauseJob(jobid)
+
+
+# send web validation
+print "Sending web validation..."
+url = schedulerURL.replace("/rest", "") +'/notification-service/notifications'
+print url
+headers = '{\"Content-Type\" : \"application/json\" }'
+notification_content = '{\"description\": \"'+notification_message+'\", \"jobId\": \"'+jobid+'\" , \"validation\": \"true\"}'
+Webhook.execute ( 'POST', url, headers, notification_content);
+print "Web Validation sent"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Kill_Dataflow">
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+ZOOKEEPER=$variables_zookeeper_endpoint
+NIMBUS=$variables_storm_instance_name"-nimbus"
+KAFKA=$variables_kafka_instance_name
+
+docker exec -i $NIMBUS storm kill $variables_dataflow_name -w 5
+
+docker exec $KAFKA /opt/kafka/bin/kafka-topics.sh --zookeeper $ZOOKEEPER --delete --topic BitCoinRateTopic
+docker exec $KAFKA /opt/kafka/bin/kafka-topics.sh --zookeeper $ZOOKEEPER --delete --topic BitCoinGapTopic
+docker exec $KAFKA /opt/kafka/bin/kafka-topics.sh --zookeeper $ZOOKEEPER --delete --topic BitCoinAlertTopic
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
