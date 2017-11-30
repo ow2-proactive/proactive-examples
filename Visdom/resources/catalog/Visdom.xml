@@ -3,66 +3,27 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.8"
      xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
-    name="Visdom" projectName="Cloud Automation - Visdom"
+    name="Visdom" projectName="Cloud Automation - Deployment"
     priority="normal"
-    onTaskError="cancelJob"
-     maxNumberOfExecution="1">
+    onTaskError="pauseJob"
+     maxNumberOfExecution="2">
   <variables>
     <variable name="instance_name" value="visdom-server-1" />
   </variables>
-  <description>
-    <![CDATA[ Start the Visdom server in a Docker container. ]]>
-  </description>
-      <genericInformation>
-    <info name="pca.service.type" value="platform"/>
-    <info name="pca.service.description" value="A flexible tool for creating, organizing, and sharing visualizations of live, rich data"/>
+  <genericInformation>
+    <info name="pca.service.description" value="Visdom Server"/>
+    <info name="pca.service.type" value="Platform"/>
     <info name="bucketName" value="Cloud-automation"/>
-    <info name="pca.action.icon" value="https://avatars1.githubusercontent.com/u/16943930?s=400&amp;v=4"/>
+    <info name="pca.action.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/visdom.png"/>
     <info name="pca.service.name" value="Visdom"/>
-    <info name="pca.action.name" value="create"/>
-    <info name="Documentation" value="https://www.activeeon.com/resources/activeeon-machine-learning-visualization-with-visdom.pdf"/>
+    <info name="pca.action.name" value="deployment"/>
     <info name="pca.service.model" value="http://models.activeeon.com/pca/visdom"/>
     <info name="pca.action.type" value="create"/>
-    <info name="pca.action.description" value="Start Visdom Server"/>
+    <info name="pca.action.description" value="deployment of the Visdom server"/>
     <info name="pca.action.origin_state" value="null"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="start_visdom">
-      <description>
-        <![CDATA[ Start the Visdom server in a Docker container as a service (docker start). ]]>
-      </description>
-      <pre>
-        <script>
-          <code language="bash">
-            <![CDATA[
-export INSTANCE_ID=$(docker run -d -p 8097 -h visdom --name $variables_instance_name -w /root activeeon/visdom_server python -m visdom.server -port 8097)
-
-docker inspect --format='{{(index (index .NetworkSettings.Ports "8097/tcp") 0).HostPort}}' $INSTANCE_ID > $variables_instance_name.host_port
-]]>
-          </code>
-        </script>
-      </pre>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-// Dockerized Visdom Server launched in a bash pre-script
-
-//def hostIp = new URL('http://checkip.amazonaws.com/').getText()
-//def hostIp = "10.19.197.100"
-
-def PA_SCHEDULER_REST_URL = variables.get('PA_SCHEDULER_REST_URL') // 'http://10.19.197.100:8080/rest'
-def host_ip = new URL(PA_SCHEDULER_REST_URL).getHost()
-def instance_name = variables.get('instance_name')
-def host_port = new File(instance_name + '.host_port').text
-
-variables.put("endpoint", host_ip + ":" + host_port)
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
     <task name="end_deployment">
       <depends>
         <task ref="start_visdom"/>
@@ -71,7 +32,7 @@ variables.put("endpoint", host_ip + ":" + host_port)
         <script>
           <code language="javascript">
             <![CDATA[
-resultObj={}
+var resultObj={}
 resultObj.id=variables.get("instance_name")
 resultObj.status="RUNNING"
 resultObj.endpoint=variables.get("endpoint")
@@ -80,6 +41,63 @@ result = JSON.stringify(resultObj);
           </code>
         </script>
       </scriptExecutable>
+    </task>
+    <task name="start_visdom">
+      <description>
+        <![CDATA[ Pull Visdom image and start a container ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+printf "Pulling Visdom image \n"
+docker pull activeeon/visdom_server
+
+CONTAINER=$variables_instance_name
+
+echo "$CONTAINER"
+
+if [ "$(docker ps -a | grep $CONTAINER)" ]; then
+ RUNNING=$(docker inspect --format="{{ .State.Running }}" $CONTAINER 2> /dev/null)
+ STOPPED=$(docker inspect --format="{{ .State.Status }}" $CONTAINER 2> /dev/null)  
+
+ if [ "$RUNNING" == "true" ]; then 
+   echo "$CONTAINER container is running"
+ elif [ "$STOPPED" == "exited" ]; then 
+   echo "Starting $CONTAINER container"
+   docker start $CONTAINER
+ fi 
+
+else 
+ echo "Running $CONTAINER container"
+ docker run -d --name $CONTAINER -p 8097 -w /root  activeeon/visdom_server python -m visdom.server -port 8097
+fi
+
+port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "8097/tcp") 0).HostPort}}' $CONTAINER)
+echo "$port" > $CONTAINER"_port"
+
+
+# Endpoint added to the job variables using a groovy post-script
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def PA_SCHEDULER_REST_URL = variables.get('PA_SCHEDULER_REST_URL')
+def hostname = new URL(PA_SCHEDULER_REST_URL).getHost()
+def port=variables.get("instance_name")+"_port"
+def endpoint = hostname + ":" + new File(port).text.trim()
+
+println endpoint
+
+variables.put("endpoint", endpoint)
+]]>
+          </code>
+        </script>
+      </post>
     </task>
   </taskFlow>
 </job>

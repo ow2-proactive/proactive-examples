@@ -1,0 +1,192 @@
+# topology definition
+# name to be used when submitting
+name: "${topology.name}"
+
+# Components
+# Components are analagous to Spring beans. They are meant to be used as constructor,
+# property(setter), and builder arguments.
+#
+# for the time being, components must be declared in the order they are referenced
+components:
+  - id: "stringScheme"
+    className: "org.apache.storm.kafka.StringScheme"
+
+  - id: "stringMultiScheme"
+    className: "org.apache.storm.spout.SchemeAsMultiScheme"
+    constructorArgs:
+      - ref: "stringScheme"
+
+  - id: "zkHosts"
+    className: "org.apache.storm.kafka.ZkHosts"
+    constructorArgs:
+      - "${kafka.zookeeper.hosts}"
+
+  - id: "rateTopicSelector"
+    className: "org.apache.storm.kafka.bolt.selector.DefaultTopicSelector"
+    constructorArgs:
+      - "${rate.message.topic}"
+
+  - id: "gapTopicSelector"
+    className: "org.apache.storm.kafka.bolt.selector.DefaultTopicSelector"
+    constructorArgs:
+      - "${gap.message.topic}"
+
+  - id: "alertTopicSelector"
+    className: "org.apache.storm.kafka.bolt.selector.DefaultTopicSelector"
+    constructorArgs:
+      - "${alert.message.topic}"
+
+ # - id: "thresholdTopicSelector"
+ #   className: "org.apache.storm.kafka.bolt.selector.DefaultTopicSelector"
+ #   constructorArgs:
+ #     - "${threshold.message.topic}"
+
+  - id: "kafkaMapper"
+    className: "org.apache.storm.kafka.bolt.mapper.FieldNameBasedTupleToKafkaMapper"
+
+  - id: "kafkaProducerProps"
+    className: "java.util.Properties"
+    configMethods:
+      - name: "put"
+        args:
+          - "bootstrap.servers"
+          - "${kafka.bootstrap.servers}"
+      - name: "put"
+        args:
+          - "acks"
+          - "1"
+      - name: "put"
+        args:
+          - "key.serializer"
+          - "org.apache.kafka.common.serialization.StringSerializer"
+      - name: "put"
+        args:
+          - "value.serializer"
+          - "org.apache.kafka.common.serialization.StringSerializer"
+      - name: "put"
+        args:
+          - "compression.type"
+          - "lz4"
+          
+
+  - id: "spoutConfig"
+    className: "org.apache.storm.kafka.SpoutConfig"
+    constructorArgs:
+      # brokerHosts
+      - ref: "zkHosts"
+      # topic
+      - "${raw.message.topic}"
+      # zkRoot
+      - "/kafkaSpout"
+      # id
+      - "myId"
+    properties:
+      - name: "ignoreZkOffsets"
+        value: true
+      - name: "scheme"
+        ref: "stringMultiScheme"
+
+# topology configuration
+# this will be passed to the submitter as a map of config options
+#
+config:
+  topology.workers: 1
+  topology.eventlogger.executors: 1
+  # ...
+
+# spout definitions
+spouts:
+  - id: "KafkaSpout"
+    className: "org.apache.storm.kafka.KafkaSpout"
+    constructorArgs:
+      - ref: "spoutConfig"
+
+# bolt definitions
+bolts:
+  - id: "BitcoinData"
+    className: "org.ow2.proactive.data.streaming.bolt.BitcoinExchangeProcessing"
+    parallelism: 1
+
+  - id: "KafkaRate"
+    className: "org.apache.storm.kafka.bolt.KafkaBolt"
+    parallelism: 1
+    configMethods:
+      - name: "withProducerProperties"
+        args: [ref: "kafkaProducerProps"]
+      - name: "withTopicSelector"
+        args: [ref: "rateTopicSelector"]
+      - name: "withTupleToKafkaMapper"
+        args: [ref: "kafkaMapper"]
+
+  - id: "KafkaGap"
+    className: "org.apache.storm.kafka.bolt.KafkaBolt"
+    parallelism: 1
+    configMethods:
+      - name: "withProducerProperties"
+        args: [ref: "kafkaProducerProps"]
+      - name: "withTopicSelector"
+        args: [ref: "gapTopicSelector"]
+      - name: "withTupleToKafkaMapper"
+        args: [ref: "kafkaMapper"]
+
+  - id: "KafkaAlert"
+    className: "org.apache.storm.kafka.bolt.KafkaBolt"
+    parallelism: 1
+    configMethods:
+      - name: "withProducerProperties"
+        args: [ref: "kafkaProducerProps"]
+      - name: "withTopicSelector"
+        args: [ref: "alertTopicSelector"]
+      - name: "withTupleToKafkaMapper"
+        args: [ref: "kafkaMapper"]
+
+ # - id: "KafkaThreshold"
+ #   className: "org.apache.storm.kafka.bolt.KafkaBolt"
+ #   parallelism: 1
+ #   configMethods:
+ #     - name: "withProducerProperties"
+ #       args: [ref: "kafkaProducerProps"]
+ #     - name: "withTopicSelector"
+ #       args: [ref: "thresholdTopicSelector"]
+ #     - name: "withTupleToKafkaMapper"
+ #       args: [ref: "kafkaMapper"]
+
+#stream definitions
+# stream definitions define connections between spouts and bolts.
+# note that such connections can be cyclical
+# custom stream groupings are also supported
+
+streams:
+  - name: "kafka --> BitcoinData" # name isn't used (placeholder for logging, UI, etc.)
+    from: "KafkaSpout"
+    to: "BitcoinData"
+    grouping:
+      type: LOCAL_OR_SHUFFLE
+
+  - name: "BitcoinData --> KafkaRate"
+    from: "BitcoinData"
+    to: "KafkaRate"
+    grouping:
+      streamId: "RateStream"
+      type: LOCAL_OR_SHUFFLE
+
+  - name: "BitcoinData --> KafkaGap"
+    from: "BitcoinData"
+    to: "KafkaGap"
+    grouping:
+      streamId: "GapStream"
+      type: LOCAL_OR_SHUFFLE
+
+  - name: "BitcoinData --> KafkaAlert"
+    from: "BitcoinData"
+    to: "KafkaAlert"
+    grouping:
+      streamId: "AlertStream"
+      type: LOCAL_OR_SHUFFLE
+
+#  - name: "BitcoinData --> KafkaThreshold"
+#    from: "BitcoinData"
+#    to: "KafkaThreshold"
+#    grouping:
+#      streamId: "ThresholdStream"
+#      type: LOCAL_OR_SHUFFLE
