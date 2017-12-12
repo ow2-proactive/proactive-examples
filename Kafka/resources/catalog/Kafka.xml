@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.8"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+  xmlns="urn:proactive:jobdescriptor:3.9"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
     name="Kafka" projectName="Cloud Automation - Deployment"
     priority="normal"
     onTaskError="pauseJob"
@@ -51,6 +51,17 @@ result = JSON.stringify(resultObj);
       <depends>
         <task ref="check_zookeeper"/>
       </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def PA_SCHEDULER_REST_URL = variables.get('PA_SCHEDULER_REST_URL')
+def hostname = new URL(PA_SCHEDULER_REST_URL).getHost()
+variables.put("hostname",hostname)
+]]>
+          </code>
+        </script>
+      </pre>
       <scriptExecutable>
         <script>
           <code language="bash">
@@ -58,12 +69,13 @@ result = JSON.stringify(resultObj);
 printf "Pulling Apache Kafka image \n"
 docker pull wurstmeister/kafka
 
-host_ip=$(docker exec -i $variables_zookeeper_instance_name /sbin/ip route|awk '/default/ { print $3 }')
-echo $host_ip
+HOST=$variables_hostname
+IP=$(docker network inspect --format='{{(index (index .IPAM.Config ) 0).Gateway}}' bridge)
 
+ZOOKEEPER=$variables_zookeeper_instance_name
 CONTAINER=$variables_instance_name
-
-echo "$CONTAINER"
+BROKER_ID=$(shuf -i 0-1000 -n 1)
+PA_HOME=$variables_PA_SCHEDULER_HOME
 
 if [ "$(docker ps -a | grep $CONTAINER)" ]; then
  RUNNING=$(docker inspect --format="{{ .State.Running }}" $CONTAINER 2> /dev/null)
@@ -80,10 +92,14 @@ else
  echo "Running $CONTAINER container"
  docker run -d --name $CONTAINER \
            -p 9092 \
+           --link $ZOOKEEPER:zookeeper \
+           --add-host=$HOST:$IP \
+           -v $PA_HOME:$PA_HOME \
+           -v /tmp:/tmp \
            -v /var/run/docker.sock:/var/run/docker.sock \
-           --env KAFKA_ADVERTISED_HOST_NAME="$host_ip" \
+           --env KAFKA_ADVERTISED_HOST_NAME="$HOST" \
            --env KAFKA_ZOOKEEPER_CONNECT="$variables_zookeeper_endpoint" \
-           --env KAFKA_BROKER_ID='999' \
+           --env KAFKA_BROKER_ID="$BROKER_ID" \
            wurstmeister/kafka
 fi
 
@@ -99,8 +115,7 @@ echo "$port" > $CONTAINER"_port"
         <script>
           <code language="groovy">
             <![CDATA[
-def PA_SCHEDULER_REST_URL = variables.get('PA_SCHEDULER_REST_URL')
-def hostname = new URL(PA_SCHEDULER_REST_URL).getHost()
+def hostname = variables.get("hostname")
 def port=variables.get("instance_name")+"_port"
 def endpoint = hostname + ":" + new File(port).text.trim()
 
