@@ -12,8 +12,8 @@ This will generate the `proactive-examples.zip` file inside project's build fold
 # How to test locally
 Copy the genarated proactive-examples.zip file to your `Scheduler_Distribution_Path/samples` directory.
 Start your proactive distribution. From this point everything should work ok.
-During scheduling startup: the proactive-examples.zip archive will be exatracted to proactive-examples folder. On the next step the special groovy script will automatically push the workflows from proactive-examples folder to Catalog storage.
-If you need to retest the extracting and loading of proactive-examples, please `proactive-examples folder`.
+During scheduling startup: the proactive-examples.zip archive will be extracted to proactive-examples folder. On the next step the special groovy script will automatically push the workflows from proactive-examples folder to Catalog storage.
+If you need to retest the extracting and loading of proactive-examples, please remove `proactive-examples folder`.
 
 # How to add a new package
 
