@@ -3,6 +3,18 @@
 This repository includes a sub directory per bucket, in which a metadata file centralizes object-related-information: bucket name, object name, object kind,..
 If the "studio_template" section is specified, the object/workflow is also considered as a studio template.
 
+The aim of this project is to centralize all proactive workflows and other related objects (scripts, images, etc). The workflows from the ProActive Examples project are pushed to Catalog storage inside proactive.
+
+# How to build
+Please run next command: ``gradlew clean zip``
+This will generate the `proactive-examples.zip` file inside project's build folder. 
+
+# How to test locally
+Copy the genarated proactive-examples.zip file to your `Scheduler_Distribution_Path/samples` directory.
+Start your proactive distribution. From this point everything should work ok.
+During scheduling startup: the proactive-examples.zip archive will be exatracted to proactive-examples folder. On the next step the special groovy script will automatically push the workflows from proactive-examples folder to Catalog storage.
+If you need to retest the extracting and loading of proactive-examples, please `proactive-examples folder`.
+
 # How to add a new package
 
 1) Create a folder with the desired package name (e.g. **TextAnalysis**).
