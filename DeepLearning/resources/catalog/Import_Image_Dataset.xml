@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.9"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+    name="Import_Image_Dataset" projectName="1. Input and Output"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="GPU_NODES_ONLY" value="False" />
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
+    <variable name="DOCKER_ENABLED" value="True" />
+  </variables>
+    <genericInformation>
+    <info name="bucketName" value="deep-learning"/>
+    <info name="pca.action.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/import_image.png"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Import_Image_Dataset">
+      <description>
+        <![CDATA[ Load and return an image dataset. ]]>
+      </description>
+      <variables>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+        <variable name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/ants_vs_bees.zip" inherited="true" />
+        <variable name="SPLIT_TRAIN" value="0.5" inherited="false" />
+        <variable name="SPLIT_VAL" value="0.25" inherited="false" />
+        <variable name="SPLIT_TEST" value="0.25" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/import_image.png"/>
+      </genericInformation>
+      <selection>
+        <script
+         type="static" >
+          <code language="javascript">
+            <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Import_Image_Dataset")
+
+import wget
+import zipfile
+import shutil
+import json
+
+from os import remove, listdir, makedirs
+from os.path import basename, splitext, exists, join
+from sklearn.model_selection import train_test_split
+
+DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/ants_vs_bees.zip'
+GLOBALSPACE = './data/'
+SPLIT_SETS  = ['train','val','test']
+SPLIT_TRAIN = 0.50
+SPLIT_VAL   = 0.25
+SPLIT_TEST  = 0.25
+
+if 'variables' in locals():
+  GLOBALSPACE = str(variables.get("PA_SCHEDULER_HOME")) + '/data/defaultglobal/'
+  
+  if variables.get("DATASET_URL") is not None:
+    DATASET_URL = variables.get("DATASET_URL")
+  if variables.get("SPLIT_TRAIN") is not None:
+    SPLIT_TRAIN = float(str(variables.get("SPLIT_TRAIN")))
+  if variables.get("SPLIT_VAL") is not None:
+    SPLIT_VAL = float(str(variables.get("SPLIT_VAL")))
+  if variables.get("SPLIT_TEST") is not None:
+    SPLIT_TEST = float(str(variables.get("SPLIT_TEST")))
+
+print("GLOBALSPACE: " + GLOBALSPACE)
+print("DATASET_URL: " + DATASET_URL)
+assert DATASET_URL is not None
+
+print("Split information: ")
+print("SPLIT_TRAIN: " + str(SPLIT_TRAIN))
+print("SPLIT_VAL:   " + str(SPLIT_VAL))
+print("SPLIT_TEST:  " + str(SPLIT_TEST))
+
+assert SPLIT_TRAIN >= 0.0
+assert SPLIT_VAL >= 0.0
+assert SPLIT_TEST >= 0.0
+assert (SPLIT_TRAIN + SPLIT_VAL + SPLIT_TEST) == 1.0
+if SPLIT_TRAIN == 0.0 and SPLIT_VAL > 0.0:
+  raise AssertionError("SPLIT_VAL cannot be defined when SPLIT_TRAIN equals zero") 
+
+DATASET_NAME = splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0]
+DATASET_PATH = join(GLOBALSPACE, DATASET_NAME)
+
+if exists(DATASET_PATH):
+  shutil.rmtree(DATASET_PATH)
+makedirs(DATASET_PATH)
+
+print("Dataset information: ")
+print("DATASET_NAME: " + DATASET_NAME)
+print("DATASET_PATH: " + DATASET_PATH)
+
+print("Downloading...")
+filename = wget.download(DATASET_URL, DATASET_PATH)
+print("FILENAME: " + filename)
+print("OK")
+
+print("Extracting...")
+dataset_zip = zipfile.ZipFile(filename)
+dataset_zip.extractall(DATASET_PATH)
+dataset_zip.close()
+remove(filename)
+print("OK")
+
+k = 0
+images_list = []
+images_label = []
+labels_name = []
+for root in listdir(DATASET_PATH):
+  if (not root.startswith('.')):
+    labels_name.append(root)
+    label_dir = join(DATASET_PATH, root)
+    print(label_dir)
+    files = listdir(label_dir)
+    files[:] = [join(label_dir,file) for file in files]
+    files_size = len(files)
+    files_label = [k] * files_size
+    images_list = images_list + files
+    images_label = images_label + files_label
+    k = k + 1
+
+print("Splitting the dataset into train and test")
+images_train, images_test, labels_train, labels_test = train_test_split(images_list, images_label, test_size=SPLIT_TEST, random_state=1)
+
+images_val = []
+labels_val = []
+if SPLIT_TRAIN != 0.0 and SPLIT_VAL != 0.0:
+  print("Splitting the train into train and val")
+  images_train, images_val, labels_train, labels_val = train_test_split(images_train, labels_train, test_size=SPLIT_VAL, random_state=1)
+
+images_split = {SPLIT_SETS[0] : images_train, SPLIT_SETS[1] : images_val, SPLIT_SETS[2] : images_test}
+labels_split = {SPLIT_SETS[0] : labels_train, SPLIT_SETS[1] : labels_val, SPLIT_SETS[2] : labels_test}
+
+def move_images(_path, _images_list, _labels_list, _labels_name):
+  if exists(_path):
+    shutil.rmtree(_path)
+  makedirs(_path)
+  for _label_name in _labels_name:
+    makedirs(join(_path, _label_name))
+  for _image_path, _image_label in zip(_images_list, _labels_list):
+    _image_path_dest = join(_path, _labels_name[_image_label], basename(_image_path))
+    print("Moving " + _image_path + " to " + _image_path_dest)
+    shutil.move(_image_path, _image_path_dest)
+
+DATASET_LABELS = json.dumps(labels_name)
+print("DATASET_LABELS: " + DATASET_LABELS)
+
+for SPLIT_NAME in SPLIT_SETS:
+  SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
+  print("SPLIT_PATH: " + SPLIT_PATH)
+  move_images(SPLIT_PATH, images_split[SPLIT_NAME], labels_split[SPLIT_NAME], labels_name)
+
+if 'variables' in locals():
+  variables.put("GLOBALSPACE", GLOBALSPACE)
+  variables.put("DATASET_NAME", DATASET_NAME)
+  variables.put("DATASET_PATH", DATASET_PATH)
+  variables.put("DATASET_LABELS", DATASET_LABELS)
+
+print("END Import_Image_Dataset")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>
