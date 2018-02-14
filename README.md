@@ -7,13 +7,25 @@ The aim of this project is to centralize all proactive workflows and other relat
 
 # How to build
 Please run next command: ``gradlew clean zip``
-This will generate the `proactive-examples.zip` file inside project's build folder. 
+This will generate the `proactive-examples.zip` file inside project's build folder.
 
 # How to test locally
 Copy the genarated proactive-examples.zip file to your `Scheduler_Distribution_Path/samples` directory.
 Start your proactive distribution. From this point everything should work ok.
 During scheduling startup: the proactive-examples.zip archive will be extracted to proactive-examples folder. On the next step the special groovy script will automatically push the workflows from proactive-examples folder to Catalog storage.
-If you need to retest the extracting and loading of proactive-examples, please remove `proactive-examples folder`.
+If you need to retest the extracting and loading of proactive-examples, please remove `proactive-examples folder`. Also to test the filling of catalog storage don't forget to clean database.
+
+## The example of exact commands to test locally on linux:
+```
+1) Scheduler_Distribution_Path is the path to your local Proactive distribution folder. You need to `cd` to this folder.
+2) rm -fr samples/proactive-examples*
+3) rm -fr data/*
+4) you need to `cd` into your locally cloned proactive-examples project folder
+5) ./gradlew clean zip
+6) cp build/proactive-examples.zip Scheduler_Distribution_Path/samples/
+7) go back to Scheduler_Distribution_Path and start proactive-server
+8) ./Scheduler_Distribution_Path/bin/proactive-server
+```
 
 # How to add a new package
 
@@ -78,7 +90,9 @@ An example of a catalog object that represents a workflow:
 
 4) Add the XML file(s) of the workflow(s) into `resources/catalog/` inside your package folder (e.g. `TextAnalysis/resources/catalog/text_analysis.xml`).
 
-5) Update `ordered_bucket_list` by adding the package name (order by name).
+5) By default all new buckets will be added after all existing buckets inside catalog. So no need by default to add bucket name to `ordered_bucket_list` file.
+
+But if you need to have strict order of buckets, then please update `ordered_bucket_list` by adding the package name (order by name). The whole list should be stored as 1 line without any spaces or end line character.
 
 6) Update `build.gradle` by finding `task zip (type: Zip)` function and adding an **include** for your package (e.g. ``include 'TextAnalysis/**'``). Example:
 ```
