@@ -1,38 +1,246 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.10"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="Computer Vision" projectName="Vision"
+  xmlns="urn:proactive:jobdescriptor:3.9"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+    name="Computer_Vision" projectName="Vision"
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <description>
-    <![CDATA[ The cloud-based Computer Vision API provides developers with access to advanced algorithms for processing images and returning information. By uploading an image or specifying an image URL, Microsoft Computer Vision algorithms can analyze visual content in different ways based on inputs and user choices. Learn how to analyze visual content in different ways with our quickstarts, tutorials, and samples. ]]>
+    <![CDATA[ Computer Vision API extracts rich information from images to categorize and process visual data – and machine-assisted moderation of images to help curate your services. 
+https://azure.microsoft.com/en-us/services/cognitive-services/computer-vision/ ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="azure-cognitive-services"/>
     <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_computer_vision.svg"/>
-    <info name="Documentation" value="https://docs.microsoft.com/en-us/azure/cognitive-services/computer-vision/"/>
+    <info name="Documentation" value="https://azure.microsoft.com/en-us/services/cognitive-services/computer-vision/"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="ComputerVision">
+    <task name="Computer_Vision">
       <description>
-        <![CDATA[ The cloud-based Computer Vision API provides developers with access to advanced algorithms for processing images and returning information. By uploading an image or specifying an image URL, Microsoft Computer Vision algorithms can analyze visual content in different ways based on inputs and user choices. Learn how to analyze visual content in different ways with our quickstarts, tutorials, and samples. ]]>
+        <![CDATA[ Computer Vision API extracts rich information from images to categorize and process visual data – and machine-assisted moderation of images to help curate your services. 
+https://azure.microsoft.com/en-us/services/cognitive-services/computer-vision/ ]]>
       </description>
+      <variables>
+        <variable name="IMAGE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/images/city.jpg" inherited="false" />
+        <variable name="AZURE_SUBSCRIPTION_KEY" value="" inherited="false" />
+        <variable name="AZURE_SERVICE_ENDPOINT" value="https://eastus2.api.cognitive.microsoft.com/vision/v1.0" inherited="false" />
+      </variables>
       <genericInformation>
         <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_computer_vision.svg"/>
       </genericInformation>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="python">
+          <code language="cpython">
             <![CDATA[
-println "uname -a".execute().text
+print("BEGIN Computer_Vision_API")
+
+import ast
+import json
+import requests
+from os import remove, listdir, makedirs
+from os.path import basename, splitext, exists, join
+
+# General parameters
+GLOBALSPACE = './data/'
+IMAGE_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/images/city.jpg'
+AZURE_SUBSCRIPTION_KEY = 'e48384c0fd80486dba9103596538792a'
+AZURE_SERVICE_ENDPOINT = 'https://eastus2.api.cognitive.microsoft.com/vision/v1.0'
+USE_IMAGE_DATASET = False
+
+
+if 'variables' in locals():
+  GLOBALSPACE = str(variables.get("PA_SCHEDULER_HOME")) + '/data/defaultglobal/'
+  
+  AZURE_SUBSCRIPTION_KEY = variables.get("AZURE_SUBSCRIPTION_KEY")
+  AZURE_SERVICE_ENDPOINT = variables.get("AZURE_SERVICE_ENDPOINT")
+  
+  if variables.get("USE_IMAGE_DATASET") is not None and variables.get("USE_IMAGE_DATASET").lower() == 'true':
+    USE_IMAGE_DATASET = True
+  
+  if USE_IMAGE_DATASET:
+    DATASET_PATH  = variables.get("DATASET_PATH")
+    DATASET_NAME  = variables.get("DATASET_NAME")
+  else:
+    IMAGE_URL = variables.get("IMAGE_URL")
+
+
+assert AZURE_SUBSCRIPTION_KEY is not None
+assert AZURE_SERVICE_ENDPOINT is not None
+
+vision_analyze_url = AZURE_SERVICE_ENDPOINT + "/analyze"
+
+# Process an image dataset
+if USE_IMAGE_DATASET:
+  assert DATASET_PATH is not None
+  assert DATASET_NAME is not None
+
+  images_folder = join(DATASET_PATH, DATASET_NAME)
+  assert exists(images_folder) == True
+  
+  analysis_results = []
+  k = 0
+  for root in listdir(images_folder):
+    k = k + 1
+    image_path = join(images_folder, root)
+    print(k, image_path)
+    
+    headers = {
+        'Ocp-Apim-Subscription-Key': AZURE_SUBSCRIPTION_KEY,
+        'Content-Type': 'application/octet-stream'
+    }
+    params   = {'visualFeatures': 'Categories,Description,Color'}
+    req_body = open(image_path,'rb').read()
+    
+    response = requests.post(vision_analyze_url, headers=headers, params=params, data=req_body)
+    response.raise_for_status()
+    analysis = response.json()
+    #analysis_text = response.text # json.loads(analysis_text)
+    #print(analysis)
+    
+    image_category_name = analysis["categories"][0]["name"]
+    image_category_score = str(analysis["categories"][0]["score"])
+    image_caption = analysis["description"]["captions"][0]["text"].capitalize()
+    image_tags = ', '.join(analysis["description"]["tags"])
+    
+    print("IMAGE CATEGORY NAME:  " + image_category_name)
+    print("IMAGE CATEGORY SCORE: " + image_category_score)
+    print("IMAGE CAPTION:        " + image_caption)
+    print("IMAGE TAGS:           " + image_category_name)
+    
+    analysis_results.append(analysis)
+    #break
+  
+  output_json = json.dumps(analysis_results)
+
+
+# Process single image
+if not USE_IMAGE_DATASET:
+  assert IMAGE_URL is not None
+  
+  headers  = {'Ocp-Apim-Subscription-Key': AZURE_SUBSCRIPTION_KEY }
+  params   = {'visualFeatures': 'Categories,Description,Color'}
+  data     = {'url': IMAGE_URL}
+  response = requests.post(vision_analyze_url, headers=headers, params=params, json=data)
+  response.raise_for_status()
+  analysis = response.json()
+  #print(analysis)
+  
+  image_category_name = analysis["categories"][0]["name"]
+  image_category_score = str(analysis["categories"][0]["score"])
+  image_caption = analysis["description"]["captions"][0]["text"].capitalize()
+  image_tags = ', '.join(analysis["description"]["tags"])
+  
+  print("IMAGE CATEGORY NAME:  " + image_category_name)
+  print("IMAGE CATEGORY SCORE: " + image_category_score)
+  print("IMAGE CAPTION:        " + image_caption)
+  print("IMAGE TAGS:           " + image_category_name)
+  
+  output_json = json.dumps(analysis)
+
+
+print(output_json)
+
+if 'variables' in locals():
+  variables.put("OUTPUT_JSON", output_json)
+  
+  ########## PREVIEW ##########
+  from pandas.io.json import json_normalize
+  json_obj = json.loads(output_json)
+  df = json_normalize(json_obj)
+  #import pandas as pd
+  #df = pd.read_json(output_json)
+  
+  css_style = """
+  table {
+    border: 1px solid #999999;
+    text-align: center;
+    border-collapse: collapse;
+    width: 100%;
+  }
+  td {
+    border: 1px solid #999999;
+    padding: 3px 2px;
+    font-size: 13px;
+    border-bottom: 1px solid #999999;
+  }
+  th {
+    font-size: 17px;
+    font-weight: bold;
+    color: #FFFFFF;
+    text-align: center;
+    background: #0B6FA4;
+    border-left: 2px solid #999999
+  }
+  """
+  
+  table = []
+  table.append("""<tr><td><a href="{0}"><img src="{0}" height="150" width="150"/></a></td><td>{1}</td>""".format(IMAGE_URL, df.to_html()))
+  
+  html = """<table><th>Image</th><th>Reponse</th></tr>{0}</table>""".format("\n".join(table))
+
+  html_container = """
+  
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <meta name="description" content="Face API">
+                    <style>{0}</style>
+                  </head>
+                  <body>{1}</body></html>
+  """.format(css_style, html)
+
+  result = html_container.encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "result.html")
+  resultMetadata.put("content.type", "text/html")
+
+print("END Computer_Vision_API")
 ]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-  </taskFlow>
-</job>
+                </code>
+              </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+          </task>
+        </taskFlow>
+      </job>
