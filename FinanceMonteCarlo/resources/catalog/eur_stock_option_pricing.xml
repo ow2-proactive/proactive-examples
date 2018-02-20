@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+		xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		xmlns="urn:proactive:jobdescriptor:3.9"
+		xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+		name="eur_stock_option_pricing" projectName="Finance Workflows"
+		priority="normal"
+		onTaskError="continueJobExecution"
+		maxNumberOfExecution="2"
+>
+	<variables>
+		<variable name="GPU_NODES_ONLY" value="True" />
+	</variables>
+	<description>
+		<![CDATA[ European stock option pricing via Monte Carlo simulations in PyCuda. ]]>
+	</description>
+	<genericInformation>
+		<info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/nvidia.png"/>
+		<info name="Documentation" value="https://developer.nvidia.com/pycuda" />
+	</genericInformation>
+	<taskFlow>
+		<task name="pycuda_option_pricing">
+			<description>
+				<![CDATA[ European stock option pricing via Monte Carlo simulations in PyCuda. ]]>
+			</description>
+			<genericInformation>
+				<info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/nvidia.png"/>
+			</genericInformation>
+			<selection>
+				<script
+						type="static" >
+					<code language="groovy">
+						<![CDATA[
+def env_variables = System.getenv().toString()
+def can_use_GPU =  env_variables.contains("opencl") && (env_variables.contains("nvidia") || env_variables.contains("amd"))
+def can_use_CPU = env_variables.contains("opencl") && env_variables.contains("intel")
+
+selected = (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && can_use_GPU) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false") && can_use_CPU)
+]]>
+					</code>
+				</script>
+			</selection>
+			<forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+				<envScript>
+					<script>
+						<code language="python">
+							<![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters
+containerName = 'activeeon/pycuda:latest'
+dockerRunCommand =  'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+						</code>
+					</script>
+				</envScript>
+			</forkEnvironment>
+			<scriptExecutable>
+				<script>
+					<code language="cpython">
+						<![CDATA[
+print("test ...")
+
+
+#Source: https://nvidia.qwiklab.com/
+#Lab title: Accelerating Applications with GPU-Accelerated Libraries in Python
+#Optimized
+
+import numpy as np                         # numpy namespace
+from timeit import default_timer as timer  # for timing
+from matplotlib import pyplot              # for plotting
+import math
+import pycuda.driver as cuda
+import pycuda.autoinit, pycuda.compiler
+import pycuda.gpuarray as gpuarray
+import pycuda.cumath as cumath             # elementwise functions for math
+from pycuda.curandom import XORWOWRandomNumberGenerator as curand # random number generator for CUDA
+
+import cProfile as profile
+
+# Stock information parameters
+StockPrice = 20.83
+StrikePrice = 21.50
+Volatility = 0.021
+InterestRate = 0.20
+Maturity = 5. / 12.
+
+# monte-carlo simulation parameters
+NumPath = 3000000
+NumStep = 100
+
+# plotting
+MAX_PATH_IN_PLOT = 50
+
+paths = np.zeros((NumPath, NumStep + 1), order='F')
+paths[:, 0] = StockPrice
+paths_flat = paths[:,0]
+DT = Maturity / NumStep
+
+def step(price, dt, c0, c1, noise): #for GPU
+    # Data types must be specified. Data is sent to GPU which uses C, a statically typed language.
+    # All of CUDAâs supported vector types, such as float3 and long4 are available as numpy data
+    # types using pycuda.gpuarray.
+    price = price.astype(np.float32)
+    dt = np.float32(dt)
+    c0 = np.float32(c0)
+    c1 = np.float32(c1)
+    return price*cumath.exp(c0*dt+c1*noise)
+
+# Inputs:
+#   paths - a 100x3000000 array to store the 100 time steps of prices for each 3,000,000 paths
+#   dt - A constant value needed in the Monte Carlo algorithm
+#   interest - A constant value needed in the Monte Carlo algorithm
+#   volatility - A constant value needed in the Monte Carlo algorithm
+def montecarlo(paths, dt, interest, volatility):
+    c0 = interest - 0.5 * volatility ** 2
+    c1 = volatility * np.sqrt(dt)
+
+    # PyCUDA includes cuRAND, a CUDA library for generating random numbers.
+    # See documentation for more information
+    # https://documen.tician.de/pycuda/array.html#module-pycuda.curandom
+    prng = curand()
+    d_noises = gpuarray.empty(paths.shape[0], np.float32) # Allocate memory for arrays in GPU
+    d_curLast= gpuarray.to_gpu(paths[:,0].astype(np.float32)) # Allocate and send starting array to GPU
+    d_curNext = gpuarray.empty(paths.shape[0], np.float32) # Allocate memory for arrays in GPU
+
+    for j in xrange(1, paths.shape[1]):   # for each time step
+        # Generate gaussian noises for simulation
+        prng.fill_normal(d_noises)
+        # Call the GPU-acclereated step function to calculate the next set of prices
+        d_curNext = step(d_curLast, dt, c0, c1, d_noises)
+        # Copy calculated prices to host (CPU)
+        paths[:,j] = d_curNext.get()
+        # Swap the prices so the "last" prices was the one we just copied
+        # to the host. We do this to avoid sending all price calculations back to the host
+        # which wastes time in data transfer. We keep all data on the GPU to speed up our calculation.
+        d_curNext, d_curLast = d_curLast, d_curNext
+
+
+ts = timer()
+montecarlo(paths, DT, InterestRate, Volatility)
+te = timer()
+elapsed = te - ts
+
+ST = paths[:, -1]
+PaidOff = np.maximum(paths[:, -1] - StrikePrice, 0)
+print 'Result'
+fmt = '%20s: %s'
+print fmt % ('stock price', np.mean(ST))
+print fmt % ('standard error', np.std(ST) / np.sqrt(NumPath))
+print fmt % ('paid off', np.mean(PaidOff))
+optionprice = np.mean(PaidOff) * np.exp(-InterestRate * Maturity)
+print fmt % ('option price', optionprice)
+
+print 'Performance'
+NumCompute = NumPath * NumStep
+print fmt % ('Mstep/second', '%.2f' % (NumCompute / elapsed / 1e6))
+print fmt % ('time elapsed', '%.3fs' % (te - ts))
+
+pathct = min(NumPath, MAX_PATH_IN_PLOT)
+for i in xrange(pathct):
+    pyplot.plot(paths[i])
+print 'Plotting %d/%d paths' % (pathct, NumPath)
+pyplot.show()
+
+# profile.run("montecarlo(paths, DT, InterestRate, Volatility)", sort="time")
+
+
+print("... test")
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+		</task>
+	</taskFlow>
+</job>

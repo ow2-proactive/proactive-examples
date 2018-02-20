@@ -1,0 +1,345 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.9"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+    name="Train_Text_Model" projectName="4. Train Model"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="GPU_NODES_ONLY" value="False" />
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
+    <variable name="DOCKER_ENABLED" value="True" />
+  </variables>
+  <description>
+    <![CDATA[ Train a text-oriented model using deep learning architectures ]]>
+  </description>
+      <genericInformation>
+    <info name="bucketName" value="deep-learning"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Train_Text_Model">
+      <description>
+        <![CDATA[ Train a text-oriented model using deep learning architectures ]]>
+      </description>
+      <variables>
+        <variable name="LEARNING_RATE" value="0.0001" inherited="false" />
+        <variable name="OPTIMIZER" value="Adam" inherited="false" />
+        <variable name="LOSS_FUNCTION" value="NLLLoss" inherited="false" />
+        <variable name="EPOCHS" value="2" inherited="false" />
+        <variable name="TRAINABLE" value="False" inherited="false" />
+        <variable name="GLOVE" value="6B" inherited="false" />
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+      </genericInformation>
+      <selection>
+        <script
+         type="static" >
+          <code language="javascript">
+            <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Model training")
+
+from torchtext import data
+from torchtext import datasets
+from torchtext import vocab
+from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
+from tqdm import tqdm
+import time, random
+import os
+import pickle
+from torch.autograd import Variable
+import torch.optim as optim
+import time
+#import spacy
+from itertools import *
+import torch
+from torch.autograd import Variable
+import torch.nn as nn
+import torch.nn.functional as F
+import pandas as pd
+
+#-------------------------evaluate function definition--------------------------
+EVALUATE = """
+def evaluate(model, test, data_iter, label_field, loss_function, name):
+    model.eval()
+    avg_loss = 0.0
+    truth_res = []
+    pred_res = []
+    i=0
+
+    result =  pd.DataFrame(columns=['text','prediction','label'])
+    for batch in data_iter:
+        i=i+1
+        sent, label = batch.text, batch.label
+        label.data.sub_(1)
+        truth_res += list(label.data)
+        model.batch_size = len(test)
+        model.hidden = model.init_hidden()
+        pred = model(sent)
+        pred_label = pred.data.max(1)[1].numpy()
+        for i in range(model.batch_size):
+            test_fields = vars(test[i])
+            test_text = test_fields["text"]
+            prede_label = pred_label[i]
+            gd_label = label[i]
+            result.loc[i] = [str(test_text),label_field.vocab.itos[prede_label+1], label_field.vocab.itos[int(gd_label.data.numpy())+1]]
+        pred_res += [x for x in pred_label]
+        loss = loss_function(pred, label)
+        avg_loss += loss.data[0]
+    print('len(pred_res)', len(pred_res))
+    avg_loss /= len(test)
+    acc = get_accuracy(truth_res, pred_res)
+    print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
+    return acc, result"""
+
+#-------------------------get_accuracy function definition--------------------------
+ACCURACY = """
+def get_accuracy(truth, pred):
+     assert len(truth)==len(pred)
+     right = 0
+     for i in range(len(truth)):
+         if truth[i]==pred[i]:
+             right += 1.0
+     return right/len(truth)"""
+     
+#-------------------------train function definition--------------------------     
+def train_epoch_progress(model, train_iter, train, loss_function, optimizer, text_field, label_field, batch_size, epoch):
+    #model.train()
+    avg_loss = 0.0
+    truth_res = []
+    pred_res = []
+    count = 0
+    for batch in train_iter:
+        sent, label = batch.text, batch.label
+        label.data.sub_(1)
+        truth_res += list(label.data)
+        #model.batch_size = batch_size
+        model.batch_size = batch_size
+        print('model.batch_size',model.batch_size)
+        model.hidden = model.init_hidden()
+        print('sent',sent)
+        pred = model(sent)
+        pred_label = pred.data.max(1)[1].numpy()
+        pred_res += [x for x in pred_label]
+        model.zero_grad()
+        loss = loss_function(pred, label)
+        avg_loss += loss.data[0]
+        count += 1
+        loss.backward()
+        optimizer.step()
+    avg_loss /= len(train)
+    acc = get_accuracy(truth_res, pred_res)
+    return avg_loss, acc
+
+#-------------------------main code --------------------------
+
+#--------Get the task parameters--------
+
+#True or False
+TRAINABLE = 'False'
+#42B, 840B, twitter.27B, 6B
+GLOVE = '6B'
+LEARNING_RATE = '0.0001'
+#Adam,RMS, SGD, Adagrad, Adadelta
+OPTIMIZER = 'Adam'
+EPOCHS = 2
+#L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
+LOSS_FUNCTION = 'NLLLoss'
+#BATCH_SIZE
+BATCH_SIZE = 2
+
+if 'variables' in locals():
+    GLOBALSPACE = str(variables.get("PA_SCHEDULER_HOME")) + '/data/defaultglobal/'
+    #True or False
+    if variables.get("TRAINABLE") is not None:
+        TRAINABLE = variables.get("TRAINABLE")
+    else:
+        print("TRAINABLE not defined by the user. Using the default value:"+TRAINABLE)
+    #42B, 840B, twitter.27B, 6B
+    if variables.get("GLOVE") is not None:
+        GLOVE = variables.get("GLOVE")
+    else:
+        print("GLOVE not defined by the user. Using the default value:"+GLOVE)
+    if variables.get("LEARNING_RATE") is not None:
+        LEARNING_RATE = variables.get("LEARNING_RATE")
+    else:
+        print("LEARNING_RATE not defined by the user. Using the default value:"+LEARNING_RATE)
+    #Adam,RMS, SGD, Adagrad, Adadelta
+    if variables.get("OPTIMIZER") is not None:
+        OPTIMIZER = variables.get("OPTIMIZER")
+    else:
+        print("OPTIMIZER not defined by the user. Using the default value:"+OPTIMIZER)
+    if variables.get("EPOCHS") is not None:
+        EPOCHS = int(variables.get("EPOCHS"))
+    else:
+        print("EPOCHS not defined by the user. Using the default value:"+EPOCHS)
+    #L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
+    if variables.get("LOSS_FUNCTION") is not None:
+        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
+    else:
+        print("LOSS_FUNCTION not defined by the user. Using the default value:"+LOSS_FUNCTION)
+    #BATCH_SIZE
+    if variables.get("BATCH_SIZE") is not None:
+        BATCH_SIZE = int(variables.get("BATCH_SIZE"))
+    else:
+        print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
+    if variables.get("EMBEDDING_DIM") is not None:
+        EMBEDDING_DIM = int(variables.get('EMBEDDING_DIM'))
+    if variables.get("HIDDEN_DIM") is not None:
+        HIDDEN_DIM = int(variables.get('HIDDEN_DIM'))
+    if variables.get("DROPOUT") is not None:
+        DROPOUT = float(variables.get('DROPOUT'))
+
+#--------Load Dataset--------
+
+if 'variables' in locals():
+    if variables.get("DATASET_PATH") is not None:
+        DATASET_PATH = variables.get("DATASET_PATH")
+    if variables.get("DATASET_ITERATOR") is not None:
+        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
+
+if DATASET_ITERATOR is not None:
+    exec(DATASET_ITERATOR)
+
+#--------Load Model---------
+
+if 'variables' in locals():
+    if variables.get("MODEL_CLASS") is not None:
+        MODEL_CLASS = variables.get("MODEL_CLASS")
+    if variables.get("MODEL_DEF") is not None:
+        MODEL_DEF = variables.get("MODEL_DEF")
+
+USE_GPU = 0
+
+vocab_size=len(text_field.vocab)
+label_size=len(label_field.vocab)
+        
+if MODEL_CLASS is not None:
+    exec(MODEL_CLASS)
+if MODEL_DEF is not None:
+    exec(MODEL_DEF)
+else:
+    raise Exception('CLASS MODEL not defined!')
+  
+#-------Main--------
+exec(EVALUATE)
+exec(ACCURACY)
+#USE_GPU = torch.cuda.is_available()
+
+timestamp = str(int(time.time()))
+best_dev_acc = 0.0
+
+if USE_GPU:
+    MODEL = MODEL.cuda()
+    
+print('Load word embeddings...')
+
+text_field.vocab.load_vectors(vectors=GloVe(name=GLOVE, dim=EMBEDDING_DIM))
+print('len(text_field.vocab)',len(text_field.vocab))
+MODEL.embeddings.weight.data = text_field.vocab.vectors
+if TRAINABLE=='False':
+    MODEL.embeddings.weight.requires_grad=False
+    
+best_model = MODEL
+
+#optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE)
+OPTIM = """optimizer =  optim."""+OPTIMIZER+"""(filter(lambda p: p.requires_grad, MODEL.parameters()), lr="""+LEARNING_RATE+""")"""
+exec(OPTIM)
+LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
+exec(LOSS)
+#loss_function = nn.NLLLoss()
+print('len(train)',len(train))
+
+print('Training...')
+#out_dir = os.path.abspath(os.path.join(os.path.curdir, "runs", timestamp))
+#print("Writing to {}\n".format(out_dir))
+if not os.path.exists(GLOBALSPACE):
+    os.makedirs(GLOBALSPACE)
+for epoch in range(EPOCHS):
+    print(str(MODEL))
+    avg_loss, acc = train_epoch_progress(MODEL, train_iter, train, loss_function, optimizer, text_field, label_field, BATCH_SIZE, epoch)
+    tqdm.write('Train: loss %.2f acc %.1f' % (avg_loss, acc*100))
+    dev_acc, results = evaluate(MODEL, val, val_iter, label_field, loss_function, 'Val')
+    if dev_acc > best_dev_acc:
+        BEST_MODEL_PATH = os.path.join(GLOBALSPACE,'best_model' + '.pth')
+        if best_dev_acc > 0:
+            os.system('rm '+ BEST_MODEL_PATH)
+        best_dev_acc = dev_acc
+        BEST_MODEL = MODEL
+        print(BEST_MODEL_PATH)
+        torch.save(BEST_MODEL.state_dict(), BEST_MODEL_PATH)
+        
+#BEST_MODEL = pickle.dumps(best_model)
+
+#----------variables to send----------------
+# Forward model
+try:
+    #variables.put("BEST_MODEL", BEST_MODEL)
+    variables.put("BEST_MODEL_PATH", BEST_MODEL_PATH)
+    variables.put("EVALUATE", EVALUATE)
+    variables.put("ACCURACY", ACCURACY)
+    variables.put("LOSS",LOSS)
+    variables.put("BATCH_SIZE",BATCH_SIZE)
+    variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
+    variables.put("DATASET_PATH",DATASET_PATH)
+except NameError as err:
+    print("{0}".format(err))
+    print("Warning: this script is running outside from ProActive.")
+    pass
+  
+print("END Model training")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>

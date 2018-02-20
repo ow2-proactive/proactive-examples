@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:proactive:jobdescriptor:3.9"
+	xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+	name="Feature_Vector_Extractor" projectName="4. Features Extraction"
+	priority="normal" onTaskError="continueJobExecution"
+	maxNumberOfExecution="2">
+	<description>
+    <![CDATA[ Encodes structured data into numerical feature vectors whereby machine learning models can be applied. ]]>
+	</description>
+	<genericInformation>
+		<info name="bucketName" value="machine-learning" />
+		<info name="pca.action.icon"
+			value="/automation-dashboard/styles/patterns/img/wf-icons/feature_extraction.png" />
+		<info name="Documentation"
+			value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_machine_learning_bucket" />
+		<info name="group" value="public-objects" />
+	</genericInformation>
+	<taskFlow>
+		<task name="Feature_Vector_Extractor">
+			<description>
+        <![CDATA[ Encodes structured data into numerical feature vectors whereby machine learning models can be applied. ]]>
+			</description>
+			<variables>
+				<variable name="SESSION_COLUMN" value="id_block" inherited="false" />
+				<variable name="FILE_OUT_FEATURES" value="HTML" inherited="false" />
+				<variable name="PATTERN_COLUMN" value="pattern_id"
+					inherited="false" />
+				<variable name="PATTERNS_COUNT_FEATURES" value="False"
+					inherited="false" />
+				<variable name="STATE_VARIABLES" value="status,date"
+					inherited="false" />
+				<variable name="COUNT_VARIABLES" value="ip_from,ip_to,pid,date,time"
+					inherited="false" />
+				<variable name="STATE_COUNT_FEATURES_VARIABLES" value="True"
+					inherited="false" />
+			</variables>
+			<genericInformation>
+				<info name="task.icon"
+					value="/automation-dashboard/styles/patterns/img/wf-icons/feature_extraction.png" />
+			</genericInformation>
+			<forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre">
+				<envScript>
+					<script>
+						<code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+						</code>
+					</script>
+				</envScript>
+			</forkEnvironment>
+			<scriptExecutable>
+				<script>
+					<code language="cpython">
+            <![CDATA[
+print("BEGIN FEATURE VECTOR EXTRACTION")
+import pandas as pd
+import numpy as np
+
+SESSION_COLUMN = variables.get("SESSION_COLUMN")
+DATAFRAME_JSON = variables.get("DATAFRAME_JSON")
+FILE_OUT_FEATURES = variables.get("FILE_OUT_FEATURES")
+PATTERN_COLUMN = variables.get("PATTERN_COLUMN")
+PATTERNS_COUNT_FEATURES = variables.get("PATTERNS_COUNT_FEATURES")
+STATE_COUNT_FEATURES_VARIABLES = variables.get("STATE_COUNT_FEATURES_VARIABLES")
+STRUCTURED_LOGS = variables.get("DATAFRAME_JSON")
+#===================================== Extract variables =================================
+STATE_VARIABLES_INTER = variables.get("STATE_VARIABLES")
+COUNT_VARIABLES_INTER = variables.get("COUNT_VARIABLES")
+STATE_VARIABLES = STATE_VARIABLES_INTER.split(",")
+COUNT_VARIABLES = COUNT_VARIABLES_INTER.split(",")
+print("State Variables:")
+print(STATE_VARIABLES)
+print("Count Variables:")
+print(COUNT_VARIABLES)
+
+df_pattern_features = pd.DataFrame.empty
+df_state_features = pd.DataFrame.empty
+df_count_features = pd.DataFrame.empty
+
+df_structured_logs  = pd.read_json(DATAFRAME_JSON,orient='split')
+pattern_number = int(df_structured_logs[PATTERN_COLUMN].max())
+
+#is usefull when there is multiple identifiers in a single row
+def id_extraction(session_col=None):
+  session_col = str(session_col)
+  ids_list = session_col.split(' ')
+  return ids_list
+
+feature_vector = []
+dict_block_features = {}
+variables_name = list(df_structured_logs)
+state_features_names = []
+dict_states = {}
+#dict_variables_set = {}
+dict_variables_blk = {}
+dict_block_features_state = {}
+dict_block_features_state_1 = {}
+dict_variables_set = {}
+
+#===================================== Extract the state variables =================================
+for i in range (len(STATE_VARIABLES)):
+    variables_count = df_structured_logs[STATE_VARIABLES[i]].value_counts()
+    for j in range(len(variables_count.keys())):
+      dict_states[STATE_VARIABLES[i]]=variables_count.keys()
+      state_features_names.append(variables_count.keys()[j])
+#     del dict_states["''"]
+
+for index,row in df_structured_logs.iterrows():
+  if not(row[SESSION_COLUMN] == None):
+    ids_list = id_extraction(row[SESSION_COLUMN])
+
+#===================================== Features (count pattern) =================================
+    if PATTERNS_COUNT_FEATURES=='True':
+      j = int(row[PATTERN_COLUMN]-1)
+      for i in range(len(ids_list)):
+        #dict_variables_blk = {}
+        # update existing entry
+        if ids_list[i] in dict_block_features:
+          features = dict_block_features.get(ids_list[i])
+          features[j] = features[j] + 1
+          dict_block_features[ids_list[i]] = features
+        # add new entry
+        else:
+          feature_vector = [0] * pattern_number
+          feature_vector[j] = feature_vector[j] + 1
+          dict_block_features[ids_list[i]] = feature_vector
+                
+#===================================== Features (count state + variables) ======================================
+    if STATE_COUNT_FEATURES_VARIABLES=='True':
+      for f in range(len(ids_list)):
+        # update existing entry
+        if ids_list[f] in dict_block_features_state_1:
+          features_count = dict_block_features_state_1.get(ids_list[f])
+          m = 0
+          for i in range (len(STATE_VARIABLES)):
+            for j in range(len(dict_states[STATE_VARIABLES[i]])):
+              if row[STATE_VARIABLES[i]] == dict_states[STATE_VARIABLES[i]][j]:
+                features_count[m] = features_count[m] + 1
+                dict_block_features_state[dict_states[STATE_VARIABLES[i]][j]] = features_count
+                dict_block_features_state_1[ids_list[f]] = features_count
+              m = m+1
+
+          for h in range (len(COUNT_VARIABLES)):
+            table_of_variable = dict_variables_blk[ids_list[f]].get(COUNT_VARIABLES[h])
+            if (str(row[COUNT_VARIABLES[h]]) not in table_of_variable) and not(row[COUNT_VARIABLES[h]] == None):
+              dict_variables_blk[ids_list[f]][COUNT_VARIABLES[h]].append(str(row[COUNT_VARIABLES[h]]))
+              features_count[m] = features_count[m] + 1
+              dict_block_features_state_1[ids_list[f]] = features_count
+            m = m+1
+
+        # add new entry
+        else:
+          feature_vector_state_variables = [0]*(len(state_features_names)+len(COUNT_VARIABLES))
+          m = 0
+          for i in range (len(STATE_VARIABLES)):
+            for j in range(len(dict_states[STATE_VARIABLES[i]])):
+              if row[STATE_VARIABLES[i]]==dict_states[STATE_VARIABLES[i]][j]:
+                feature_vector_state_variables[m] = feature_vector_state_variables[m] + 1
+                dict_block_features_state[dict_states[STATE_VARIABLES[i]][j]] = feature_vector_state_variables
+                dict_block_features_state_1[ids_list[f]] = feature_vector_state_variables
+              m = m+1
+          dict_variables_set_1 = {}
+          for h in range (len(COUNT_VARIABLES)):
+            dict_variables_set_1[COUNT_VARIABLES[h]] = []
+            if not(row[COUNT_VARIABLES[h]] == None):
+              dict_variables_set_1[COUNT_VARIABLES[h]].append(str(row[COUNT_VARIABLES[h]]))
+              feature_vector_state_variables[m] = feature_vector_state_variables[m] + 1
+            m = m+1
+            dict_block_features_state_1[ids_list[f]] = feature_vector_state_variables
+            dict_variables_blk[ids_list[f]] = dict_variables_set_1
+
+#===================================== Save the different features in a dataframe ======================================
+frames = []
+if PATTERNS_COUNT_FEATURES=='True':
+  features = dict_block_features.values()
+  block_ids = dict_block_features.keys()
+  df_pattern_features = pd.DataFrame(dict_block_features, index = ["pattern "+ str(i) for i in range(1,pattern_number+1)]).T
+  frames.append(df_pattern_features)
+if STATE_COUNT_FEATURES_VARIABLES=='True':
+  df_state_features = pd.DataFrame(dict_block_features_state_1,index = state_features_names+COUNT_VARIABLES).T
+  frames.append(df_state_features)
+if not frames:
+  df_features = pd.DataFrame.empty
+  print("ERROR: No features extracted, check your input variables")
+else:
+  df_features = pd.concat(frames, axis=1)
+
+#===================================== Preview results =================================
+FILE_OUT_FEATURES = FILE_OUT_FEATURES.lower()
+if FILE_OUT_FEATURES.endswith('csv'):
+  result = df_features.to_csv()
+  resultMetadata.put("file.extension", ".csv")
+  resultMetadata.put("file.name", result+".csv")
+  resultMetadata.put("content.type", "text/csv")
+elif FILE_OUT_FEATURES.endswith('html'):
+  result = df_features.to_html()
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", result+".html")
+  resultMetadata.put("content.type", "text/html") 
+else:
+  print('Your data is empty')
+
+#===================================== Save the linked variables =================================  
+columns_name = df_features.columns
+df_json_features = df_features.to_json(orient='split')
+variables.put("DATA_TRAIN_DF_JSON", df_json_features)
+variables.put("DATA_TEST_DF_JSON", df_json_features) 
+variables.put("DATAFRAME_JSON", df_json_features)
+variables.put("COLUMNS_NAME_JSON", pd.Series(columns_name).to_json()) 
+
+print("END FEATURE VECTOR EXTRACTION")
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+			<controlFlow block="none"></controlFlow>
+		</task>
+	</taskFlow>
+</job>

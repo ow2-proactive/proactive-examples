@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:proactive:jobdescriptor:3.8"
+	xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+	name="Monte_Carlo_VaR_portfolio" projectName="Finance Workflows"
+	priority="normal" onTaskError="continueJobExecution">
+	<variables>
+		<variable name="nbMC" value="10000" />
+		<variable name="nbTimeSteps" value="255" />
+		<variable name="horizon" value="1" />
+		<variable name="confidenceRate" value="0.99" />
+		<variable name="nbBins" value="50" />
+		<variable name="nbAssets" value="3" />
+		<variable name="assets_params_file_path_from_dataspace"
+			value="assets.txt" />
+		<variable name="assets_correlations_file_path_from_dataspace"
+			value="assets_correlations.txt" />
+		<variable name="nbTasks" value="5" />
+		<variable name="width_chart" value="1000" />
+		<variable name="height_chart" value="500" />
+	</variables>
+	<description>
+        <![CDATA[ Estimates the Monte Carlo Value at Risk (MC VaR) of a portfolio. We use the Geometric Brownian motion (GBM) method to simulate stock price paths, but more advanced assets can be integrated thanks to the C++ Quantlib lib. ]]>
+    </description>
+	<genericInformation>
+		<info name="pca.action.icon"
+			value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png" />
+		<info name="Documentation"
+			value="http://activeeon.com/resources/montecarlo-value-risk-proactive-activeeon.pdf" />
+	</genericInformation>
+	<taskFlow>
+		<task name="split_MC_simulations">
+			<scriptExecutable>
+				<script>
+					<code language="groovy">
+                        <![CDATA[
+println "Split_MC_simulations ..."
+
+// Retrieve variables
+def nbMC = variables.get("nbMC").toInteger()
+def nbTasks = variables.get("nbTasks").toInteger()
+
+// Estimate nbMC per task
+def nbMC_per_task = (int)(nbMC / nbTasks)
+if (nbMC % nbTasks != 0)
+	nbMC_per_task++
+
+def nbMC_left = nbMC
+def nbMC_task = 0
+(0..nbTasks-1).each {
+     // How many simulations must we give?
+     if(it == nbTasks-1)
+     	nbMC_task = nbMC_left
+     else
+  	nbMC_task = nbMC_per_task
+
+     // Update nbMC_left
+     nbMC_left = nbMC_left - nbMC_task
+
+     // Store nbMC_task
+     variables["nbMC_task_${it}"] = nbMC_task
+     println "nbMC_task " + nbMC_task
+}
+
+println "... Split_MC_simulations"
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+			<controlFlow>
+				<replicate>
+					<script>
+						<code language="groovy">
+                            <![CDATA[
+runs=variables.get("nbTasks")
+]]>
+						</code>
+					</script>
+				</replicate>
+			</controlFlow>
+		</task>
+		<task name="simulate_ptf_PnLs">
+			<genericInformation>
+				<info name="task.icon"
+					value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png" />
+			</genericInformation>
+			<depends>
+				<task ref="split_MC_simulations" />
+			</depends>
+			<inputFiles>
+				<files includes="ptfSimulations" accessMode="transferFromGlobalSpace" />
+				<files includes="$assets_params_file_path_from_dataspace"
+					accessMode="transferFromGlobalSpace" />
+				<files includes="$assets_correlations_file_path_from_dataspace"
+					accessMode="transferFromGlobalSpace" />
+			</inputFiles>
+			<scriptExecutable>
+				<script>
+					<code language="groovy">
+                        <![CDATA[
+println "simulate_ptf_PnLs ..."
+
+// Retrieve variables
+def task_id = variables.get("PA_TASK_REPLICATION")
+def nbMC_task = variables.get("nbMC_task_" + task_id)
+def nbTimeSteps = variables.get("nbTimeSteps")
+def horizon = variables.get("horizon")
+def nbAssets = variables.get("nbAssets")
+def assets_params_file_path_from_dataspace = variables.get("assets_params_file_path_from_dataspace")
+def assets_correlations_file_path_from_dataspace = variables.get("assets_correlations_file_path_from_dataspace")
+
+// Set executable permission
+def executable_file_path = new File(localspace, "ptfSimulations").absolutePath
+["chmod","+x", executable_file_path].execute().waitForProcessOutput(System.out, System.err)
+
+// Build the command
+def cmd = ['/bin/sh', '-c', "docker run -v " + new File('.').absolutePath + ":/defaultglobal lballabio/quantlib:1.9-xenial /bin/bash -c 'cd defaultglobal; ./ptfSimulations " + nbMC_task + " " + nbTimeSteps + " " + horizon + " " + nbAssets + " " + assets_params_file_path_from_dataspace + " " +  assets_correlations_file_path_from_dataspace + " " + task_id + "'"]
+println cmd
+
+// Execute the command
+def sout = new StringBuilder()
+cmd.execute().waitForProcessOutput(sout, System.err)
+
+// Store ptf PnLs at horizon
+def file_name = "outputs_" + task_id + ".txt"
+new File(localspace, file_name).text = sout
+result = file_name
+
+println "... simulate_ptf_PnLs"
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+			<outputFiles>
+				<files includes="outputs_$PA_TASK_REPLICATION.txt" accessMode="transferToGlobalSpace" />
+			</outputFiles>
+		</task>
+		<task name="process_VaR">
+			<depends>
+				<task ref="simulate_ptf_PnLs" />
+			</depends>
+			<inputFiles>
+				<files includes="DualAxisChart.jar" accessMode="transferFromGlobalSpace" />
+				<files includes="jcommon-1.0.6.jar" accessMode="transferFromGlobalSpace" />
+				<files includes="jfreechart-1.0.2.jar" accessMode="transferFromGlobalSpace" />
+				<files includes="outputs_*.txt" accessMode="transferFromGlobalSpace" />
+			</inputFiles>
+			<forkEnvironment>
+				<additionalClasspath>
+					<pathElement path="DualAxisChart.jar" />
+					<pathElement path="jcommon-1.0.6.jar" />
+					<pathElement path="jfreechart-1.0.2.jar" />
+				</additionalClasspath>
+			</forkEnvironment>
+			<scriptExecutable>
+				<script>
+					<code language="groovy">
+                        <![CDATA[
+import DualAxisChart;
+
+println "process_VaR ..."
+
+// Retrieve variables
+def nbMC = variables.get("nbMC").toInteger()
+def horizon = variables.get("horizon").toInteger()
+def confidenceRate = variables.get("confidenceRate").toDouble()
+def nbBins = variables.get("nbBins").toInteger()
+def chart_file_path_from_dataspace = variables.get("chart_file_path_from_dataspace")
+def width_chart = variables.get("width_chart").toInteger()
+def height_chart = variables.get("height_chart").toInteger()
+
+// Estimate the varIndex
+def VaRIndex = (int)((1 - confidenceRate) * nbMC);
+
+// Retrieve ptf PnLs at horizon from all tasks
+def ptfHorizonPnLs = new double[nbMC]
+def MCid = 0
+
+results.each { result ->
+	new File(result.value()).text.split(" ").each{ ptfHorizonPnL ->
+		ptfHorizonPnLs[MCid] = (double) ptfHorizonPnL.toDouble()
+		MCid++;
+	}
+}
+println "nb MC simus retrived from tasks: " + MCid
+
+// Compute VaR
+Arrays.sort(ptfHorizonPnLs)
+def VaR = ptfHorizonPnLs[VaRIndex]
+
+def resultStr = "portfolio VaR " + confidenceRate*100 + "% at horizon " + horizon + " = " + VaR
+println resultStr
+def chart_file_name = "VaR.png"
+DualAxisChart.writeChart(resultStr, ptfHorizonPnLs, nbBins, VaR, chart_file_name, width_chart, height_chart)
+
+// Expose the resulting chart image
+def chart_file = new File(chart_file_name)
+result = chart_file.getBytes()
+resultMetadata.put("file.name", chart_file_name)
+resultMetadata.put("content.type", "image/png")
+
+println "... process_VaR"
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+		</task>
+	</taskFlow>
+</job>

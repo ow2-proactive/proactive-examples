@@ -1,0 +1,283 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.9"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+    name="Import_Text_Dataset" projectName="1. Input and Output"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="GPU_NODES_ONLY" value="False" />
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
+    <variable name="DOCKER_ENABLED" value="True" />
+  </variables>
+  <description>
+    <![CDATA[ Import a text dataset from the location given by $DATASET_URL. If it is a zip file, it will be automatically extracted.
+Split the dataset into train, test and validation sets. If $TOY_MODE is activated, it will only extract a small subset of the dataset.
+The text is tokenized using $TOKENIZER ]]>
+  </description>
+      <genericInformation>
+    <info name="bucketName" value="deep-learning"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Import_Text_Dataset">
+      <description>
+        <![CDATA[ Import a text dataset from the location given by $DATASET_URL. If it is a zip file, it will be automatically extracted.
+Split the dataset into train, test and validation sets. If $TOY_MODE is activated, it will only extract a small subset of the dataset.
+The text is tokenized using $TOKENIZER ]]>
+      </description>
+      <variables>
+        <variable name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/IMDB.zip" inherited="false" />
+        <variable name="TRAIN_SPLIT" value="0.6" inherited="false" />
+        <variable name="TEST_SPLIT" value="0.3" inherited="false" />
+        <variable name="VALIDATION_SPLIT" value="0.1" inherited="false" />
+        <variable name="TOY_MODE" value="True" inherited="false" />
+        <variable name="TOKENIZER" value="spacy" inherited="false" />
+        <variable name="SENTENCE_SEPARATOR" value="\r" inherited="false" />
+        <variable name="CHARSET" value="utf-8" inherited="false" />
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png"/>
+      </genericInformation>
+      <selection>
+        <script
+         type="static" >
+          <code language="javascript">
+            <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Import_Text_Dataset")
+
+import os
+import wget
+import zipfile
+import shutil
+import random
+import codecs
+import numpy as np
+import pandas as pd
+from torchtext import data
+from os import remove, listdir, makedirs
+from os.path import basename, splitext, exists, join
+from sklearn.model_selection import train_test_split
+  
+### PHASE 1 ################
+
+DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/IMDB.zip'
+GLOBALSPACE = './data/'
+TRAIN_SPLIT = round(0.6, 3)
+TEST_SPLIT  = round(0.3, 3)
+VALIDATION_SPLIT = round(0.1, 3)
+TOY_MODE = 'True'
+TOKENIZER = 'str.split'
+SENTENCE_SEPARATOR = '\r'
+CHARSET='utf-8'
+
+# READ TASK VARIABLES
+if 'variables' in locals():
+  GLOBALSPACE = str(variables.get("PA_SCHEDULER_HOME")) + '/data/defaultglobal/'
+  
+  if variables.get("DATASET_URL") is not None:
+    DATASET_URL = variables.get("DATASET_URL")
+  if variables.get("TRAIN_SPLIT") is not None:
+    TRAIN_SPLIT = float(str(variables.get("TRAIN_SPLIT")))
+  if variables.get("TEST_SPLIT") is not None:
+    TEST_SPLIT = float(str(variables.get("TEST_SPLIT")))
+  if variables.get("VALIDATION_SPLIT") is not None:
+    VALIDATION_SPLIT = float(str(variables.get("VALIDATION_SPLIT")))
+  if variables.get("TOY_MODE") is not None:
+    TOY_MODE = variables.get("TOY_MODE")
+  if variables.get("TOKENIZER") is not None:
+    TOKENIZER = variables.get("TOKENIZER")
+  if variables.get("SENTENCE_SEPARATOR") is not None:
+    SENTENCE_SEPARATOR = variables.get("SENTENCE_SEPARATOR")
+  if variables.get("CHARSET") is not None:
+    CHARSET = variables.get("CHARSET")
+
+print("Split information:")
+print("TRAIN_SPLIT:      " + str(TRAIN_SPLIT))
+print("TEST_SPLIT:       " + str(TEST_SPLIT))
+print("VALIDATION_SPLIT: " + str(VALIDATION_SPLIT))
+
+assert TRAIN_SPLIT >= 0.0
+assert TEST_SPLIT >= 0.0
+assert VALIDATION_SPLIT >= 0.0
+assert round(TRAIN_SPLIT + TEST_SPLIT + VALIDATION_SPLIT, 3) == 1
+if TRAIN_SPLIT == 0.0 and VALIDATION_SPLIT > 0.0:
+  raise AssertionError("VALIDATION_SPLIT cannot be defined when TRAIN_SPLIT equals zero") 
+
+DATASET_NAME = splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0]
+DATASET_PATH = join(GLOBALSPACE, DATASET_NAME)
+
+if exists(DATASET_PATH):
+  shutil.rmtree(DATASET_PATH)
+makedirs(DATASET_PATH)
+
+print("GLOBALSPACE:  " + GLOBALSPACE)
+print("DATASET_URL:  " + DATASET_URL)
+print("DATASET_NAME: " + DATASET_NAME)
+print("DATASET_PATH: " + DATASET_PATH)
+
+# DOWNLOAD AND EXTRACT DATASET
+print("Downloading...")
+filename = wget.download(DATASET_URL, DATASET_PATH)
+print("FILENAME: " + filename)
+print("OK")
+
+print("Extracting...")
+dataset_zip = zipfile.ZipFile(filename)
+dataset_zip.extractall(DATASET_PATH)
+dataset_zip.close()
+remove(filename)
+print("OK")
+
+### PHASE 2 ################
+
+# EXTRACT LABELS
+textfolders = [os.path.join(root, name)
+             for root, dirs, files in os.walk(DATASET_PATH)
+             for name in dirs]
+labels = [os.path.join(name)
+             for root, dirs, files in os.walk(DATASET_PATH)
+             for name in dirs]
+print('labels to be predicted',labels)
+
+class_files = [os.path.join(root, name)
+             for i in range(0,len(textfolders))
+             for root, dirs, files in os.walk(textfolders[i])
+             for name in files]
+
+### PHASE 3 ################
+
+### SPLIT DATASET
+sent_classes={}
+n_class=0
+toy_dataset_size = 50
+
+
+train_data = []
+val_data = []
+test_data = []
+
+for i in range(len(class_files)):
+    if class_files[i].endswith('.DS_Store'):
+        continue
+    #file_name=labels[i]
+    #sent_classes[labels[i]] = classfiles[i]
+    print('loading MR data from',class_files[i])
+    #print("-->size=",os.stat(class_files[i]).st_size)
+    #with open(class_files[i], 'r') as f:
+        #print(f.readline())
+        #sent_classes[labels[n_class]]=f.readlines()
+    #TODO put \r as a variable
+    #TODO improve this line of code
+    sent_classes[labels[n_class]] = codecs.open(class_files[i], 'r', CHARSET).read().replace('\n','').split('\r')
+    print('length of class',len(sent_classes[labels[n_class]]))
+    random.shuffle(sent_classes[labels[n_class]])
+    file_len = len(sent_classes[labels[n_class]])
+    if TOY_MODE=='True':
+        class_ent_len = int(toy_dataset_size/len(labels))
+        if (file_len<class_ent_len):
+            class_ent_len = file_len
+    else:
+        class_ent_len = file_len
+    
+    train_data = train_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][:int(class_ent_len*TRAIN_SPLIT)]]
+    val_data = val_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][int(class_ent_len*TRAIN_SPLIT+1):int(class_ent_len*(TRAIN_SPLIT+VALIDATION_SPLIT)+1)]]
+    test_data = test_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][int(class_ent_len*(TRAIN_SPLIT+VALIDATION_SPLIT)+2):class_ent_len]]
+    n_class = n_class+1
+
+#assert(n_class==nb_classes)
+
+train_frame = pd.DataFrame(train_data, columns = ["text","label"])
+val_frame = pd.DataFrame(val_data, columns = ["text","label"])
+test_frame = pd.DataFrame(test_data, columns = ["text","label"])
+
+train_path = os.path.join(DATASET_PATH,"train.csv")
+val_path = os.path.join(DATASET_PATH,"val.csv")
+test_path = os.path.join(DATASET_PATH,"test.csv")
+
+train_frame.to_csv(train_path, encoding=CHARSET,index=False, header=False)
+val_frame.to_csv(val_path, encoding=CHARSET, index=False, header=False)
+test_frame.to_csv(test_path, encoding=CHARSET, index=False, header=False)
+
+### PHASE 4 ###################
+
+DATASET_ITERATOR="""
+
+#add the different options for the tokenizer: default=str.split; moses; spacy; revtok; subword
+#TODO a listt variable containg these different "tokenizer" options
+text_field = data.Field(lower=True)#, tokenize=TOKENIZER)
+label_field = data.Field(sequential=False)
+#Dataset of columns stored in CSV, TSV, or JSON format
+train, val, test = data.TabularDataset.splits(path=DATASET_PATH, train='train.csv',
+                                                  validation='val.csv', test='test.csv', format='csv',
+                                                  fields=[('text', text_field), ('label', label_field)])
+
+train_iter, val_iter, test_iter = data.BucketIterator.splits((train, val, test),
+                                                             repeat=False,
+                                                             batch_sizes=(BATCH_SIZE,len(val),len(test)), sort_key=lambda x: len(x.text), device=-1)
+
+text_field.build_vocab(train)
+label_field.build_vocab(train)
+"""
+#batch_size=(BATCH_SIZE,len(val),len(test)),
+if 'variables' in locals():
+    variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
+    variables.put("DATASET_PATH",DATASET_PATH)  
+    #variables.put("DATASET_TEXT",text_field)
+    #variables.put("DATASET_LABELS",label_field)
+
+print("END Import_Text_Dataset")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>

@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.9"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+    name="mysql_connector" projectName="2. SQL Connectors"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="HOSTNAME" value="localhost" />
+    <variable name="PORT" value="3306" />
+    <variable name="DATABASE" value="" />
+  </variables>
+  <description>
+    <![CDATA[ Load data from a MySQL database. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="import_from_mysql">
+      <description>
+        <![CDATA[ Load data from a MySQL database.
+This task uses the task variable RMDB_DRIVER as a driver to connect to the database. The specified default driver "mysqlconnector" as well as "pymysql" are already provided for this task. To use another driver, make sure you have it properly installed before.
+The task requires the following third-party credentials : MYSQL_USERNAME and MYSQL_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
+It also requires an SQL query or a table name to fetch data from.
+The imported data is exported in a JSON format. ]]>
+      </description>
+      <variables>
+        <variable name="LABEL" value="" inherited="false" />
+        <variable name="SQL_QUERY" value="" inherited="false" />
+        <variable name="RDBMS_DRIVER" value="mysqlconnector" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+      </genericInformation>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import pandas as pd
+import numpy as np
+from sqlalchemy import create_engine
+import sys
+  
+RDBMS_NAME = 'mysql'
+RDBMS_DRIVER = variables.get("RDBMS_DRIVER")
+print("BEGIN Import_Data FROM " + RDBMS_NAME + " database using " + variables.get("RDBMS_DRIVER") + " connector")
+
+
+if variables.get("HOSTNAME") is not None:
+    HOSTNAME = variables.get("HOSTNAME")
+else:
+    print("HOSTNAME not defined by the user.")
+    sys.exit(1)
+if variables.get("PORT") is not None:
+    PORT = variables.get("PORT")
+else:
+    PORT="3360"
+    print("PORT not defined by the user. Using the default value:"+PORT)
+if variables.get("DATABASE") is not None:
+    DATABASE = variables.get("DATABASE")
+else:
+    print("DATABASE not defined by the user.")
+    sys.exit(1)
+if credentials.get("MYSQL_USERNAME") is not None and credentials.get("MYSQL_PASSWORD") is not None:
+    MYSQL_USERNAME = credentials.get("MYSQL_USERNAME")
+    MYSQL_PASSWORD=credentials.get("MYSQL_PASSWORD")
+else:
+    print("You first need to add third-party credentials for the database in the scheduler-portal.")
+    sys.exit(1)
+
+
+
+IS_LABELED_DATA = 'False'
+
+try:
+   LABEL = variables.get("LABEL")
+   if LABEL:
+     IS_LABELED_DATA='True'
+except NameError:
+   pass
+
+# Please refer to SQLAlchemy doc for more info about database urls.
+# http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls
+database_url = RDBMS_NAME + '+' + RDBMS_DRIVER + '://' + MYSQL_USERNAME + ':' + MYSQL_PASSWORD + '@' + HOSTNAME + ':' + PORT + '/' + DATABASE
+        
+engine = create_engine(database_url)
+
+with engine.connect() as conn, conn.begin():
+    #pd.read_sql() can take either a SQL query as a parameter or a table name
+    dataframe = pd.read_sql(variables.get("SQL_QUERY"), conn)
+
+columns_name = dataframe.columns
+columns_number = len(columns_name)
+
+if IS_LABELED_DATA == 'True':
+  data  = dataframe.values[:,0:columns_number-1]
+  label = dataframe.values[:,columns_number-1]
+  
+  data_df = pd.DataFrame(data=data,columns=columns_name[0:columns_number-1])
+  label_df = pd.DataFrame(data=label,columns=[columns_name[columns_number-1]])
+  
+  DATAFRAME_JSON = dataframe.to_json(orient='split')
+  COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+  DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
+  DATA_TEST_DF_JSON = data_df.to_json(orient='split')
+  LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
+  LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
+  
+  try:
+    variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
+    variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
+    variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
+    variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
+    variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
+    variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
+    variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
+    
+    #**************Preview Data*********************
+    result = dataframe.to_html()
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "output.html")
+    resultMetadata.put("content.type", "text/html")
+    #***********************************************
+  except NameError:
+    pass
+  
+  print("END Import_Data")
+    
+elif IS_LABELED_DATA == 'False':
+  data = dataframe.values
+  data_df = pd.DataFrame(data=data,columns=columns_name)
+  
+  DATAFRAME_JSON = dataframe.to_json(orient='split')
+  COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+  DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
+  DATA_TEST_DF_JSON = data_df.to_json(orient='split')
+  
+  try:
+    variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
+    variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
+    variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
+    variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
+    variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
+    
+    #**************Preview Data*********************
+    result = dataframe.to_html()
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "output.html")
+    resultMetadata.put("content.type", "text/html")
+    #***********************************************
+  except NameError:
+    pass
+  
+  print("END Import_Data")
+else:
+  print('The import data is failure')
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("PREVIOUS_PA_TASK_NAME", variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
+    </task>
+  </taskFlow>
+</job>
