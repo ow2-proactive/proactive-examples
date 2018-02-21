@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.9"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+    name="FTP" projectName="1. File"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="FTP_HOSTNAME" value="" />
+    <variable name="INPUT_PATH" value="" />
+    <variable name="OUTPUT_PATH" value="" />
+    <variable name="FTP_PORT" value="21" />
+    <variable name="EXTRACT_ARCHIVE" value="False" model="PA:Boolean"/>
+  </variables>
+  <description>
+    <![CDATA[ Import file(s) from an FTP server ]]>
+  </description>
+  <genericInformation>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ftp_import.png"/>
+    <info name="Documentation" value="doc.activeeon.com/latest/"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="import_from_ftp">
+      <description>
+        <![CDATA[ Import files from a server using File Transfer Protocol (FTP).
+If $EXTRACT_ARCHIVE is True, the imported file will be extracted if it is an archive. ]]>
+      </description>
+      <variables>
+        <variable name="EXTRACT_ARCHIVE" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="INPUT_PATH" value="" inherited="true" />
+        <variable name="OUTPUT_FILE_PATH" value="" inherited="true" />
+        <variable name="FTP_HOSTNAME" value="" inherited="true" />
+        <variable name="FTP_PORT" value="21" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ftp_import.png"/>
+        <info name="Documentation" value="doc.activeeon.com/latest/"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <code language="bash">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.apache.commons.net.ftp.FTPClient
+import org.apache.commons.net.ftp.FTPFile
+import java.nio.file.Paths
+
+
+println("BEGIN Import file(s) from FTP")
+
+FTP_HOSTNAME = variables.get("FTP_HOSTNAME")
+FTP_PORT = variables.get("FTP_PORT").toInteger()
+FTP_USERNAME = credentials.get("FTP_USERNAME")
+FTP_PASSWORD  = credentials.get("FTP_PASSWORD")
+EXTRACT_ARCHIVE = variables.get("EXTRACT_ARCHIVE")
+
+if(FTP_USERNAME == null|| FTP_PASSWORD == null){
+   println("You first need to add your ftp username and password to the third party credentials")
+   System.exit(1)
+}
+
+        FTPClient ftpClient = new FTPClient();
+ 
+        try {
+            // connect and login to the server
+            ftpClient.connect(FTP_HOSTNAME, FTP_PORT);
+            ftpClient.login(FTP_USERNAME, FTP_PASSWORD);
+ 
+            // use local passive mode to pass firewall
+            ftpClient.enterLocalPassiveMode();
+ 
+            System.out.println("Connected");
+ 
+            String remoteDirPath = variables.get("INPUT_PATH");
+            ftpClient.changeWorkingDirectory(remoteDirPath);          
+            String saveDirPath = variables.get("OUTPUT_PATH");
+ 
+            downloadDirectory(ftpClient, "", "", saveDirPath);
+ 
+            // log out and disconnect from the server
+            ftpClient.logout();
+            ftpClient.disconnect();
+ 
+            System.out.println("Disconnected");
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        }
+
+
+INPUT_PATH = variables.get("INPUT_PATH")
+println("INPUT_FILE_PATH: "+ INPUT_PATH)
+
+def downloadSingleFile(FTPClient ftpClient,
+        String remoteFilePath, String savePath) throws IOException {
+        println(savePath)
+    File downloadFile = new File(savePath);
+     
+    File parentDir = downloadFile.getParentFile();
+    if (!parentDir.exists()) {
+        parentDir.mkdir();        
+    }    
+    OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(downloadFile));
+    
+    try {
+        //ftpClient.setFileType(FTP.BINARY_FILE_TYPE);
+        return ftpClient.retrieveFile(remoteFilePath, outputStream);
+    } catch (IOException ex) {
+        throw ex;
+    } finally {
+        if (outputStream != null) {
+            outputStream.close();
+        }
+    }
+}
+
+
+
+def downloadDirectory(FTPClient ftpClient, String parentDir,
+        String currentDir, String saveDir) throws IOException {
+    String dirToList = parentDir;
+    if (!currentDir.equals("")) {
+        dirToList = Paths.get(dirToList, currentDir);
+    }
+    FTPFile[] subFiles = ftpClient.listFiles(dirToList);
+    if (subFiles != null && subFiles.length > 0) {
+        for (FTPFile aFile : subFiles) {
+            String currentFileName = aFile.getName();
+            if (currentFileName.equals(".") || currentFileName.equals("..")) {
+                // skip parent directory and the directory itself
+                continue;
+            }                 
+            String filePath = Paths.get(parentDir, currentDir, currentFileName);
+            if (currentDir.equals("")) {
+                filePath = Paths.get(parentDir , currentFileName);              
+            }        
+            String newDirPath = Paths.get(saveDir, parentDir,  currentDir, currentFileName);           
+            if (currentDir.equals("")) {
+                newDirPath = Paths.get(saveDir, parentDir, currentFileName);
+            }
+ 
+            if (aFile.isDirectory()) {
+                // create the directory in saveDir
+                File newDir = new File(newDirPath);
+                boolean created = newDir.mkdirs();
+                if (created) {
+                    System.out.println("CREATED the directory: " + newDirPath);
+                } else {
+                    System.out.println("COULD NOT create the directory: " + newDirPath);
+                }
+ 
+                // download the sub directory
+                downloadDirectory(ftpClient, dirToList, currentFileName,
+                        saveDir);
+            } else {
+                // download the file
+                boolean success = downloadSingleFile(ftpClient, filePath,
+                        newDirPath);
+                if (success) {
+                    System.out.println("DOWNLOADED the file: " + filePath);
+                } else {
+                    System.out.println("COULD NOT download the file: "
+                            + filePath);
+                }
+            }
+        }
+    }
+}
+
+
+      
+
+println("END Import file(s) from FTP.");
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$OUTPUT_PATH/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+  </taskFlow>
+</job>
