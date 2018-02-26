@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.9"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
     name="FTP" projectName="1. File"
     priority="normal"
     onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
+     maxNumberOfExecution="2">
   <variables>
-    <variable name="FTP_HOSTNAME" value="" />
-    <variable name="INPUT_PATH" value="" />
-    <variable name="OUTPUT_PATH" value="" />
+    <variable name="FTP_HOSTNAME" value="" model=""/>
+    <variable name="INPUT_PATH" value="" model=""/>
+    <variable name="OUTPUT_PATH" value="" model=""/>
     <variable name="FTP_PORT" value="21" />
     <variable name="EXTRACT_ARCHIVE" value="False" model="PA:Boolean"/>
   </variables>
@@ -18,8 +18,10 @@
     <![CDATA[ Import file(s) from an FTP server ]]>
   </description>
   <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
     <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ftp_import.png"/>
     <info name="Documentation" value="doc.activeeon.com/latest/"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
     <task name="import_from_ftp">
@@ -53,7 +55,9 @@ If $EXTRACT_ARCHIVE is True, the imported file will be extracted if it is an arc
             <![CDATA[
 import org.apache.commons.net.ftp.FTPClient
 import org.apache.commons.net.ftp.FTPFile
+import java.util.zip.ZipFile
 import java.nio.file.Paths
+import java.nio.file.Files
 
 
 println("BEGIN Import file(s) from FTP")
@@ -69,7 +73,8 @@ if(FTP_USERNAME == null|| FTP_PASSWORD == null){
    System.exit(1)
 }
 
-        FTPClient ftpClient = new FTPClient();
+ 
+         FTPClient ftpClient = new FTPClient();
  
         try {
             // connect and login to the server
@@ -81,11 +86,44 @@ if(FTP_USERNAME == null|| FTP_PASSWORD == null){
  
             System.out.println("Connected");
  
-            String remoteDirPath = variables.get("INPUT_PATH");
-            ftpClient.changeWorkingDirectory(remoteDirPath);          
+            String remoteFilePath = variables.get("INPUT_PATH");
+            FTPFile[] ftpFile = ftpClient.listFiles(remoteFilePath);  
+            if(ftpFile.size()==0)
+                throw new FileNotFoundException(remoteFilePath + " not found. Please, enter a valid path.");        
             String saveDirPath = variables.get("OUTPUT_PATH");
- 
-            downloadDirectory(ftpClient, "", "", saveDirPath);
+            
+            // If it is a single file: 
+            if(ftpFile.size()==1 && remoteFilePath.contains(ftpFile[0].getName())){               
+               saveFilePath= Paths.get(saveDirPath,ftpFile[0].getName()).toString()
+               downloadSingleFile(ftpClient,remoteFilePath, saveFilePath)
+               
+               // If the file is a zip, and $EXTRACT_ARCHIVE is set to true
+               if(EXTRACT_ARCHIVE.equals("True") && remoteFilePath.endsWith(".zip")){
+                   zipFile = new ZipFile(saveFilePath)
+                   zipFile.entries().each { it ->
+                       path = Paths.get(saveDirPath, it.name)
+                       if (it.directory) {
+                           Files.createDirectories(path)
+                       } else {
+                           def parentDir = path.getParent()
+                           if (!Files.exists(parentDir)) {
+                               Files.createDirectories(parentDir)
+                           }
+                           if (Files.exists(path)){
+                              new File(path.toString()).delete()
+                           }
+                           Files.copy(zipFile.getInputStream(it), path)
+                       }
+                   }
+               }
+              
+               
+            }
+            // If it is a folder, download all its contents recursively
+            else{
+                ftpClient.changeWorkingDirectory(remoteFilePath);
+                downloadDirectory(ftpClient, "", "", saveDirPath);                 
+            }
  
             // log out and disconnect from the server
             ftpClient.logout();
@@ -95,7 +133,6 @@ if(FTP_USERNAME == null|| FTP_PASSWORD == null){
         } catch (IOException ex) {
             ex.printStackTrace();
         }
-
 
 INPUT_PATH = variables.get("INPUT_PATH")
 println("INPUT_FILE_PATH: "+ INPUT_PATH)
