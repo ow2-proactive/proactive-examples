@@ -3,7 +3,7 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.10"
      xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="Predict_Image_Model" projectName="5. Predict"
+    name="Export_Images" projectName="1. Input and Output"
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
@@ -13,28 +13,27 @@
     <variable name="DOCKER_ENABLED" value="True" />
   </variables>
   <description>
-    <![CDATA[ Predict a model using a deep learning algorithm. ]]>
+    <![CDATA[ Download a zip file of your results ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="deep-learning"/>
-    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/predict.png"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
     <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Predict_Image_Model">
+    <task name="Export_Images">
       <description>
-        <![CDATA[ Predict a model using a deep learning algorithm. ]]>
+        <![CDATA[ Download a zip file of your results ]]>
       </description>
       <variables>
+        <variable name="OUTPUT_FILE" value="HTML" inherited="false" />
         <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
         <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
         <variable name="DOCKER_ENABLED" value="True" inherited="true" />
-        <variable name="BATCH_SIZE" value="4" inherited="false" />
-        <variable name="NUM_WORKERS" value="2" inherited="false" />
       </variables>
       <genericInformation>
-        <info name="task.icon" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/icons/predict.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
       </genericInformation>
       <selection>
         <script
@@ -80,14 +79,17 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Predict_Image_Model")
+print("BEGIN Export_Images")
 
-import torch
-import json
-import pandas as pd
 import os
+import torch
+import uuid
+import zipfile
+import shutil
+import pandas as pd  
+from os.path import exists, join, isfile
+from os import remove, listdir, makedirs
 
-from os.path import join
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
@@ -96,30 +98,16 @@ BATCH_SIZE  = 4
 NUM_WORKERS = 2
 SHUFFLE     = True
 
+GLOBALSPACE = 'result/'
+
 if 'variables' in locals():
-  MODEL_PATH     = variables.get("MODEL_PATH")
+  GLOBAL         = str(variables.get("PA_SCHEDULER_HOME")) + '/data/defaultglobal/'
+  PREDICT_DATA   = variables.get("PREDICT_DATA_JSON")
   DATASET_PATH   = variables.get("DATASET_PATH")
-  LABELS_PATH    = variables.get("LABELS_PATH")
   CNN_TRANSFORM  = variables.get("CNN_TRANSFORM")
-
-assert MODEL_PATH is not None
-assert DATASET_PATH is not None
-assert LABELS_PATH is not None
+  
+GLOBALSPACE = join(GLOBAL, GLOBALSPACE)
 assert CNN_TRANSFORM is not None
-
-class_names = None
-with open(LABELS_PATH, 'r') as f:
-  class_names = json.load(f)
-assert class_names is not None
-
-# Load trained model
-model = torch.load(MODEL_PATH)
-
-# http://pytorch.org/docs/master/cuda.html#torch.cuda.is_available
-# Returns a bool indicating if CUDA is currently available.
-use_gpu = torch.cuda.is_available()
-if use_gpu:
-  model = model.cuda()
 
 # Load CNN transform
 # data_transforms
@@ -134,71 +122,66 @@ data_loader = {x:
   DataLoader(image_dataset[x], batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS) 
   for x in ['test']}
 
-def predict_model(_model, _data_loader, _use_gpu, _class_names, _max_images=None):
-  images_so_far = 0
-  predictions = []
-  image_input = [] 
-  image_target = []  
-  for i, data in enumerate(_data_loader['test']):
-    inputs, labels = data
+if PREDICT_DATA != None: 
+  prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
+  df = pd.DataFrame(prediction_result)
+  preds = df['Prediction']
+  
+  if exists(GLOBALSPACE):
+    shutil.rmtree(GLOBALSPACE)
+  makedirs(GLOBALSPACE)
+
+  for index, elem in enumerate(preds):
+    #create a new folder
+    foldoutcheck = os.path.exists(GLOBALSPACE + '/' + preds[index])
     
-    if _use_gpu:
-      inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
+    if foldoutcheck == False:
+      os.makedirs(GLOBALSPACE + '/' + preds[index])
+    
+    foldcheck = os.path.exists(GLOBALSPACE + '/' + preds[index])  
+    
+    if foldcheck == True:
+      shutil.copy2(data_loader['test'].dataset.imgs[index][0], GLOBALSPACE + '/' + preds[index])
     else:
-      inputs, labels = Variable(inputs), Variable(labels)
+      os.makedirs(GLOBALSPACE + '/' + preds[index])
+      shutil.copy2(data_loader['test'].dataset.imgs[index][0], GLOBALSPACE + '/' + preds[index])
+  
+  # Get an unique ID
+  ID = str(uuid.uuid4())
+  FILE_NAME = ID + '.zip'
+  FILE_PATH = join(GLOBAL, FILE_NAME)
+  print("FILE_PATH: " + FILE_PATH)
+  
+  def zipdir(_path, _ziph):
+    # ziph is zipfile handle
+    for root, dirs, files in os.walk(_path):
+      for file in files:
+        _ziph.write(join(root, file))
+        #_ziph.write(os.path.join(root, file))
 
-    outputs = _model(inputs)
-    _, preds = torch.max(outputs.data, 1)
-    print(preds)
+  zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
+  zipdir(GLOBALSPACE, zipf)
+  zipf.close()
+  
+  assert isfile(FILE_PATH) == True
 
-    for j in range(inputs.size()[0]):
-      images_so_far += 1
-      result = _class_names[preds[j]]
-      predictions.append(result)
-      image_target.append(inputs)
-      if images_so_far == _max_images:
-        return
-    
-    #break
-  return predictions, image_target 
+  # Read the whole file at once
+  FILE_BIN = None
+  with open(FILE_PATH, "rb") as binary_file:
+    FILE_BIN = binary_file.read()
+  assert FILE_BIN is not None
 
-preds, image_target = predict_model(model, data_loader, use_gpu, class_names)
+  if 'variables' in locals():
+    result = FILE_BIN
+    resultMetadata.put("file.extension", ".zip")
+    resultMetadata.put("file.name", "result.zip")
+    resultMetadata.put("content.type", "application/octet-stream")
 
-label_test = []
-image_input = []
-image_name = []
-for index, elem in enumerate(image_target):
-  #print(index)
-  input_select = data_loader['test'].dataset.imgs[index]
-  dir_image_temp = input_select[0]
-  id_label = input_select[1]  
-  com_data_dir = os.path.abspath(dir_image_temp)
-  com_data_name = os.path.basename(dir_image_temp)    
-  lab_d = data_loader['test'].dataset.classes
-  lab_d = list(lab_d)
-  label = lab_d[id_label]
-  label_test.append(label)
-  image_input.append(com_data_dir)
-  image_name.append(com_data_name)
+  shutil.rmtree(GLOBALSPACE)
+else:
+  print('It is not possible to export the images')
 
-df_preds = pd.DataFrame(preds)
-df_label = pd.DataFrame(label_test)
-df_name = pd.DataFrame(image_name)
-df_preds.columns = ['Prediction']
-df_label.columns = ['Target']
-df_name.columns = ['Image Name']
-df_test_image = pd.DataFrame(image_input)
-df_test_image.columns = ['Image']
-df = pd.concat([df_test_image, df_name, df_label, df_preds], axis=1)
-
-try:
-  variables.put("PREDICT_DATA_JSON", df.to_json(orient='split'))      
-except NameError as err:
-  print("{0}".format(err))
-  print("Warning: this script is running outside from ProActive.")
-  pass
-
-print("END Predict_Image_Model")
+print("END Export_Images")
 ]]>
           </code>
         </script>
