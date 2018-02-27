@@ -1,0 +1,1054 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Custom_Sentiment_Analysis_In_Bing_News" projectName="3. Mixed workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="GPU_NODES_ONLY" value="False" />
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
+    <variable name="DOCKER_ENABLED" value="True" />
+    <variable name="OUTPUT_FORMAT" value="HTML" model="PA:LIST(CSV, HTML)"/>
+    <variable name="FUNCTION" value="sentiment" model="PA:LIST(languages, sentiment, keyPhrases)"/>
+    <variable name="DOCUMENTS_JSON" value="" />
+    <variable name="SEARCH_TERM" value="Donald Trump" />
+    <variable name="COUNT" value="20" model="PA:Integer"/>
+    <variable name="FRESHNESS" value="" />
+    <variable name="MARKET" value="en-US" />
+    <variable name="CATEGORY" value="" />
+    <variable name="SORT_BY" value="" />
+  </variables>
+  <description>
+    <![CDATA[ This workflow is a mashup that searches for news related to a given search term using Azure Bing News API then performs a sentiment analysis using a custom deep learning based pretrained model. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="deep-learning-workflows"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_bing_news_search.svg"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="BingNews">
+      <description>
+        <![CDATA[ This task wraps the Bing News Search API of Microsoft which provides an experience similar to Bing.com/search by returning search results that Bing determines are relevant to a user's query. The results include Web pages and may also include images, videos, and more. The task requires this third-party credential : $BING_SEARCH_API_KEY which provides access to this API. Please refer to the User documentation to learn how to add third-party credentials.
+$COUNT (optional) is the number of news articles to return in the response.
+$FRESHNESS (optional) filter news articles by {"Day", "Week", "Month"}.
+$MARKET is the market where the results come from. Market codes are listed here: https://docs.microsoft.com/en-us/rest/api/cognitiveservices/bing-news-api-v7-reference#market-codes
+$CATEGORY (optional) is the category of articles to return. For example, Sports articles or Entertainment articles.
+$SORTED_BY (optional) is the order to return the trending topics in. For example, sorted by "Date"
+The task's output $BING_NEWS_SEARCH_OUTPUT is the result of the API call in a JSON format. ]]>
+      </description>
+      <variables>
+        <variable name="SEARCH_TERM" value="activeeon" inherited="true" />
+        <variable name="COUNT" value="-1" inherited="true" model="PA:Integer"/>
+        <variable name="FRESHNESS" value="" inherited="true" />
+        <variable name="MARKET" value="" inherited="true" />
+        <variable name="CATEGORY" value="" inherited="true" />
+        <variable name="SORT_BY" value="" inherited="true" />
+        <variable name="OUTPUT_FORMAT" value="HTML" inherited="true" model="PA:LIST(CSV, HTML)"/>
+      </variables>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_bing_news_search.svg"/>
+      </genericInformation>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="bash">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import requests
+import json
+import urllib
+from pprint import pprint
+import pandas as pd
+import re
+
+# You can customize the api server location
+#api_location="westcentralus"
+
+# Congitive Services - Bing Video Search API URL:
+#bing_news_search_url = "https://{0}.api.cognitive.microsoft.com/bing/v7.0/news/search".format(api_location)
+bing_news_search_url = "https://api.cognitive.microsoft.com/bing/v7.0/news/search"
+
+# READ TASK VARIABLES
+if 'variables' in locals():
+    if variables.get("SEARCH_TERM") is not None:
+        SEARCH_TERM = variables.get("SEARCH_TERM")
+    else:
+        print("You first need to specify the search term")
+        sys.exit(1)
+    if variables.get("COUNT") is not None:
+        COUNT = int(variables.get("COUNT"))
+    if variables.get("FRESHNESS") is not None:
+        FRESHNESS = variables.get("FRESHNESS")
+    if variables.get("MARKET") is not None:
+        MARKET = variables.get("MARKET")
+    if variables.get("CATEGORY") is not None:
+        CATEGORY = variables.get("CATEGORY")
+    if variables.get("SORT_BY") is not None:
+        SORT_BY = variables.get("SORT_BY")
+    if variables.get("OUTPUT_FORMAT") is not None:
+        OUTPUT_FORMAT = variables.get("OUTPUT_FORMAT")
+    # Provide a valid subscription API token
+    if credentials.get("BING_SEARCH_API_KEY") is not None:
+        subscription_key = credentials.get("BING_SEARCH_API_KEY")
+    else:
+        print("You first need to add your Azure Cognitive Services API key to the third party credentials")
+        sys.exit(1)
+
+# Set API request parameters
+#params  = {"q": SEARCH_TERM, "count":COUNT, "mkt": MARKET_CODE, "freshness": FRESHNESS, "category":CATEGORY}
+params={'q':SEARCH_TERM}
+if COUNT >0:
+    params['count'] = COUNT
+# Market Code: https://docs.microsoft.com/en-us/rest/api/cognitiveservices/bing-news-api-v7-reference#market-codes
+if MARKET is not None and len(MARKET)>0:
+    params['mkt'] = MARKET
+# Freshness values: 'Day', 'Week', 'Month'
+if FRESHNESS is not None and len(FRESHNESS)>0:
+    params['freshness'] = FRESHNESS
+if CATEGORY is not None and len(CATEGORY)>0:
+    params['category'] = CATEGORY
+if SORT_BY is not None and len(SORT_BY)>0:
+    params['sortBy'] = SORT_BY
+
+# Send API request
+headers   = {
+    "Ocp-Apim-Subscription-Key": subscription_key,
+    'Content-Type': 'text/plain'
+}
+response = requests.get(bing_news_search_url, headers=headers, params=params)
+response.raise_for_status()
+
+# Get a JSON response
+search_results = response.json()
+
+# Print the results
+#pprint(search_results)
+
+if 'variables' in locals():
+    variables.put('BING_NEWS_SEARCH_OUTPUT', search_results)
+
+print("BEGIN Export_Results")
+
+OUTPUT_DATA = search_results["value"]
+table = []
+for document in OUTPUT_DATA:
+    try:
+        image=document["image"]
+    except KeyError:
+        video=None
+        pass
+    description= document["description"]
+    name= document["name"]
+    url= document["url"]
+    table.append("""<tr><td>{0}</td><td>{1}</td><td><a href="{2}">{2}</a></td>""".format(name, description, url))
+
+css_style="""table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%;
+}
+td {
+  border: 1px solid #999999;
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  border-left: 2px solid #999999;
+}"""
+html = ("""<table><tr><th>Title</th><th>Snippet</th><th>Url</th></tr>{0}</table>""").format("\n".join(table))
+html_container="""
+
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+                        
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <meta name="description" content="Bing Video Search API Results">
+                    <style>{0}</style>
+                  </head>
+                  <body>{1}</body></html>""".format(css_style,html)
+
+if OUTPUT_DATA != None and 'resultMetadata' in locals(): 
+    dataframe=pd.read_html(html_container,header=0, encoding='utf-8')[0]
+    
+    if OUTPUT_FORMAT == 'CSV':
+        result = dataframe.to_csv(index=False).encode('utf-8')
+        resultMetadata.put("file.extension", ".csv")
+        resultMetadata.put("file.name", "result.csv")
+        resultMetadata.put("content.type", "text/csv")
+    elif OUTPUT_FORMAT == 'HTML':
+        result = html_container.encode('utf-8')
+        resultMetadata.put("file.extension", ".html")
+        resultMetadata.put("file.name", "result.html")
+        resultMetadata.put("content.type", "text/html")
+    print("END Export_Results")  
+else:
+    print('It is not possible to export the data')
+
+# Uncomment this to render the HTML result locally in your python notebook
+#from IPython.display import HTML
+#HTML(html_container)
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+          </task>
+          <task name="NewsTextExtractor">
+            <description>
+              <![CDATA[ This task extracts news snippets from Bing News then prepares them as an custom format input for Predict_Text_Model task. ]]>
+            </description>
+            <depends>
+              <task ref="BingNews"/>
+            </depends>
+            <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+              <envScript>
+                <script>
+                  <code language="python">
+                    <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                  </code>
+                </script>
+              </envScript>
+            </forkEnvironment>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+import json
+import pandas as pd
+import os
+from os.path import basename, splitext, exists, join
+from os import remove, listdir, makedirs
+import shutil
+
+# Create output directory
+DATASET_PATH="BING_NEWS_TEXT/"
+if exists(DATASET_PATH):
+    shutil.rmtree(DATASET_PATH)
+makedirs(DATASET_PATH)
+
+train_path=os.path.join(DATASET_PATH,"train.csv")
+test_path=os.path.join(DATASET_PATH,"test.csv")
+val_path=os.path.join(DATASET_PATH,"val.csv")
+
+# Get Google News search results
+OUTPUT_DATA=variables.get("BING_NEWS_SEARCH_OUTPUT")["value"]
+text_json={'documents':[]}
+# Extract news snippets and add 'unlabeled' as a label
+for document in OUTPUT_DATA:
+    description=document["description"]
+    text_json['documents'].append({'text': description, 'label':'unlabeled'})
+
+# Create a dataframe to prepare data export
+dataframe=pd.read_json(json.dumps(text_json['documents']).encode('utf-8'),orient='records')
+# Export data as a csv to the file "text.csv"
+dataframe.to_csv(test_path,columns=["text","label"],index=False,header=False)
+
+# Create empty "train.csv" and "val.csv"
+# THIS IS A TEMPORARY WORKAROUD
+# TODO avoid creating empty csv files
+open(train_path, 'a').close()
+open(val_path, 'a').close()
+
+
+# CODE TO EXPORT
+DATASET_ITERATOR_UNL="""
+text_field = data.Field(lower=True)#, tokenize=TOKENIZER)
+print("text_field=",text_field)
+label_field = data.Field(sequential=False)
+print("label_field",label_field)
+#Dataset of columns stored in CSV, TSV, or JSON format
+train, val, test = data.TabularDataset.splits(path=DATASET_PATH, train='train.csv',
+                                                  validation='val.csv', test='test.csv', format='csv',
+                                                  fields=[('text', text_field), ('label', label_field)])
+train_iter, val_iter, test_iter = data.BucketIterator.splits((train, val, test),
+                                                                  repeat=False,
+                                                             batch_sizes=(BATCH_SIZE,len(val),len(test)), sort_key=lambda x: len(x.text), device=DEVICE)
+
+
+text_field.build_vocab(test)
+label_field.build_vocab(test)
+"""
+
+variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR_UNL)
+variables.put("DATASET_PATH",DATASET_PATH)
+variables.put("IS_LABELED_DATA","False")
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+            <outputFiles>
+              <files  includes="BING_NEWS_TEXT/**" accessMode="transferToGlobalSpace"/>
+            </outputFiles>
+          </task>
+          <task name="RNN">
+            <description>
+              <![CDATA[ Simple RNN Model ]]>
+            </description>
+            <variables>
+              <variable name="EMBEDDING_DIM" value="50" inherited="false" />
+              <variable name="HIDDEN_DIM" value="40" inherited="false" />
+              <variable name="BATCH_SIZE" value="2" inherited="false" />
+              <variable name="DROPOUT" value="0.5" inherited="false" />
+            </variables>
+            <genericInformation>
+              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png"/>
+            </genericInformation>
+            <selection>
+              <script
+         type="static" >
+                <code language="javascript">
+                  <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+                </code>
+              </script>
+            </selection>
+            <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+              <envScript>
+                <script>
+                  <code language="python">
+                    <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                  </code>
+                </script>
+              </envScript>
+            </forkEnvironment>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+print("BEGIN Create a RNN model")
+import torch
+from torch.autograd import Variable
+import torch.nn as nn
+import torch.nn.functional as F
+
+BATCH_SIZE=2
+HIDDEN_DIM=50
+EMBEDDING_DIM=50
+DROPOUT=0.5
+
+if 'variables' in locals():  
+  if variables.get("BATCH_SIZE") is not None:
+    BATCH_SIZE = variables.get("BATCH_SIZE")
+  else:
+    print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
+  if variables.get("HIDDEN_DIM") is not None:
+    HIDDEN_DIM = variables.get("HIDDEN_DIM")
+  else:
+    print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
+  if variables.get("EMBEDDING_DIM") is not None:
+    EMBEDDING_DIM = variables.get("EMBEDDING_DIM")
+  else:
+    print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
+  if variables.get("DROPOUT") is not None:
+    DROPOUT = variables.get("DROPOUT")
+  else:
+    print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
+
+
+MODEL_TYPE = 'RNN'
+MODEL_CLASS = """
+class RNN(nn.Module):
+
+    def __init__(self, embedding_dim, hidden_dim, vocab_size, label_size, use_gpu, batch_size, dropout=0.5):
+        super(RNN, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.use_gpu = use_gpu
+        self.batch_size = batch_size
+        self.dropout = dropout
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.RNN = nn.RNN(input_size=embedding_dim, hidden_size=hidden_dim)
+        self.hidden2label = nn.Linear(hidden_dim, label_size)
+        self.hidden = self.init_hidden()
+
+    def init_hidden(self):
+        if self.use_gpu:
+            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
+        else:
+            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
+
+    def forward(self, sentence):
+        x = self.embeddings(sentence).view(len(sentence), self.batch_size, -1)
+        rnn_out, self.hidden = self.RNN(x, self.hidden)
+        y = self.hidden2label(rnn_out[-1])
+        log_probs = F.log_softmax(y)
+        return log_probs"""
+    
+MODEL_DEF = """
+MODEL = RNN(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=BATCH_SIZE)
+"""
+print(MODEL_DEF)
+
+# Forward model
+try:
+    variables.put("MODEL_CLASS", MODEL_CLASS)
+    variables.put("MODEL_DEF", MODEL_DEF)
+    variables.put("BATCH_SIZE", BATCH_SIZE)
+    variables.put("HIDDEN_DIM", HIDDEN_DIM)
+    variables.put("EMBEDDING_DIM", EMBEDDING_DIM)
+    variables.put("DROPOUT", DROPOUT)
+except NameError as err:
+    print("{0}".format(err))
+    print("Warning: this script is running outside from ProActive.")
+    pass
+
+print("END RNN model built")
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+          </task>
+          <task name="Import_Model">
+            <description>
+              <![CDATA[ Import a trained model by a deep learning algorithm. ]]>
+            </description>
+            <variables>
+              <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
+              <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+              <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+              <variable name="MODEL_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/models/basic_sentiment_analysis.zip" inherited="false" />
+            </variables>
+            <genericInformation>
+              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png"/>
+            </genericInformation>
+            <selection>
+              <script
+         type="static" >
+                <code language="javascript">
+                  <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+                </code>
+              </script>
+            </selection>
+            <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+              <envScript>
+                <script>
+                  <code language="python">
+                    <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                  </code>
+                </script>
+              </envScript>
+            </forkEnvironment>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+print("BEGIN Import_Model")
+
+import wget
+import uuid
+import shutil
+import zipfile
+
+from os.path import join, exists
+from os import remove, listdir, makedirs
+
+# Load a trained model on ResNet-18 with two classes [ants, bees]
+MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_resnet18.zip'
+
+if 'variables' in locals():
+  MODEL_URL = variables.get("MODEL_URL")
+
+print("MODEL_URL:   " + MODEL_URL)
+assert MODEL_URL is not None
+
+# Get an unique ID
+ID = str(uuid.uuid4())+"/"
+
+variables.put("MODEL_FOLDER_ID",ID)
+
+# Create an empty dir
+MODEL_DIR_PATH = ID
+if exists(MODEL_DIR_PATH):
+  shutil.rmtree(MODEL_DIR_PATH)
+makedirs(MODEL_DIR_PATH)
+print("MODEL_DIR_PATH: " + MODEL_DIR_PATH)
+
+print("Downloading...")
+filename = wget.download(MODEL_URL, MODEL_DIR_PATH)
+print("FILENAME: " + filename)
+print("OK")
+
+print("Extracting...")
+dataset_zip = zipfile.ZipFile(filename)
+dataset_zip.extractall(MODEL_DIR_PATH)
+dataset_zip.close()
+remove(filename)
+print("OK")
+
+MODEL_PATH = None
+LABELS_PATH = None
+TEXT_PATH = None 
+for file in listdir(MODEL_DIR_PATH):
+  if file.endswith(".pt"):
+    MODEL_PATH = join(MODEL_DIR_PATH, file)
+  if file.endswith("label.pkl"):
+    LABELS_PATH = join(MODEL_DIR_PATH, file)
+  if file.endswith("text.pkl"):
+    TEXT_PATH = join(MODEL_DIR_PATH, file)
+  if file.endswith(".txt"):
+    LABELS_PATH = join(MODEL_DIR_PATH, file)
+
+print("Model information: ")
+print("MODEL_PATH:  " + MODEL_PATH)
+print("LABELS_PATH: " + LABELS_PATH)
+print("TEXT_PATH: " + TEXT_PATH)
+assert MODEL_PATH is not None
+assert LABELS_PATH is not None
+
+if 'variables' in locals():
+  variables.put("MODEL_PATH", MODEL_PATH)
+  variables.put("LABELS_PATH", LABELS_PATH)
+  variables.put("TEXT_PATH", TEXT_PATH)
+
+print("END Import_Model")
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+            <outputFiles>
+              <files  includes="$MODEL_FOLDER_ID*" accessMode="transferToGlobalSpace"/>
+            </outputFiles>
+          </task>
+          <task name="Predict_Text_Model">
+            <description>
+              <![CDATA[ Predict results based on new data ]]>
+            </description>
+            <variables>
+              <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+              <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+              <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+              <variable name="LOSS_FUNCTION" value="NLLLoss" inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)"/>
+            </variables>
+            <genericInformation>
+              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/predict.png"/>
+            </genericInformation>
+            <depends>
+              <task ref="RNN"/>
+              <task ref="Import_Model"/>
+              <task ref="NewsTextExtractor"/>
+            </depends>
+            <inputFiles>
+              <files  includes="BING_NEWS_TEXT/**" accessMode="transferFromGlobalSpace"/>
+              <files  includes="$MODEL_FOLDER_ID*" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <selection>
+              <script
+         type="static" >
+                <code language="javascript">
+                  <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+                </code>
+              </script>
+            </selection>
+            <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+              <envScript>
+                <script>
+                  <code language="python">
+                    <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                  </code>
+                </script>
+              </envScript>
+            </forkEnvironment>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+print("BEGIN Prediction")
+
+from torchtext import data
+from torchtext import datasets
+from torchtext import vocab
+from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
+from tqdm import tqdm
+import time, random
+import os
+from torch.autograd import Variable
+import torch.optim as optim
+import time
+#import spacy
+from itertools import *
+import torch
+from torch.autograd import Variable
+import torch.nn as nn
+import torch.nn.functional as F
+import pandas as pd
+import dill as pickle
+
+pd.options.display.max_colwidth = 500
+DEVICE = -1
+#-------------------------main code --------------------------
+DATASET_ITERATOR_UNL = None
+DATASET_ITERATOR = None
+#--------Get varaiables from previous tasks--------
+if 'variables' in locals():
+    if variables.get("EVALUATE") is not None:
+        EVALUATE = variables.get("EVALUATE")
+    if variables.get("MODEL_PATH") is not None:
+        MODEL_PATH = variables.get("MODEL_PATH")
+    if variables.get("ACCURACY") is not None:
+        ACCURACY = variables.get("ACCURACY")
+    if variables.get("LOSS_FUNCTION") is not None:
+        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
+    if variables.get("BATCH_SIZE") is not None:
+        BATCH_SIZE = variables.get("BATCH_SIZE")
+    if variables.get("USE_GPU") is not None:
+        USE_GPU = variables.get("USE_GPU")
+    if variables.get("DEVICE") is not None:
+        DEVICE = variables.get("DEVICE") 
+    if variables.get("IS_LABELED_DATA") is not None:
+        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
+    if variables.get("vocab_size") is not None:
+        vocab_size = variables.get("vocab_size")
+    if variables.get("label_size") is not None:
+        label_size = variables.get("label_size")
+    if variables.get("BATCH_SIZE") is not None:
+        label_size = variables.get("BATCH_SIZE")
+    if variables.get("MODEL_CLASS") is not None:
+        MODEL_CLASS = variables.get("MODEL_CLASS")
+    if variables.get("MODEL_DEF") is not None:
+        MODEL_DEF = variables.get("MODEL_DEF")
+
+
+#--------Load Dataset--------
+
+if 'variables' in locals():
+    if variables.get("DATASET_PATH") is not None:
+        DATASET_PATH = variables.get("DATASET_PATH")
+    if variables.get("DATASET_ITERATOR") is not None:
+        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
+        DATASET_PATH = variables.get("DATASET_PATH")
+        exec(DATASET_ITERATOR)
+    if variables.get("DATASET_ITERATOR_UNL") is not None:
+        DATASET_ITERATOR_UNL = variables.get("DATASET_ITERATOR_UNL")
+        DATASET_PATH = variables.get("DATASET_PATH")
+        exec(DATASET_ITERATOR_UNL)
+    #Load model files
+    if variables.get("LABELS_PATH") is not None:
+        LABELS_PATH = variables.get("LABELS_PATH")
+    if variables.get("TEXT_PATH") is not None:
+        TEXT_PATH = variables.get("TEXT_PATH")
+   
+#-------Main--------
+def evaluate(model, test, data_iter, label_field, loss_function, name):
+    model.eval()
+    avg_loss = 0.0
+    truth_res = []
+    pred_res = []
+    i=0
+    acc = 0
+    pd.options.display.max_colwidth = 500
+    result =  pd.DataFrame(columns=['text','prediction','label'])
+    print("Result==",result)
+    print("TEST==",len(test))
+    for batch in data_iter:
+        i=i+1
+        sent, label = batch.text, batch.label
+        print('sent',sent)
+        label.data.sub_(1)
+        truth_res += list(label.data)
+        model.batch_size = len(test)
+        model.hidden = model.init_hidden()
+        pred = model(sent)
+        pred_label = pred.data.max(1)[1].numpy()
+        for i in range(model.batch_size):
+            test_fields = vars(test[i])
+            test_text = test_fields["text"]
+            test_label = test_fields["label"]
+            prede_label = pred_label[i]
+            gd_label = label[i]
+            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
+        pred_res += [x for x in pred_label]
+        print('I am in the second one loop')
+        if name is 'test_labeled':
+            loss = loss_function(pred, label)
+            avg_loss += loss.data[0]
+    if name is 'test_labeled':
+        avg_loss /= len(test)
+        acc = get_accuracy(truth_res, pred_res)
+    #print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
+    return acc, result
+    
+def get_accuracy(truth, pred):
+     assert len(truth)==len(pred)
+     right = 0
+     for i in range(len(truth)):
+         if truth[i]==pred[i]:
+             right += 1.0
+     return right/len(truth)
+     
+LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
+
+exec(LOSS)
+
+
+label_field = pickle.load(open(LABELS_PATH,'rb'))
+text_field = pickle.load(open(TEXT_PATH,'rb'))
+exec(MODEL_CLASS)
+
+MODEL=torch.load(MODEL_PATH)
+if variables.get("DATASET_ITERATOR_UNL") is not None:
+    print('I am testing the unlabeled dataset')
+    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_unlabeled')
+else:
+    print('I am testing the labeled dataset')
+    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_labeled')
+
+print(results)
+#------plot results-----
+# Forward results for preview 
+try:
+    variables.put("PREDICT_DATA_JSON", results.to_json(orient='split'))
+except NameError as err:
+    print("{0}".format(err))
+    print("Warning: this script is running outside from ProActive.")
+    pass
+
+print("END Prediction")
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+          </task>
+          <task name="Export_Results">
+            <description>
+              <![CDATA[ Preview the predicted results ]]>
+            </description>
+            <variables>
+              <variable name="OUTPUT_FILE" value="HTML" inherited="false" />
+              <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
+              <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+              <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+            </variables>
+            <genericInformation>
+              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png"/>
+            </genericInformation>
+            <depends>
+              <task ref="Predict_Text_Model"/>
+            </depends>
+            <selection>
+              <script
+         type="static" >
+                <code language="javascript">
+                  <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+                </code>
+              </script>
+            </selection>
+            <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+              <envScript>
+                <script>
+                  <code language="python">
+                    <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                  </code>
+                </script>
+              </envScript>
+            </forkEnvironment>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+from pprint import pprint
+import pandas as pd
+
+OUTPUT_DATA = variables.get("PREDICT_DATA_JSON")
+OUTPUT_FILE = variables.get("OUTPUT_FILE")
+
+if OUTPUT_DATA != None: 
+  prediction_result  = pd.read_json(OUTPUT_DATA, orient='split')   
+
+pprint(OUTPUT_DATA)
+
+table = []
+pd.set_option('display.max_colwidth', -1)
+table.append("""<tr><td>{0}</td>""".format(prediction_result.to_html(columns=["text","prediction"])))
+    
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%;
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;     
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #999999;            
+}
+"""
+
+#html = """<table><th>Image</th><th>Reponse</th></tr>{0}</table>""".format("\n".join(table))
+html = """<table><th>Results</th></tr>{0}</table>""".format("\n".join(table))         
+
+html_container = """
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  <!DOCTYPE html>
+                  <html>
+                    <head>
+                      <meta charset="UTF-8">
+                        <meta name="description" content="Face API">
+                          <style>{0}</style>
+                        </head>
+                        <body>{1}</body></html>
+""".format(css_style, html)
+
+result = html_container.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "result.html")
+resultMetadata.put("content.type", "text/html")         
+print("BEGIN Export_Results")
+]]>
+                      </code>
+                    </script>
+                  </scriptExecutable>
+                  <controlFlow block="none"></controlFlow>
+                </task>
+              </taskFlow>
+            </job>
