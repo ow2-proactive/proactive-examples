@@ -1,53 +1,63 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.9"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.9 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.9/schedulerjob.xsd"
-    name="Train_Image_Model" projectName="4. Train Model"
-    priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Train_Image_Model" onTaskError="continueJobExecution" priority="normal" projectName="4. Train Model" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
   <variables>
-    <variable name="GPU_NODES_ONLY" value="False" />
-    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
-    <variable name="DOCKER_ENABLED" value="True" />
+    <variable name="GPU_NODES_ONLY" value="False"/>
+    <variable name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
     <![CDATA[ Train a model using a CNN algorithm. ]]>
   </description>
-    <genericInformation>
-    <info name="bucketName" value="deep-learning"/>
-    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+  <genericInformation>
+<info name="bucketName" value="deep-learning-dev"/>
+<info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+<info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
     <task name="Train_Image_Model">
       <description>
         <![CDATA[ Train a model using a CNN algorithm. ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
-        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
-        <variable name="NUM_EPOCHS" value="1" inherited="true" />
-        <variable name="BATCH_SIZE" value="4" inherited="false" />
-        <variable name="NUM_WORKERS" value="2" inherited="false" />
+        <variable inherited="true" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="NUM_EPOCHS" value="1"/>
+        <variable inherited="false" name="BATCH_SIZE" value="4"/>
+        <variable inherited="false" name="NUM_WORKERS" value="2"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
       </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+      </inputFiles>
       <selection>
-        <script
-         type="static" >
-          <code language="javascript">
+        <script type="static">
+          <code language="python">
             <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
 ]]>
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -88,11 +98,13 @@ import copy
 import uuid
 import json
 
+from os.path import join, exists
+from os import remove, listdir, makedirs
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from os.path import join
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
@@ -102,13 +114,10 @@ NUM_EPOCHS  = 1
 BATCH_SIZE  = 4
 NUM_WORKERS = 2
 SHUFFLE     = True
-GLOBALSPACE = './data/'
 
 if 'variables' in locals():
   if variables.get("NUM_EPOCHS") is not None:
     NUM_EPOCHS = int(str(variables.get("NUM_EPOCHS")))
-  
-  GLOBALSPACE   = variables.get("GLOBALSPACE")
   DATASET_PATH  = variables.get("DATASET_PATH")
   CNN_MODEL     = variables.get("CNN_MODEL")
   CNN_TRANSFORM = variables.get("CNN_TRANSFORM")
@@ -240,22 +249,32 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
 best_cnn = train_model(cnn, criterion, optimizer_ft, exp_lr_scheduler, num_epochs=NUM_EPOCHS)
 
 # Get an unique ID
-file_id = str(uuid.uuid4())
+ID = str(uuid.uuid4())
+
+# Create an empty dir
+MODEL_FOLDER = join('models', ID)
+if exists(MODEL_FOLDER):
+  shutil.rmtree(MODEL_FOLDER)
+makedirs(MODEL_FOLDER)
+print("MODEL_FOLDER: " + MODEL_FOLDER)
 
 # Save trained model
 print('Saving trained model...')
-MODEL_FILENAME = file_id + ".pt"
-MODEL_PATH = join(GLOBALSPACE, MODEL_FILENAME)
+MODEL_PATH = join(MODEL_FOLDER, "model.pt")
 torch.save(best_cnn, MODEL_PATH)
 
 # Save labels
 print('Saving labels to a text file...')
-LABELS_FILENAME = file_id + ".txt"
-LABELS_PATH = join(GLOBALSPACE, LABELS_FILENAME)
+LABELS_PATH = join(MODEL_FOLDER, "labels.txt")
 with open(LABELS_PATH, 'w') as outfile:
   json.dump(class_names, outfile)
 
+print("Model information: ")
+print("MODEL_PATH:  " + MODEL_PATH)
+print("LABELS_PATH: " + LABELS_PATH)
+
 if 'variables' in locals():
+  variables.put("MODEL_FOLDER", MODEL_FOLDER)
   variables.put("MODEL_PATH", MODEL_PATH)
   variables.put("LABELS_PATH", LABELS_PATH)
 
@@ -264,7 +283,20 @@ print("END Train_Image_Model")
           </code>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="bash">
+            <![CDATA[
+chmod -R 777 .
+pwd
+]]>
+          </code>
+        </script>
+      </post>
+      <outputFiles>
+        <files accessMode="transferToGlobalSpace" includes="$MODEL_FOLDER/**"/>
+      </outputFiles>
     </task>
   </taskFlow>
 </job>
