@@ -8,6 +8,16 @@
 		onTaskError="continueJobExecution"
 		maxNumberOfExecution="2"
 >
+	<variables>
+		<variable name="StockPrice" value="20.83" />
+		<variable name="StrikePrice" value="21.50" />
+		<variable name="Volatility" value="0.021" />
+		<variable name="confidenceRate" value="0.99" />
+		<variable name="InterestRate" value="0.20" />
+		<variable name="Maturity" value="0.6" />
+		<variable name="NumPath" value="3000000" />
+		<variable name="NumStep" value="100" />
+	</variables>
 	<description>
 		<![CDATA[ European stock option pricing via Monte Carlo simulations in PyCuda. ]]>
 	</description>
@@ -28,8 +38,7 @@
 						type="static" >
 					<code language="groovy">
 						<![CDATA[
-def env_variables = System.getenv().toString()
-selected = env_variables.contains("cuda")
+selected = new File("/dev/nvidia0").exists() && new File("/dev/nvidiactl").exists() && new File("/dev/nvidia-uvm").exists()
 ]]>
 					</code>
 				</script>
@@ -54,8 +63,9 @@ workspaceContainer = localspace
 workspaceVolume = '-v '+localspace +':'+localspace+' '
 # Prepare container working directory
 containerWorkingDirectory = '-w '+workspaceContainer+' '
+deviceDirectories = '--device /dev/nvidia0:/dev/nvidia0 --device /dev/nvidiactl:/dev/nvidiactl --device /dev/nvidia-uvm:/dev/nvidia-uvm '
 # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
-preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + deviceDirectories + containerName
 ]]>
 						</code>
 					</script>
@@ -65,7 +75,7 @@ preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + wor
 				<script>
 					<code language="cpython">
 						<![CDATA[
-print("test ...")
+print("pycuda_option_pricing ...")
 
 
 #Source: https://nvidia.qwiklab.com/
@@ -74,7 +84,6 @@ print("test ...")
 
 import numpy as np                         # numpy namespace
 from timeit import default_timer as timer  # for timing
-from matplotlib import pyplot              # for plotting
 import math
 import pycuda.driver as cuda
 import pycuda.autoinit, pycuda.compiler
@@ -82,21 +91,16 @@ import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath             # elementwise functions for math
 from pycuda.curandom import XORWOWRandomNumberGenerator as curand # random number generator for CUDA
 
-import cProfile as profile
-
 # Stock information parameters
-StockPrice = 20.83
-StrikePrice = 21.50
-Volatility = 0.021
-InterestRate = 0.20
-Maturity = 5. / 12.
+StockPrice = float(variables.get("StockPrice"))
+StrikePrice = float(variables.get("StrikePrice"))
+Volatility = float(variables.get("Volatility"))
+InterestRate = float(variables.get("InterestRate"))
+Maturity = float(variables.get("Maturity"))
 
 # monte-carlo simulation parameters
-NumPath = 3000000
-NumStep = 100
-
-# plotting
-MAX_PATH_IN_PLOT = 50
+NumPath = int(variables.get("NumPath"))
+NumStep = int(variables.get("NumStep"))
 
 paths = np.zeros((NumPath, NumStep + 1), order='F')
 paths[:, 0] = StockPrice
@@ -130,7 +134,7 @@ def montecarlo(paths, dt, interest, volatility):
     d_curLast= gpuarray.to_gpu(paths[:,0].astype(np.float32)) # Allocate and send starting array to GPU
     d_curNext = gpuarray.empty(paths.shape[0], np.float32) # Allocate memory for arrays in GPU
 
-    for j in xrange(1, paths.shape[1]):   # for each time step
+    for j in range(1, paths.shape[1]):   # for each time step
         # Generate gaussian noises for simulation
         prng.fill_normal(d_noises)
         # Call the GPU-acclereated step function to calculate the next set of prices
@@ -152,27 +156,13 @@ ST = paths[:, -1]
 PaidOff = np.maximum(paths[:, -1] - StrikePrice, 0)
 print("Result")
 fmt = '%20s: %s'
-print("fmt % ('stock price', np.mean(ST))")
-print("fmt % ('standard error', np.std(ST) / np.sqrt(NumPath))")
-print("fmt % ('paid off', np.mean(PaidOff))")
+print(fmt % ('stock price', np.mean(ST)))
+print(fmt % ('standard error', np.std(ST) / np.sqrt(NumPath)))
+print(fmt % ('paid off', np.mean(PaidOff)))
 optionprice = np.mean(PaidOff) * np.exp(-InterestRate * Maturity)
-print("fmt % ('option price', optionprice)")
+print(fmt % ('option price', optionprice))
 
-print("Performance")
-NumCompute = NumPath * NumStep
-print("fmt % ('Mstep/second', '%.2f' % (NumCompute / elapsed / 1e6))")
-print("fmt % ('time elapsed', '%.3fs' % (te - ts))")
-
-pathct = min(NumPath, MAX_PATH_IN_PLOT)
-for i in xrange(pathct):
-    pyplot.plot(paths[i])
-print("Plotting %d/%d paths' % (pathct, NumPath)")
-pyplot.show()
-
-# profile.run("montecarlo(paths, DT, InterestRate, Volatility)", sort="time")
-
-
-print("... test")
+print("... pycuda_option_pricing")
 ]]>
 					</code>
 				</script>
