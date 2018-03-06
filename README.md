@@ -6,7 +6,7 @@ If the "studio_template" section is specified, the object/workflow is also consi
 The aim of this project is to centralize all proactive workflows and other related objects (scripts, images, etc). The workflows from the ProActive Examples project are pushed to Catalog storage inside proactive.
 
 # How to build
-Please run next command: ``gradlew clean zip``
+Please run next command: ``gradlew clean zip`` or ``gradlew clean build``
 This will generate the `proactive-examples.zip` file inside project's build folder.
 
 # How to test locally
@@ -129,5 +129,13 @@ task zip (type: Zip){
     include 'ordered_bucket_list'
 }
 ```
+#  The rules for added workflows
+All the workflows added in proactive-examples project have to follow the next rules:
+
+  . Every single workflow of packages distributed by Activeeon (as all the workflows from proactive-examples), MUST HAVE a Workflow Generic Information "pa.action.icon" with a meaningful Icon
+  . URL of this icon MUST reference a local file
+  . If a workflow has a single task, this task MUST HAVE a Task Generic Information "task.icon" with the same icon as the Workflow
+
+* _In case if workflow is not corresponding to specified rules: the test inside the proactive-examples project will fail._
 
 That's all!
