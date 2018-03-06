@@ -115,10 +115,6 @@ public class ProActiveExamplesValidityTest {
             Task singleTask = tasks.get(0);
             String taskIconValue = singleTask.getGenericInformation().get(TASK_ICON_KEY_NAME);
 
-            // If the task icon generic info was not added, you can use next line to fix it:
-//             WorkflowModificationHelper.addTaskIconGIFromJobToSingleTask(job, filePath, JOB_ICON_KEY_NAME, TASK_ICON_KEY_NAME);
-
-            //If the next test fails, because of missing task icon generic info, then you can uncomment and use the code above
             assertThat("The icon value in generic info for task should exist: " + TASK_ICON_KEY_NAME,
                        taskIconValue,
                        notNullValue());
