@@ -9,14 +9,13 @@ import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertThat;
 
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.DirectoryStream.Filter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.stream.Stream;
 
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
@@ -54,42 +53,30 @@ public class ProActiveExamplesValidityTest {
     }
 
     @Parameterized.Parameters(name = "{index}: testing workflow - {0}")
-    public static Collection<String> data() {
-        Filter<Path> directoryFilter = new Filter<Path>() {
-            @Override
-            public boolean accept(Path entry) throws IOException {
-                return Files.isDirectory(entry) && Files.exists(Paths.get(entry.toString(), "METADATA.json"));
-            }
-        };
+    public static Collection<String> data() throws IOException {
 
         List<String> files = new ArrayList<>();
-        if (Files.isDirectory(Paths.get(""))) {
-            try (DirectoryStream<Path> directoryStream = Files.newDirectoryStream(Paths.get(""), directoryFilter)) {
-                directoryStream.forEach(directoryPath -> {
-                    Path workflowDirectory = Paths.get(directoryPath.toString(), PATH_TO_WORKFLOWS);
-                    try (DirectoryStream<Path> stream = Files.newDirectoryStream(workflowDirectory, "*.xml")) {
-                        stream.forEach(workflowPath -> files.add(workflowPath.toString()));
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
-                });
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+        try (Stream<Path> rootFilesStream = Files.list(Paths.get(""))) {
+            rootFilesStream.filter(entry -> Files.isDirectory(entry) &&
+                                            Files.exists(Paths.get(entry.toString(), "METADATA.json")))
+                           .map(directoryPath -> Paths.get(directoryPath.toString(), PATH_TO_WORKFLOWS))
+                           .flatMap(resourcesPath -> {
+                               try {
+                                   return Files.list(resourcesPath).filter(file -> file.toString().endsWith(".xml"));
+                               } catch (IOException e) {
+                                   throw new RuntimeException(e);
+                               }
+                           })
+                           .forEach(workflowPath -> files.add(workflowPath.toString()));
         }
         return files;
     }
 
     @Test
-    public void testWfDescription() throws IOException, TransformerException, ParserConfigurationException {
+    public void testWfDescription()
+            throws IOException, TransformerException, ParserConfigurationException, JobCreationException {
         JobFactory factory = JobFactory.getFactory();
-
-        TaskFlowJob job = null;
-        try {
-            job = (TaskFlowJob) factory.createJob(filePath);
-        } catch (JobCreationException e) {
-            throw new RuntimeException("The workflow is not valid", e);
-        }
+        TaskFlowJob job = (TaskFlowJob) factory.createJob(filePath);
 
         /*
          * 1. Every single workflow of packages distributed by Activeeon (as all the workflows from
