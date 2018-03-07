@@ -1,7 +1,8 @@
 package org.ow2.proactive;
 
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertThat;
 
 import java.io.IOException;
@@ -20,9 +21,9 @@ public class OrderedBucketListTest {
 
         List<String> fileLinesList = Files.readAllLines(Paths.get(ORDERED_BUCKET_LIST_FILE_NAME));
 
-        assertThat("The ordered bucket list file should present in project: " + ORDERED_BUCKET_LIST_FILE_NAME,
+        assertThat("The ordered bucket list file should not be empty: " + ORDERED_BUCKET_LIST_FILE_NAME,
                    fileLinesList,
-                   notNullValue());
+                   is(not(empty())));
 
         assertThat("The ordered bucket list file should contain only 1 line: ", fileLinesList.size(), is(1));
 
