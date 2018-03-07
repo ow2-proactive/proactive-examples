@@ -1,0 +1,1124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="GAN_Generate_Fake_MNIST_Images" projectName="2. Microsoft Cognitive Toolkit"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="DOCKER_ENABLED" value="True" />
+    <variable name="GPU_NODES_ONLY" value="False" />
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
+  </variables>
+  <description>
+    <![CDATA[ Basic GAN generating fake MNIST images ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="deep-learning-workflows"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cntk.png"/>
+    <info name="Documentation" value="https://www.cntk.ai/pythondocs/gettingstarted.html"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Import_MNIST_Dataset">
+      <description>
+        <![CDATA[ Import the MNIST dataset ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="PYTHON_COMMAND" value="/root/anaconda3/envs/cntk-py35/bin/python"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cntk.png"/>
+      </genericInformation>
+      <selection>
+        <script
+         type="static" >
+          <code language="python">
+            <![CDATA[
+#%% node_selection (python)
+# job/task variables:
+# GPU_NODES_ONLY: False (default)
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#%% CNTK (CPU + GPU fork env)
+# Job variables:
+# DOCKER_ENABLED: True (default)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+  if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+    DOCKER_ENABLED = False
+
+DOCKER_GPU_ENABLED = False
+DOCKER_NVIDIA_PATH = '/usr/bin/nvidia-docker'
+if os.path.exists(DOCKER_NVIDIA_PATH):
+  DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+DOCKER_RUN_CMD   = 'docker run '
+#DOCKER_CONTAINER = 'microsoft/cntk:2.4-cpu-python3.5' # default
+DOCKER_CONTAINER = 'activeeon/cntk:2.4-cpu-python3.5'  # added oracle-java 1.8.0_161 + py4j
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+  DOCKER_RUN_CMD   = 'nvidia-docker run '
+  #DOCKER_CONTAINER = 'microsoft/cntk' # default
+  DOCKER_CONTAINER = 'activeeon/cntk'  # added oracle-java 1.8.0_161 + py4j
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_CONTAINER:   ' + DOCKER_CONTAINER)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+  # Prepare Docker parameters 
+  containerName = DOCKER_CONTAINER
+  dockerRunCommand =  DOCKER_RUN_CMD
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+  
+  print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+# Import the relevant modules to be used later
+import gzip
+import numpy as np
+import os
+import shutil
+import struct
+import sys
+import cntk as C
+import pandas as pd
+
+try: 
+    from urllib.request import urlretrieve 
+except ImportError: 
+    from urllib import urlretrieve
+
+# Functions to load MNIST images and unpack into train and test set.
+# - loadData reads a image and formats it into a 28x28 long array
+# - loadLabels reads the corresponding label data, one for each image
+# - load packs the downloaded image and label data into a combined format to be read later by 
+#   the CNTK text reader 
+
+def loadData(src, cimg):
+    print ('Downloading ' + src)
+    gzfname, h = urlretrieve(src, './delete.me')
+    print ('Done.')
+    try:
+        with gzip.open(gzfname) as gz:
+            n = struct.unpack('I', gz.read(4))
+            # Read magic number.
+            if n[0] != 0x3080000:
+                raise Exception('Invalid file: unexpected magic number.')
+            # Read number of entries.
+            n = struct.unpack('>I', gz.read(4))[0]
+            if n != cimg:
+                raise Exception('Invalid file: expected {0} entries.'.format(cimg))
+            crow = struct.unpack('>I', gz.read(4))[0]
+            ccol = struct.unpack('>I', gz.read(4))[0]
+            if crow != 28 or ccol != 28:
+                raise Exception('Invalid file: expected 28 rows/cols per image.')
+            # Read data.
+            res = np.fromstring(gz.read(cimg * crow * ccol), dtype = np.uint8)
+    finally:
+        os.remove(gzfname)
+    return res.reshape((cimg, crow * ccol))
+
+def loadLabels(src, cimg):
+    print ('Downloading ' + src)
+    gzfname, h = urlretrieve(src, './delete.me')
+    print ('Done.')
+    try:
+        with gzip.open(gzfname) as gz:
+            n = struct.unpack('I', gz.read(4))
+            # Read magic number.
+            if n[0] != 0x1080000:
+                raise Exception('Invalid file: unexpected magic number.')
+            # Read number of entries.
+            n = struct.unpack('>I', gz.read(4))
+            if n[0] != cimg:
+                raise Exception('Invalid file: expected {0} rows.'.format(cimg))
+            # Read labels.
+            res = np.fromstring(gz.read(cimg), dtype = np.uint8)
+    finally:
+        os.remove(gzfname)
+    return res.reshape((cimg, 1))
+
+def try_download(dataSrc, labelsSrc, cimg):
+    data = loadData(dataSrc, cimg)
+    labels = loadLabels(labelsSrc, cimg)
+    return np.hstack((data, labels))
+    
+# URLs for the train image and label data
+url_train_image = 'http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz'
+url_train_labels = 'http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz'
+num_train_samples = 60000
+
+print("Downloading train data")
+train = try_download(url_train_image, url_train_labels, num_train_samples)
+
+# URLs for the test image and label data
+url_test_image = 'http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz'
+url_test_labels = 'http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz'
+num_test_samples = 10000
+
+print("Downloading test data")
+test = try_download(url_test_image, url_test_labels, num_test_samples)
+
+
+# Save the data files into a format compatible with CNTK text reader
+def savetxt(filename, ndarray):
+    dir = os.path.dirname(filename)
+
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+
+    if not os.path.isfile(filename):
+        print("Saving", filename )
+        with open(filename, 'w') as f:
+            labels = list(map(' '.join, np.eye(10, dtype=np.uint).astype(str)))
+            for row in ndarray:
+                row_str = row.astype(str)
+                label_str = labels[row[-1]]
+                feature_str = ' '.join(row_str[:-1])
+                f.write('|labels {} |features {}\n'.format(label_str, feature_str))
+    else:
+        print("File already exists", filename)
+
+# Save the train and test files (prefer our default path for the data)
+data_dir = os.path.join("..", "Examples", "Image", "DataSets", "MNIST")
+if not os.path.exists(data_dir):
+    data_dir = os.path.join("data", "MNIST")
+
+print ('Writing train text file...')
+savetxt(os.path.join(data_dir, "Train-28x28_cntk_text.txt"), train)
+
+print ('Writing test text file...')
+savetxt(os.path.join(data_dir, "Test-28x28_cntk_text.txt"), test)
+
+print('Done')
+
+
+isFast = True 
+
+# Ensure the training data is generated and available for this tutorial
+# We search in two locations in the toolkit for the cached MNIST data set.
+
+data_found = False
+
+for data_dir in [os.path.join("..", "Examples", "Image", "DataSets", "MNIST"),
+                 os.path.join("data", "MNIST")]:
+    train_file = os.path.join(data_dir, "Train-28x28_cntk_text.txt")
+    if os.path.isfile(train_file):
+        data_found = True
+        break
+        
+if not data_found:
+    raise ValueError("Please generate the data by completing CNTK 103 Part A")
+    
+print("Data directory is {0}".format(data_dir))
+
+try:
+  variables.put("DATA_PATH", data_dir )
+  variables.put("train_file",train_file)
+except NameError as err:
+  print("{0}".format(err))
+  print("Warning: this script is running outside from ProActive.")
+  pass
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$DATA_PATH/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="GAN">
+      <description>
+        <![CDATA[ GANs are a class of artificial intelligence algorithms used in unsupervised machine learning, implemented by a system of two neural networks contesting with each other in a zero-sum game framework. 
+A GAN network is composed of two sub-networks, one called the Generator and the other Discriminator. 
+https://www.cntk.ai/pythondocs/gettingstarted.html ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="PYTHON_COMMAND" value="/root/anaconda3/envs/cntk-py35/bin/python"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cntk.png"/>
+      </genericInformation>
+      <selection>
+        <script
+         type="static" >
+          <code language="python">
+            <![CDATA[
+#%% node_selection (python)
+# job/task variables:
+# GPU_NODES_ONLY: False (default)
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#%% CNTK (CPU + GPU fork env)
+# Job variables:
+# DOCKER_ENABLED: True (default)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+  if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+    DOCKER_ENABLED = False
+
+DOCKER_GPU_ENABLED = False
+DOCKER_NVIDIA_PATH = '/usr/bin/nvidia-docker'
+if os.path.exists(DOCKER_NVIDIA_PATH):
+  DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+DOCKER_RUN_CMD   = 'docker run '
+#DOCKER_CONTAINER = 'microsoft/cntk:2.4-cpu-python3.5' # default
+DOCKER_CONTAINER = 'activeeon/cntk:2.4-cpu-python3.5'  # added oracle-java 1.8.0_161 + py4j
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+  DOCKER_RUN_CMD   = 'nvidia-docker run '
+  #DOCKER_CONTAINER = 'microsoft/cntk' # default
+  DOCKER_CONTAINER = 'activeeon/cntk'  # added oracle-java 1.8.0_161 + py4j
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_CONTAINER:   ' + DOCKER_CONTAINER)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+  # Prepare Docker parameters 
+  containerName = DOCKER_CONTAINER
+  dockerRunCommand =  DOCKER_RUN_CMD
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+  
+  print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+# architectural parameters
+
+MODEL_CLASS = """
+
+g_input_dim = 100
+g_hidden_dim = 128
+g_output_dim = d_input_dim = 784
+d_hidden_dim = 128
+d_output_dim = 1
+
+
+def generator(z):
+    with C.layers.default_options(init = C.xavier()):
+        h1 = C.layers.Dense(g_hidden_dim, activation = C.relu)(z)
+        return C.layers.Dense(g_output_dim, activation = C.tanh)(h1)
+        
+def discriminator(x):
+    with C.layers.default_options(init = C.xavier()):
+        h1 = C.layers.Dense(d_hidden_dim, activation = C.relu)(x)
+        return C.layers.Dense(d_output_dim, activation = C.sigmoid)(h1)"""
+        
+try:
+  variables.put("MODEL_CLASS", MODEL_CLASS )
+except NameError as err:
+  print("{0}".format(err))
+  print("Warning: this script is running outside from ProActive.")
+  pass
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$DATA_PATH/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="Train_Model">
+      <description>
+        <![CDATA[ Train the GAN model. ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="IS_FAST" value="True" inherited="false" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="PYTHON_COMMAND" value="/root/anaconda3/envs/cntk-py35/bin/python"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cntk.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Import_MNIST_Dataset"/>
+        <task ref="GAN"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$DATA_PATH/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script
+         type="static" >
+          <code language="python">
+            <![CDATA[
+#%% node_selection (python)
+# job/task variables:
+# GPU_NODES_ONLY: False (default)
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#%% CNTK (CPU + GPU fork env)
+# Job variables:
+# DOCKER_ENABLED: True (default)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+  if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+    DOCKER_ENABLED = False
+
+DOCKER_GPU_ENABLED = False
+DOCKER_NVIDIA_PATH = '/usr/bin/nvidia-docker'
+if os.path.exists(DOCKER_NVIDIA_PATH):
+  DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+DOCKER_RUN_CMD   = 'docker run '
+#DOCKER_CONTAINER = 'microsoft/cntk:2.4-cpu-python3.5' # default
+DOCKER_CONTAINER = 'activeeon/cntk:2.4-cpu-python3.5'  # added oracle-java 1.8.0_161 + py4j
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+  DOCKER_RUN_CMD   = 'nvidia-docker run '
+  #DOCKER_CONTAINER = 'microsoft/cntk' # default
+  DOCKER_CONTAINER = 'activeeon/cntk'  # added oracle-java 1.8.0_161 + py4j
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_CONTAINER:   ' + DOCKER_CONTAINER)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+  # Prepare Docker parameters 
+  containerName = DOCKER_CONTAINER
+  dockerRunCommand =  DOCKER_RUN_CMD
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+  
+  print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import gzip
+import numpy as np
+import os
+import shutil
+import struct
+import sys
+import cntk as C
+import pandas as pd
+import uuid
+
+g_input_dim = 100
+
+DATA_PATH = variables.get("DATA_PATH")
+MODEL_CLASS = variables.get("MODEL_CLASS")
+train_file = variables.get("train_file")
+isFast = variables.get("IS_FAST")
+exec(MODEL_CLASS)
+
+#isFast = True
+# training config
+minibatch_size = 1024
+num_minibatches = 300 if isFast else 40000
+lr = 0.00005
+
+def create_reader(path, is_training, input_dim, label_dim):
+    deserializer = C.io.CTFDeserializer(
+        filename = path,
+        streams = C.io.StreamDefs(
+            labels_unused = C.io.StreamDef(field = 'labels', shape = label_dim, is_sparse = False),
+            features = C.io.StreamDef(field = 'features', shape = input_dim, is_sparse = False
+            )
+        )
+    )
+    return C.io.MinibatchSource(
+        deserializers = deserializer,
+        randomize = is_training,
+        max_sweeps = C.io.INFINITELY_REPEAT if is_training else 1
+    )
+    
+    
+np.random.seed(123)
+def noise_sample(num_samples):
+    return np.random.uniform(
+        low = -1.0,
+        high = 1.0,
+        size = [num_samples, g_input_dim]        
+    ).astype(np.float32)
+
+def build_graph(noise_shape, image_shape,
+                G_progress_printer, D_progress_printer):
+    input_dynamic_axes = [C.Axis.default_batch_axis()]
+    Z = C.input_variable(noise_shape, dynamic_axes=input_dynamic_axes)
+    X_real = C.input_variable(image_shape, dynamic_axes=input_dynamic_axes)
+    X_real_scaled = 2*(X_real / 255.0) - 1.0
+
+    # Create the model function for the generator and discriminator models
+    X_fake = generator(Z)
+    D_real = discriminator(X_real_scaled)
+    D_fake = D_real.clone(
+        method = 'share',
+        substitutions = {X_real_scaled.output: X_fake.output}
+    )
+
+    # Create loss functions and configure optimazation algorithms
+    G_loss = 1.0 - C.log(D_fake)
+    D_loss = -(C.log(D_real) + C.log(1.0 - D_fake))
+
+    G_learner = C.fsadagrad(
+        parameters = X_fake.parameters,
+        lr = C.learning_rate_schedule(lr, C.UnitType.sample),
+        momentum = C.momentum_as_time_constant_schedule(700)
+    )
+    D_learner = C.fsadagrad(
+        parameters = D_real.parameters,
+        lr = C.learning_rate_schedule(lr, C.UnitType.sample),
+        momentum = C.momentum_as_time_constant_schedule(700)
+    )
+
+    # Instantiate the trainers
+    G_trainer = C.Trainer(
+        X_fake,
+        (G_loss, None),
+        G_learner,
+        G_progress_printer
+    )
+    D_trainer = C.Trainer(
+        D_real,
+        (D_loss, None),
+        D_learner,
+        D_progress_printer
+    )
+
+    return X_real, X_fake, Z, G_trainer, D_trainer
+    
+def train(reader_train):
+    k = 2
+    
+    # print out loss for each model for upto 50 times
+    print_frequency_mbsize = num_minibatches // 50
+    pp_G = C.logging.ProgressPrinter(print_frequency_mbsize)
+    pp_D = C.logging.ProgressPrinter(print_frequency_mbsize * k)
+
+    X_real, X_fake, Z, G_trainer, D_trainer = \
+        build_graph(g_input_dim, d_input_dim, pp_G, pp_D)
+    
+    input_map = {X_real: reader_train.streams.features}
+    for train_step in range(num_minibatches):
+
+        # train the discriminator model for k steps
+        for gen_train_step in range(k):
+            Z_data = noise_sample(minibatch_size)
+            X_data = reader_train.next_minibatch(minibatch_size, input_map)
+            if X_data[X_real].num_samples == Z_data.shape[0]:
+                batch_inputs = {X_real: X_data[X_real].data, 
+                                Z: Z_data}
+                D_trainer.train_minibatch(batch_inputs)
+
+        # train the generator model for a single step
+        Z_data = noise_sample(minibatch_size)
+        batch_inputs = {Z: Z_data}
+        G_trainer.train_minibatch(batch_inputs)
+
+        G_trainer_loss = G_trainer.previous_minibatch_loss_average
+
+    return Z, X_fake, G_trainer_loss
+    
+reader_train = create_reader(train_file, True, d_input_dim, label_dim=10)
+
+G_input, G_output, G_trainer_loss = train(reader_train)
+
+
+folder_id = str(uuid.uuid4())
+CNTK_MODELS = 'CNTK_MODELS/'+ folder_id
+if os.path.exists(CNTK_MODELS):
+    shutil.rmtree(CNTK_MODELS)
+os.makedirs(CNTK_MODELS)
+
+#save the model
+MODEL_PATH = os.path.join(CNTK_MODELS, "output.model")
+G_output.save(MODEL_PATH)
+
+try:
+  variables.put("MODEL_PATH", MODEL_PATH)
+except NameError as err:
+  print("{0}".format(err))
+  print("Warning: this script is running outside from ProActive.")
+  pass
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$IMAGES_FOLDER**" accessMode="transferToGlobalSpace"/>
+        <files  includes="$MODEL_PATH" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="Export_Results">
+      <description>
+        <![CDATA[ Preview the generated images ]]>
+      </description>
+      <variables>
+        <variable name="OUTPUT_FILE" value="HTML" inherited="false" />
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_results.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Generate_Fake_Images"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$IMAGES_FOLDER**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script
+         type="static" >
+          <code language="javascript">
+            <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="${PA_SCHEDULER_HOME}/jre" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Export_Results")
+
+import base64
+import os.path
+import pandas as pd
+import numpy as np
+
+from pandas.io.json import json_normalize
+from PIL import Image
+from io import BytesIO
+
+PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
+IMAGES_FOLDER = variables.get("IMAGES_FOLDER")
+OUTPUT_FILE = variables.get("OUTPUT_FILE")
+   
+if OUTPUT_FILE != None: 
+  prediction_result = pd.read_json(PREDICT_DATA, orient='split')      
+ 
+def get_thumbnail(path):
+  i = Image.open(path)
+  i.thumbnail((150, 150), Image.LANCZOS)
+  return i
+
+def image_base64(im):
+  if isinstance(im, str):
+    im = get_thumbnail(im)
+  with BytesIO() as buffer:
+    im.save(buffer, 'jpeg')
+    return base64.b64encode(buffer.getvalue()).decode()
+
+def image_formatter(im):
+  return f'<img src="data:image/jpeg;base64,{image_base64(im)}" height="150" width="150">'
+    
+df = pd.DataFrame(prediction_result)
+
+result = ''
+with pd.option_context('display.max_colwidth', -1):
+  #result = df.to_html(escape=False)
+  result = df.to_html(escape=False, formatters=dict(Image=image_formatter))
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+                  
+                  
+                  
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <meta name="description" content="Face API">
+                    <style>{0}</style>
+                  </head>
+                  <body>{1}</body></html>
+""".format(css_style, result)
+print(result)
+
+if OUTPUT_FILE == 'HTML':
+  result = result.encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "result.html")
+  resultMetadata.put("content.type", "text/html")
+elif OUTPUT_FILE == 'CSV':
+  #result = prediction_result.to_csv()
+  result = df.to_csv()    
+  resultMetadata.put("file.extension", ".csv")
+  resultMetadata.put("file.name", "result.csv")
+  resultMetadata.put("content.type", "text/csv")    
+else:
+  print('It is not possible to export the data')
+
+print("END Export_Results")
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+          </task>
+          <task name="Generate_Fake_Images">
+            <description>
+              <![CDATA[ Create fake images simply by feeding random noise into the generator and displaying the outputs. ]]>
+            </description>
+            <variables>
+              <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+              <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+              <variable name="NUM_IMAGES" value="40" inherited="false" model="PA:Integer"/>
+              <variable name="INPUT_DIM" value="100" inherited="false" model="PA:Integer"/>
+            </variables>
+            <genericInformation>
+              <info name="PYTHON_COMMAND" value="/root/anaconda3/envs/cntk-py35/bin/python"/>
+              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cntk.png"/>
+            </genericInformation>
+            <depends>
+              <task ref="Train_Model"/>
+            </depends>
+            <inputFiles>
+              <files  includes="$MODEL_PATH" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <selection>
+              <script
+         type="static" >
+                <code language="python">
+                  <![CDATA[
+#%% node_selection (python)
+# job/task variables:
+# GPU_NODES_ONLY: False (default)
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+                </code>
+              </script>
+            </selection>
+            <forkEnvironment javaHome="/usr" >
+              <envScript>
+                <script>
+                  <code language="python">
+                    <![CDATA[
+#%% CNTK (CPU + GPU fork env)
+# Job variables:
+# DOCKER_ENABLED: True (default)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+  if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+    DOCKER_ENABLED = False
+
+DOCKER_GPU_ENABLED = False
+DOCKER_NVIDIA_PATH = '/usr/bin/nvidia-docker'
+if os.path.exists(DOCKER_NVIDIA_PATH):
+  DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+DOCKER_RUN_CMD   = 'docker run '
+#DOCKER_CONTAINER = 'microsoft/cntk:2.4-cpu-python3.5' # default
+DOCKER_CONTAINER = 'activeeon/cntk:2.4-cpu-python3.5'  # added oracle-java 1.8.0_161 + py4j
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+  DOCKER_RUN_CMD   = 'nvidia-docker run '
+  #DOCKER_CONTAINER = 'microsoft/cntk' # default
+  DOCKER_CONTAINER = 'activeeon/cntk'  # added oracle-java 1.8.0_161 + py4j
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_CONTAINER:   ' + DOCKER_CONTAINER)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+  # Prepare Docker parameters 
+  containerName = DOCKER_CONTAINER
+  dockerRunCommand =  DOCKER_RUN_CMD
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+  
+  print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+  print("Fork environment disabled")
+]]>
+                  </code>
+                </script>
+              </envScript>
+            </forkEnvironment>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+import pandas as pd
+import scipy.misc
+from PIL import Image
+import cv2
+import cntk as C
+import numpy as np
+import os
+from cntk.ops.functions import load_model
+  
+g_input_dim = int(variables.get("INPUT_DIM"))
+  
+MODEL_PATH = variables.get("MODEL_PATH")
+
+NUM_IMAGES = int(variables. get("NUM_IMAGES"))
+  
+G_output = load_model(MODEL_PATH)
+
+#G_output = C.Function.load(OUTPUT_PATH)
+
+#G_input = load_model(INPUT_PATH)
+#input_dynamic_axes = [C.Axis.default_batch_axis()]
+#G_input = C.input_variable(100, dynamic_axes=input_dynamic_axes)
+
+# Print the generator loss 
+
+def noise_sample(num_samples):
+    return np.random.uniform(
+        low = -1.0,
+        high = 1.0,
+        size = [num_samples, g_input_dim]        
+    ).astype(np.float32)
+    
+noise = noise_sample(NUM_IMAGES)
+images = G_output.eval({G_output.arguments[0]: noise})
+
+
+IMAGES_FOLDER = 'Generated_Images/'
+if os.path.exists(IMAGES_FOLDER):
+    shutil.rmtree(IMAGES_FOLDER)
+os.makedirs(IMAGES_FOLDER)
+
+def plot_images(images):
+    i = 0
+    img_frame = []
+    for image in images:
+        i = i + 1
+        image = image.reshape(28, 28)
+        image = np.array(image * 255, dtype = np.uint8)
+        img_directory = IMAGES_FOLDER+str(i)+'.jpeg'
+        img_frame.append(img_directory)
+        cv2.imwrite(img_directory,image)
+        image = cv2.imread(img_directory,0)
+        cv2.imwrite(img_directory,image) 
+    return img_frame
+
+img_frame = plot_images(images)
+df_test_image = pd.DataFrame(img_frame)
+df_test_image.columns = ['Image']
+
+try:
+  variables.put("PREDICT_DATA_JSON", df_test_image.to_json(orient='split'))
+  variables.put('IMAGES_FOLDER', IMAGES_FOLDER)
+except NameError as err:
+  print("{0}".format(err))
+  print("Warning: this script is running outside from ProActive.")
+  pass
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+            <outputFiles>
+              <files  includes="$IMAGES_FOLDER**" accessMode="transferToGlobalSpace"/>
+            </outputFiles>
+          </task>
+        </taskFlow>
+      </job>
