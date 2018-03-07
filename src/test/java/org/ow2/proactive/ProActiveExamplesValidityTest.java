@@ -10,12 +10,10 @@ import static org.junit.Assert.assertThat;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.stream.Stream;
+import java.util.stream.Collectors;
 
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
@@ -54,21 +52,20 @@ public class ProActiveExamplesValidityTest {
 
     @Parameterized.Parameters(name = "{index}: testing workflow - {0}")
     public static Collection<String> data() throws IOException {
-
-        List<String> files = new ArrayList<>();
-        try (Stream<Path> rootFilesStream = Files.list(Paths.get(""))) {
-            rootFilesStream.filter(entry -> Files.isDirectory(entry) &&
-                                            Files.exists(Paths.get(entry.toString(), "METADATA.json")))
-                           .map(directoryPath -> Paths.get(directoryPath.toString(), PATH_TO_WORKFLOWS))
-                           .flatMap(resourcesPath -> {
-                               try {
-                                   return Files.list(resourcesPath).filter(file -> file.toString().endsWith(".xml"));
-                               } catch (IOException e) {
-                                   throw new RuntimeException(e);
-                               }
-                           })
-                           .forEach(workflowPath -> files.add(workflowPath.toString()));
-        }
+        List<String> files = Files.list(Paths.get(""))
+                                  .filter(entry -> Files.isDirectory(entry) &&
+                                                   Files.exists(Paths.get(entry.toString(), "METADATA.json")))
+                                  .map(directoryPath -> Paths.get(directoryPath.toString(), PATH_TO_WORKFLOWS))
+                                  .flatMap(resourcesPath -> {
+                                      try {
+                                          return Files.list(resourcesPath)
+                                                      .filter(file -> file.toString().endsWith(".xml"));
+                                      } catch (IOException e) {
+                                          throw new RuntimeException(e);
+                                      }
+                                  })
+                                  .map(workflowPath -> workflowPath.toString())
+                                  .collect(Collectors.toList());
         return files;
     }
 
