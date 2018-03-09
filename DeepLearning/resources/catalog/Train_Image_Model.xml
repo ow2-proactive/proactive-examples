@@ -8,15 +8,15 @@
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
-    <variable name="GPU_NODES_ONLY" value="False" />
-    <variable name="DOCKER_ENABLED" value="True" />
+    <variable name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
   </variables>
   <description>
     <![CDATA[ Train a model using a CNN algorithm. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="deep-learning"/>
-    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
     <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
@@ -26,14 +26,14 @@
         <![CDATA[ Train a model using a CNN algorithm. ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" />
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
         <variable name="NUM_EPOCHS" value="1" inherited="true" />
         <variable name="BATCH_SIZE" value="4" inherited="false" />
         <variable name="NUM_WORKERS" value="2" inherited="false" />
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
       </genericInformation>
       <inputFiles>
         <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
@@ -105,6 +105,9 @@ import time
 import copy
 import uuid
 import json
+import argparse
+import numpy as np 
+
 
 from os.path import join, exists
 from os import remove, listdir, makedirs
@@ -117,7 +120,8 @@ from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
-
+from visdom import Visdom
+  
 NUM_EPOCHS  = 1
 BATCH_SIZE  = 4
 NUM_WORKERS = 2
@@ -183,6 +187,61 @@ optimizer_ft = optim.SGD(cnn.parameters(), lr=0.001, momentum=0.9)
 # Decay LR by a factor of 0.1 every 7 epochs
 exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
 
+
+###############################IF VISDOM IS ENABLED###############################
+VISDOM_ENABLED = variables.get("VISDOM_ENABLED")
+
+if VISDOM_ENABLED == 'True':
+  VISDOM_HOST,VISDOM_PORT = variables.get("endpoint").split(":")
+
+  print("Connecting to %s" % VISDOM_PORT)
+  viz = Visdom(server="http://"+VISDOM_HOST, port=VISDOM_PORT)
+  assert viz.check_connection()
+
+
+  win_global_loss_train = viz.line(Y = np.array([1]), X = np.array([1]),
+                             opts = dict(
+                                    xlabel = 'Epoch',
+                                    ylabel = 'Loss',
+                                    title = 'Training loss (per epoch)',
+                                    ),
+                             )
+
+
+  win_global_acc_train = viz.line(Y = np.array([1]), X = np.array([1]),
+                             opts = dict(
+                                    xlabel = 'Epoch',
+                                    ylabel = 'Accuracy',
+                                    title = 'Training accuracy (per epoch)',
+                                    ),
+                             )                                   
+
+
+  win_train = viz.text("Training:\n")  
+                                  
+                                  
+  win_global_loss_val = viz.line(Y = np.array([1]), X = np.array([1]),
+                             opts = dict(
+                                    xlabel = 'Epoch',
+                                    ylabel = 'Loss',
+                                    title = 'Validation loss (per epoch)',
+                                    ),
+                             )
+
+
+  win_global_acc_val = viz.line(Y = np.array([1]), X = np.array([1]),
+                                    opts = dict(
+                                    xlabel = 'Epoch',
+                                    ylabel = 'Accuracy',
+                                    title = 'Validation accuracy (per epoch)',
+                                    ),
+                             )                                   
+                                 
+  win_val = viz.text("Validation:\n")
+
+##################################################################################
+
+
 def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
   since = time.time()
 
@@ -238,6 +297,36 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
 
       print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
 
+
+	  ##################################################IF VISDOM IS ENABLED###########################################
+      if VISDOM_ENABLED:
+          if phase == 'train':
+              viz.text('-' * 10, win=win_train, append=True)  
+              viz.text('Epoch {}/{}'.format(epoch, num_epochs - 1), win=win_train, append=True)            
+              viz.text('Loss: {:.4f} Acc: {:.4f}'.format(epoch_loss, epoch_acc), win=win_train, append=True)
+          else:
+              viz.text('-' * 10, win=win_val, append=True)         
+              viz.text('Epoch {}/{}'.format(epoch, num_epochs - 1), win=win_val, append=True)    
+              viz.text('Loss: {:.4f} Acc: {:.4f}'.format(epoch_loss, epoch_acc), win=win_val, append=True)          
+
+          # plot loss and accuracy per epoch
+          if epoch == 1 and phase == 'train':
+              viz.line(Y = np.array([epoch_loss]), X = np.array([epoch]), win = win_global_loss_train, update='replace')
+              viz.line(Y = np.array([epoch_acc]), X = np.array([epoch]), win = win_global_acc_train, update='replace')            
+          elif epoch != 1 and phase == 'train':
+              viz.line(Y = np.array([epoch_loss]), X = np.array([epoch]), win = win_global_loss_train, update='append')
+              viz.line(Y = np.array([epoch_acc]), X = np.array([epoch]), win = win_global_acc_train, update='append')        
+
+          # plot loss and accuracy per epoch
+          if epoch == 1 and phase == 'val':
+              viz.line(Y = np.array([epoch_loss]), X = np.array([epoch]), win = win_global_loss_val, update='replace')
+              viz.line(Y = np.array([epoch_acc]), X = np.array([epoch]), win = win_global_acc_val, update='replace')            
+          elif epoch != 1 and phase == 'val':
+              viz.line(Y = np.array([epoch_loss]), X = np.array([epoch]), win = win_global_loss_val, update='append')
+              viz.line(Y = np.array([epoch_acc]), X = np.array([epoch]), win = win_global_acc_val, update='append')              
+	  ####################################################################################################################
+      
+      
       # deep copy the model
       if phase == 'val' and epoch_acc > best_acc:
         best_acc = epoch_acc
@@ -292,6 +381,15 @@ print("END Train_Image_Model")
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
+      <post>
+        <script>
+          <code language="bash">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
       <outputFiles>
         <files  includes="$MODEL_FOLDER/**" accessMode="transferToGlobalSpace"/>
       </outputFiles>
