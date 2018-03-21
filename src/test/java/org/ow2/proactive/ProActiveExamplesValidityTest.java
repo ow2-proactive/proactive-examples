@@ -38,7 +38,7 @@ public class ProActiveExamplesValidityTest {
 
     private final static String ICON_URL_PATH_PREFIX = "/automation-dashboard/";
 
-    private final static String JOB_ICON_KEY_NAME = "pca.action.icon";
+    private final static String JOB_ICON_KEY_NAME = "workflow.icon";
 
     private final static String TASK_ICON_KEY_NAME = "task.icon";
 
