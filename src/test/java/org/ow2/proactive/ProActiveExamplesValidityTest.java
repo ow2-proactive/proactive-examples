@@ -90,18 +90,6 @@ public class ProActiveExamplesValidityTest {
             }
         });
 
-
-//        List jobVariables.entrySet().stream().map(map -> map.getValue()).filter(variable -> {
-//            if(Arrays.asList("false", "true").contains(variable.getValue().toLowerCase())){
-//                return !"PA:Boolean".equals(variable.getModel());
-//
-//                assertThat("The wf MUST HAVE a Workflow Generic Information: " + JOB_ICON_KEY_NAME,
-//                        pcaActionIconValue,
-//                        notNullValue());
-//            }else
-//                return false;
-//        }).collect(Collectors.toList());
-
         /*
          * 1. Every single workflow of packages distributed by Activeeon (as all the workflows from
          * proactive-examples),
