@@ -80,13 +80,14 @@ public class ProActiveExamplesValidityTest {
         JobFactory factory = JobFactory.getFactory();
         TaskFlowJob job = (TaskFlowJob) factory.createJob(filePath);
 
-
-       Map<String, JobVariable> jobVariables = job.getVariables();
+        /*
+         * Check if variable has value "false" or "true", then this variable should have PA:Boolean model
+         */
+        Map<String, JobVariable> jobVariables = job.getVariables();
         jobVariables.entrySet().stream().forEach(map -> {
-            if(Arrays.asList("false", "true").contains(map.getValue().getValue().toLowerCase())){
-                assertThat("The wf variable: " + map.getValue().getName() + " MUST HAVE a boolean model: " + BOOLEAN_MODEL,
-                        map.getValue().getModel(),
-                        is(BOOLEAN_MODEL));
+            if (Arrays.asList("false", "true").contains(map.getValue().getValue().toLowerCase())) {
+                assertThat("The wf variable: " + map.getValue().getName() + " MUST HAVE a boolean model: " +
+                           BOOLEAN_MODEL, map.getValue().getModel(), is(BOOLEAN_MODEL));
             }
         });
 
