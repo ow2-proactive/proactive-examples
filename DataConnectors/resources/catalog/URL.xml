@@ -7,29 +7,39 @@
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
-  <variables>
-    <variable name="HOSTNAME" value="" />
-  </variables>
   <description>
-    <![CDATA[ Import file(s) from the given URL ]]>
+    <![CDATA[ Import files from a given URL using HTTP, HTTPS, or FILE protocols. ]]>
   </description>
   <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/url_import.png"/>
-    <info name="Documentation" value="doc.activeeon.com/latest/"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="import_from_url">
+    <task name="url-connector">
       <description>
-        <![CDATA[ Import files from a given URL using HTTP, HTTPS, or FILE protocols.
-If $EXTRACT_ARCHIVE is True, the imported file will be extracted if it is an archive. ]]>
+        <![CDATA[ $FILE_URL (required)  designates a file or an archive on an Internet host accessible using HTTP, HTTPS, or FILE protocols. 
+FTP and SFTP have to follow respectively, these format: 
+FTP url ftp://<username>:<password>@<hostname>:<port>/<path>
+SFTP url sftp://<username>@<host>[:<port>][/<directory>]
+$FTP_LOCAL_RELATIVE_PATH (optional) is the local relative path from which we upload (or to which we download) file(s). 
+LOCAL_RELATIVE_PATH can contain either a path to a file, a directory terminated by / or an empty value for the root. 
+$EXTRACT_ARCHIVE is a boolean used only when $FTP_PORT=GET. If it is equal to True then, the imported file will be extracted if it is an archive. ]]>
       </description>
       <variables>
         <variable name="EXTRACT_ARCHIVE" value="False" inherited="false" model="PA:Boolean"/>
+        <variable name="FILE_URL" value="" inherited="false" />
+        <variable name="LOCAL_RELATIVE_PATH" value="" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/url_import.png"/>
         <info name="Documentation" value="doc.activeeon.com/latest/"/>
       </genericInformation>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="org.apache.commons.io-2.4-sources.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
       <pre>
         <script>
           <code language="bash">
@@ -43,11 +53,134 @@ If $EXTRACT_ARCHIVE is True, the imported file will be extracted if it is an arc
         <script>
           <code language="groovy">
             <![CDATA[
+import java.io.IOException;
+import java.io.FileOutputStream;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.io.File;
+import java.util.Map;
+import java.util.HashMap;
+import java.nio.file.Paths;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
 
+SCHEME_LIST = ["HTTP", "HTTPS", "FTP", "SFTP"];
+
+
+schedulerapi.connect();
+
+ if (!variables.get("LOCAL_RELATIVE_PATH").isEmpty()) {
+            LOCAL_RELATIVE_PATH = variables.get("LOCAL_RELATIVE_PATH");
+ } else {
+        //Default value is getLocalSpace() because it will always be writable and moreover can be used to transfer files to another data space (global, user)
+        LOCAL_RELATIVE_PATH = schedulerapi.getLocalSpace();
+ }
+ if (!variables.get("FILE_URL").isEmpty()) {
+         FILE_URL = variables.get("FILE_URL");
+ } else {
+        throw new IllegalArgumentException("You have to specify a file url. Empty value is not allowed.");
+ }
+
+EXTRACT_ARCHIVE = Boolean.parseBoolean(variables.get("EXTRACT_ARCHIVE"));
+
+String scheme = getScheme(FILE_URL);
+URI uri = new URI(FILE_URL);
+switch (scheme.toUpperCase()) {
+    case "HTTP":
+    case "HTTPS":
+    System.out.println("The URL designates a file or an archive on an Internet host accessible using the HTTP or the HTTPS protocol");
+    try {
+         downloadUsingNIO(FILE_URL, Paths.get(LOCAL_RELATIVE_PATH, new File(uri.getPath()).getName()).toString());
+      	 System.out.println("file UPLOADED successfully to: " + LOCAL_RELATIVE_PATH);
+    } catch (IOException e) {
+        e.printStackTrace();
+    }        
+    break;
+    
+    //FTP url ftp://<username>:<password>@<hostname>:<port>/<path>
+    case "FTP":
+        System.out.println("The URL designates a file or an archive on an Internet host accessible using the FTP protocol");
+        Map<String, String> jobVariables= new HashMap();
+    	String password = getPassword(uri);
+    	String username = getUsername(uri);
+    	if(!password.isEmpty() && !username.isEmpty()){
+          	schedulerapi.putThirdPartyCredential("FTP_USERNAME", username);
+            schedulerapi.putThirdPartyCredential("FTP_PASSWORD", password);
+        }
+        jobVariables.put("FTP_LOCAL_RELATIVE_PATH", LOCAL_RELATIVE_PATH);
+        jobVariables.put("FTP_EXTRACT_ARCHIVE", EXTRACT_ARCHIVE);
+        String remotePath = uri.getPath().startsWith("/") ? uri.getPath().substring(1): uri.getPath();
+        jobVariables.put("FTP_REMOTE_RELATIVE_PATH",  remotePath);
+        jobVariables.put("FTP_PORT",  uri.getPort());
+    	jobVariables.put("FTP_HOSTNAME",  uri.getHost());
+        schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"),"data-connectors","FTP", jobVariables);
+        System.out.println("Submitting the FTP workflow from the Catalog");
+    break;
+    
+    //SFTP url sftp://<username>@<host>[:<port>][/<directory>]
+    case "SFTP":
+        System.out.println("The URL designates a file or an archive on an Internet host accessible using the SFTP protocol");
+        String password = getPassword(uri);
+    	String username = getUsername(uri);
+    	if(!password.isEmpty() && !username.isEmpty()){
+          	schedulerapi.putThirdPartyCredential("SFTP_USERNAME", username);
+            schedulerapi.putThirdPartyCredential("SFTP_PASSWORD", password);
+        }
+        Map<String, String> jobVariables= new HashMap();
+        jobVariables.put("SFTP_LOCAL_RELATIVE_PATH", LOCAL_RELATIVE_PATH);
+        jobVariables.put("SFTP_EXTRACT_ARCHIVE", EXTRACT_ARCHIVE);
+        String remotePath = uri.getPath().startsWith("/") ? uri.getPath().substring(1): uri.getPath();
+        jobVariables.put("SFTP_REMOTE_RELATIVE_PATH",  remotePath);
+        jobVariables.put("SFTP_PORT",  uri.getPort());
+        schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"),"data-connectors","SFTP",jobVariables);
+}
+
+private String getScheme(String fileUrl) throws URISyntaxException, MalformedURLException {
+       URI uri = new URI(fileUrl);
+       String scheme =  uri.getScheme();
+       if(!SCHEME_LIST.contains(scheme.toUpperCase())) {
+           throw new MalformedURLException("Error: not recognized URL scheme. Scheme has to be http, https, ftp or sftp.");
+       }
+       return scheme;
+    }
+
+private void downloadUsingNIO(String urlStr, String file) throws IOException {
+        URL url = new URL(urlStr);
+        File parentDir = new File(file).getParentFile();
+        if (parentDir != null && !parentDir.exists()) {
+            parentDir.mkdirs();
+        }
+        ReadableByteChannel rbc = Channels.newChannel(url.openStream());
+        FileOutputStream fos = new FileOutputStream(file);
+        fos.getChannel().transferFrom(rbc, 0, Long.MAX_VALUE);
+   		//System.out.println("DOWNLOADED successfully the file " + fos.getName() + " to " +  LOCAL_RELATIVE_PATH);
+        fos.close();
+        rbc.close();
+    }
+
+public static String getPassword(URI uri) {
+  String userInfo = uri.getUserInfo();
+  if (userInfo != null) {
+    return userInfo.split(":", 2)[1];
+  }
+  return null;
+}
+
+public static String getUsername(URI uri) {
+  String userInfo = uri.getUserInfo();
+  if (userInfo != null) {
+    return userInfo.split(":", 2)[0];
+  }
+  return null;
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <outputFiles>
+        <files  includes="$LOCAL_RELATIVE_PATH**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
     </task>
   </taskFlow>
 </job>
