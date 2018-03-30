@@ -11,8 +11,10 @@ import static org.junit.Assert.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import javax.xml.parsers.ParserConfigurationException;
@@ -22,6 +24,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.ow2.proactive.scheduler.common.exception.JobCreationException;
+import org.ow2.proactive.scheduler.common.job.JobVariable;
 import org.ow2.proactive.scheduler.common.job.TaskFlowJob;
 import org.ow2.proactive.scheduler.common.job.factories.JobFactory;
 import org.ow2.proactive.scheduler.common.task.Task;
@@ -43,6 +46,8 @@ public class ProActiveExamplesValidityTest {
     private final static String TASK_ICON_KEY_NAME = "task.icon";
 
     private final static String PATH_TO_WORKFLOWS = "resources/catalog";
+
+    private final static String BOOLEAN_MODEL = "PA:Boolean";
 
     private final String filePath;
 
@@ -74,6 +79,17 @@ public class ProActiveExamplesValidityTest {
             throws IOException, TransformerException, ParserConfigurationException, JobCreationException {
         JobFactory factory = JobFactory.getFactory();
         TaskFlowJob job = (TaskFlowJob) factory.createJob(filePath);
+
+        /*
+         * Check if variable has value "false" or "true", then this variable should have PA:Boolean model
+         */
+        Map<String, JobVariable> jobVariables = job.getVariables();
+        jobVariables.entrySet().stream().forEach(map -> {
+            if (Arrays.asList("false", "true").contains(map.getValue().getValue().toLowerCase())) {
+                assertThat("The wf variable: " + map.getValue().getName() + " MUST HAVE a boolean model: " +
+                           BOOLEAN_MODEL, map.getValue().getModel(), is(BOOLEAN_MODEL));
+            }
+        });
 
         /*
          * 1. Every single workflow of packages distributed by Activeeon (as all the workflows from
