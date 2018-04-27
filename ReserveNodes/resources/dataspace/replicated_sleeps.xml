@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.10"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+        name="replicated_sleeps"
+        priority="normal"
+>
+  <variables>
+    <variable name="IP_addresses" value=""/>
+    <variable name="sleep_duration_in_seconds" value="5"/>
+    <variable name="service_instance_id" value=""/>
+  </variables>
+  <taskFlow>
+    <task name="split">
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve some variables
+def IP_addresses = variables.get("IP_addresses")
+
+// Store IP addresses in variables for the replicated task selection scripts
+def IP_addresses_array = IP_addresses.split(",")
+def nb_proactive_nodes = IP_addresses_array.length
+
+for (i = 0; i < nb_proactive_nodes; i++)
+{
+   variables["IP_address_" + i] = IP_addresses_array[i]
+}
+
+// Store required replicated tasks number
+variables["nb_proactive_nodes"] = nb_proactive_nodes
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs = variables.get("nb_proactive_nodes")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="sleep">
+      <depends>
+        <task ref="split"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script
+                type="dynamic" >
+          <code language="groovy">
+            <![CDATA[
+//import org.objectweb.proactive.api.PAActiveObject
+
+// Retrieve some variables
+def task_id = variables.get("PA_TASK_REPLICATION")
+def IP_address = variables.get("IP_address_" + task_id)
+
+// Node selection according to IP address
+//if (PAActiveObject.getNode().getNodeInformation().getName().toLowerCase().contains(proactive_nodes_location)) {
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(IP_address)) {
+    selected = true
+} else {
+   selected = false
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+          <pathElement path="logging-interceptor-2.7.5.jar"/>
+          <pathElement path="okhttp-2.7.5.jar"/>
+          <pathElement path="okio-1.6.0.jar"/>
+          <pathElement path="gson-2.6.2.jar"/>
+          <pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+
+// Retrieve variables
+def sleep_duration_in_seconds = variables.get("sleep_duration_in_seconds") as Integer
+def service_instance_id = variables.get("service_instance_id") as Long
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+def VOID_STATUS = "VOID"
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Sleep while related servince instance state does not change to VOID
+while(true) {
+  sleep(sleep_duration_in_seconds * 1000)
+
+  def current_service_instance_status = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id).getInstanceStatus()
+  println "current_service_instance_status " + current_service_instance_status
+
+  if (current_service_instance_status == VOID_STATUS)
+    break
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+
+    <task name="merge">
+      <depends>
+        <task ref="sleep"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println ""
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+
+  </taskFlow>
+</job>
