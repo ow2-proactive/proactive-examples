@@ -9,14 +9,11 @@
      maxNumberOfExecution="2"
 >
   <variables>
-    <variable name="consulIP" value="localhost" />
     <variable name="dashboard_host_name" value="https://try.activeeon.com" />
     <variable name="dashboard_port" value="8500" />
     <variable name="instance_name" value="try.activeeon.com" />
     <variable name="networkName" value="my-net" />
     <variable name="subnet" value="25.25.25.0/24" />
-    <variable name="swarmAgentIPsFile" value="undefined" />
-    <variable name="swarmMasterAgentIP" value="localhost" />
     <variable name="userSSH" value="cperUser" />
   </variables>
   <description>
@@ -30,7 +27,65 @@
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png"/>
   </genericInformation>
   <taskFlow>
+    <task name="get_IP_addresses_from_pca">
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+          <pathElement path="logging-interceptor-2.7.5.jar"/>
+          <pathElement path="okhttp-2.7.5.jar"/>
+          <pathElement path="okio-1.6.0.jar"/>
+          <pathElement path="gson-2.6.2.jar"/>
+          <pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Get IP addresses from the PCA service instance
+// consul and swarm master ---
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+def service_instance_end_points = service_instance_data.getInstanceEndpoints()
+def node_0_IP_address = service_instance_end_points.get("node_0_IP_address")
+variables.put("consul_IP_address", node_0_IP_address)
+variables.put("swarm_master_IP_address", node_0_IP_address)
+
+// swarm agents ---
+def swarm_agents_IP_addresses = service_instance_end_points.findAll { it.key =~ /node_\d+_IP_address/ }.values().join("\n")
+variables.put("swarm_agents_IP_addresses", swarm_agents_IP_addresses)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
     <task name="start_consul">
+      <depends>
+        <task ref="get_IP_addresses_from_pca"/>
+      </depends>
       <scriptExecutable>
         <script>
           <code language="bash">
@@ -51,7 +106,7 @@
 
 echo "start_consul ..."
 
-ipConsul=$variables_consulIP
+ipConsul=$variables_consul_IP_address
 nameMachine=$variables_instance_name
 sshUser=$variables_userSSH
 
@@ -75,11 +130,11 @@ echo "... start_consul"
 echo "start_swarm_master_agent ..."
 
 sshUser=$variables_userSSH
-swarmMasterAgentIP=$variables_swarmMasterAgentIP
+swarm_master_IP_address=$variables_swarm_master_IP_address
 nameMachine=$variables_instance_name
-networkInterfaceSwarm=$(ssh -T $sshUser@$swarmMasterAgentIP "ip route get 8.8.8.8" | awk '{ print $5; exit }')
+networkInterfaceSwarm=$(ssh -T $sshUser@$swarm_master_IP_address "ip route get 8.8.8.8" | awk '{ print $5; exit }')
 
-docker-machine create --driver generic --generic-ip-address $swarmMasterAgentIP --generic-ssh-user $sshUser --swarm --swarm-master --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376" $nameMachine
+docker-machine create --driver generic --generic-ip-address $swarm_master_IP_address --generic-ssh-user $sshUser --swarm --swarm-master --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376" $nameMachine
 
 echo "... start_swarm_master_agent"
 ]]>
@@ -91,25 +146,25 @@ echo "... start_swarm_master_agent"
       <depends>
         <task ref="check_consul2"/>
       </depends>
-      <inputFiles>
-        <files  includes="$swarmAgentIPsFile" accessMode="transferFromUserSpace"/>
-      </inputFiles>
       <scriptExecutable>
         <script>
           <code language="bash">
             <![CDATA[
 echo "start_swarm_agents ..."
 
-swarmAgentIPsFile=$variables_swarmAgentIPsFile
+swarm_agents_IP_addresses=$variables_swarm_agents_IP_addresses
 sshUser=$variables_userSSH
 nameMachine=$variables_instance_name
 i=0
 
-while read -u 10 p;do
- 	i=$((i+1));
- 	networkInterfaceSwarm=$(ssh -T $sshUser@$p "ip route get 8.8.8.8" | awk '{ print $5; exit }');
- 	docker-machine create --driver generic --generic-ip-address $p --generic-ssh-user $sshUser --swarm --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376"  ${nameMachine}-swarm-node-${i};
-done 10<$swarmAgentIPsFile
+for swarm_agent_IP_address in $swarm_agents_IP_addresses
+do
+  i=$((i+1));
+  echo "COUCOU2 "$swarm_agent_IP_address
+  networkInterfaceSwarm=$(ssh -T $sshUser@$swarm_agent_IP_address "ip route get 8.8.8.8" | awk '{ print $5; exit }');
+  docker-machine create --driver generic --generic-ip-address $swarm_agent_IP_address --generic-ssh-user $sshUser --swarm --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376"  ${nameMachine}-swarm-node-${i};
+done
+
 
 echo "... start_swarm_agents"
 ]]>
