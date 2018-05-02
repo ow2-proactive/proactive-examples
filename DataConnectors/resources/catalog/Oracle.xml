@@ -1,0 +1,326 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Oracle" projectName="2. SQL"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="ORACLE_DATABASE" value="" />
+    <variable name="ORACLE_HOSTNAME" value="localhost" />
+    <variable name="ORACLE_PORT" value="1521" />
+  </variables>
+  <description>
+    <![CDATA[ Import data from (or export data to) Oracle database. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/oracle.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="import_from_oracle">
+      <description>
+        <![CDATA[ Load data from an Oracle SQL database.
+It requires the following third-party credentials: ORACLE_USERNAME and ORACLE_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
+It uses the following variables:
+$LABEL (optional) used when the imported data is labeled. Then, the user can specify the label column name.
+$ORACLE_QUERY (required) is the user's sql query.
+This task uses also the task variable RMDB_DRIVER as a driver to connect to the database. The specified default driver "cx_oracle" is already provided for this task. To use another driver, make sure you have it properly installed before.
+The imported data is exported in a JSON format using the variable $DATAFRAME_JSON. ]]>
+      </description>
+      <variables>
+        <variable name="LABEL" value="" inherited="false" />
+        <variable name="ORACLE_QUERY" value="" inherited="false" />
+        <variable name="RDBMS_DRIVER" value="cx_oracle" inherited="false" />
+        <variable name="OUTPUT_FILE" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/oracle.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Export_to_oracle"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import pandas as pd
+import numpy as np
+from sqlalchemy import create_engine
+import sys
+
+RDBMS_NAME = 'oracle'
+PORT = 5432
+RDBMS_DRIVER = variables.get("RDBMS_DRIVER")
+OUTPUT_FILE = None
+
+if variables.get("ORACLE_HOSTNAME"):
+    HOSTNAME = variables.get("ORACLE_HOSTNAME")
+else:
+    print("ORACLE_HOSTNAME not defined by the user.")
+    sys.exit(1)
+if variables.get("ORACLE_PORT"):
+    PORT = int(variables.get("ORACLE_PORT"))
+else:
+    print("ORACLE_PORT not defined by the user. Using the default value:", PORT)
+if variables.get("ORACLE_DATABASE"):
+    DATABASE = variables.get("ORACLE_DATABASE")
+else:
+    print("ORACLE_DATABASE not defined by the user.")
+    sys.exit(1)
+if credentials.get("ORACLE_USERNAME") is not None and credentials.get("ORACLE_PASSWORD") is not None:
+    ORACLE_USERNAME = credentials.get("ORACLE_USERNAME")
+    ORACLE_PASSWORD=credentials.get("ORACLE_PASSWORD")
+else:
+    print("You first need to add third-party credentials (ORACLE_USERNAME and ORACLE_PASSWORD) for the database in the scheduler-portal.")
+    sys.exit(1)
+if variables.get("ORACLE_QUERY"):
+    SQL_QUERY = variables.get("ORACLE_QUERY")
+else:
+    print("ORACLE_QUERY not defined by the user.")
+    sys.exit(1)
+if variables.get("OUTPUT_FILE"):
+    OUTPUT_FILE = variables.get("OUTPUT_FILE")
+
+IS_LABELED_DATA = 'False'
+
+try:
+   LABEL = variables.get("LABEL")
+   if LABEL:
+     IS_LABELED_DATA='True'
+except NameError:
+   pass
+
+# Please refer to SQLAlchemy doc for more info about database urls.
+# http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls
+# Never print this to avoid displaying your credentials in the logs
+print("BEGIN Import_Data FROM " + RDBMS_NAME + " database using " + variables.get("RDBMS_DRIVER") + " connector")
+print("EXECUTING QUERY...")
+print('ORACLE_HOSTNAME='+HOSTNAME)
+print('ORACLE_PORT=', PORT)
+print('ORACLE_DATABASE='+DATABASE)
+print('ORACLE_QUERY='+SQL_QUERY)
+if OUTPUT_FILE:
+    print('OUTPUT_FILE='+OUTPUT_FILE)
+
+database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(RDBMS_NAME,RDBMS_DRIVER,ORACLE_USERNAME,ORACLE_PASSWORD,HOSTNAME,PORT,DATABASE)
+engine = create_engine(database_url)
+
+with engine.connect() as conn, conn.begin():
+    #pd.read_sql() can take either a SQL query as a parameter or a table name
+    dataframe = pd.read_sql(SQL_QUERY, conn)
+
+columns_name = dataframe.columns
+columns_number = len(columns_name)
+
+if IS_LABELED_DATA == 'True':
+  label_index= dataframe.columns.get_loc(LABEL)
+  data_indices=[x for i,x in enumerate(range(columns_number)) if i!=label_index]
+  data  = dataframe.values[:,data_indices]
+  label = dataframe.values[:,label_index]
+  data_df = pd.DataFrame(data=data,columns=columns_name[data_indices])
+  label_df = pd.DataFrame(data=label,columns=[columns_name[label_index]])
+  LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
+  LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
+  
+elif IS_LABELED_DATA == 'False':
+  data = dataframe.values
+  data_df = pd.DataFrame(data=data,columns=columns_name)
+  
+DATAFRAME_JSON = dataframe.to_json(orient='split')
+COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
+DATA_TEST_DF_JSON = data_df.to_json(orient='split')
+  
+try:
+  if IS_LABELED_DATA == 'True':
+    variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
+    variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
+    dataframe=data_df.join(label_df)
+
+  variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
+  variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
+  variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
+  variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
+  variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
+
+  # Write results to the task result in CSV format
+  result = dataframe.to_csv(index=False).encode('utf-8')
+  resultMetadata.put("file.extension", ".csv")
+  resultMetadata.put("file.name", "result.csv")
+  resultMetadata.put("content.type", "text/csv")
+
+  # If an OUTPUT_FILE path in the dataspace is designated, then write to this file.
+  if OUTPUT_FILE:
+    dataframe.to_csv(path_or_buf=OUTPUT_FILE, index=False).encode('utf-8')
+except NameError:
+  pass
+
+print("END Import_Data")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$OUTPUT_FILE" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="Export_to_oracle">
+      <description>
+        <![CDATA[ This task allows to export data to Oracle database.
+It requires the following third-party credentials: ORACLE_USERNAME and ORACLE_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
+It uses the following variables: 
+$ORACLE_TABLE (required) is the table name.
+$INSERT_MODE (required) indicates the behavior to follow when the table exists in the database amongst: 
+. fail: If table exists, do nothing.
+. replace: If table exists, drop it, recreate it, and insert data.
+. append: (default) If table exists, insert data. Create if does not exist.
+$INPUT_FILE (required) is the path of the csv file in the dataspace. The string could also be a URL. Valid URL schemes include http, ftp, s3, and file. 
+This task uses also the task variable RMDB_DRIVER as a driver to connect to the database. The specified default driver "cx_oracle" is already provided for this task. To use another driver, make sure you have it properly installed before. ]]>
+      </description>
+      <variables>
+        <variable name="LABEL" value="" inherited="false" />
+        <variable name="ORACLE_TABLE" value="" inherited="false" />
+        <variable name="RDBMS_DRIVER" value="cx_oracle" inherited="false" />
+        <variable name="INSERT_MODE" value="append" inherited="false" model="PA:LIST(fail, replace, append)"/>
+        <variable name="INPUT_FILE" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/oracle.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import pandas as pd
+import numpy as np
+from sqlalchemy import create_engine
+import sys
+
+
+RDBMS_NAME = 'oracle'
+PORT = 5432
+INSERT_MODE = 'append'
+RDBMS_DRIVER = variables.get("RDBMS_DRIVER")
+
+
+if variables.get("ORACLE_HOSTNAME"):
+    HOSTNAME = variables.get("ORACLE_HOSTNAME")
+else:
+    print("ORACLE_HOSTNAME not defined by the user.")
+    sys.exit(1)
+if variables.get("ORACLE_PORT"):
+    PORT = int(variables.get("ORACLE_PORT"))
+else:
+    print("ORACLE_PORT not defined by the user. Using the default value:", PORT)
+if variables.get("ORACLE_DATABASE"):
+    DATABASE = variables.get("ORACLE_DATABASE")
+else:
+    print("ORACLE_DATABASE not defined by the user.")
+    sys.exit(1)
+if credentials.get("ORACLE_USERNAME") is not None and credentials.get("ORACLE_PASSWORD") is not None:
+    ORACLE_USERNAME = credentials.get("ORACLE_USERNAME")
+    ORACLE_PASSWORD=credentials.get("ORACLE_PASSWORD")
+else:
+    print("You first need to add third-party credentials (ORACLE_USERNAME and ORACLE_PASSWORD) for the database in the scheduler-portal.")
+    sys.exit(1)
+if variables.get("INPUT_FILE"):
+    INPUT_FILE = variables.get("INPUT_FILE")
+else:
+    print("INPUT_FILE not defined by the user.")
+    sys.exit(1)
+if variables.get("ORACLE_TABLE"):
+    SQL_TABLE = variables.get("ORACLE_TABLE")
+else:
+    print("ORACLE_TABLE not defined by the user.")
+    sys.exit(1)
+if variables.get("INSERT_MODE"):
+    INSERT_MODE = variables.get("INSERT_MODE")
+
+
+# Please refer to SQLAlchemy doc for more info about database urls.
+# http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls
+# Never print this to avoid displaying your credentials in the logs
+
+print("BEGIN Export_Data TO " + RDBMS_NAME + " database using " + variables.get("RDBMS_DRIVER") + " connector")
+print("INSERTING DATA IN ORACLE...")
+print('ORACLE_HOSTNAME='+HOSTNAME)
+print('ORACLE_PORT=', PORT)
+print('ORACLE_DATABASE='+DATABASE)
+print('ORACLE_TABLE='+SQL_TABLE)
+database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(RDBMS_NAME,RDBMS_DRIVER,ORACLE_USERNAME,ORACLE_PASSWORD,HOSTNAME,PORT,DATABASE)
+engine = create_engine(database_url)
+dataframe = pd.read_csv(INPUT_FILE, sep='\t|;|,',index_col=None)
+with engine.connect() as conn, conn.begin():
+     dataframe.to_sql(SQL_TABLE, conn, flavor=None, schema=None, if_exists=INSERT_MODE, index=True, index_label=None, chunksize=None, dtype=None)
+                        
+print("END Export_Data")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
