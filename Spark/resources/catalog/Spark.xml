@@ -7,35 +7,91 @@
 		<variable name="instance_name" value="sparkContainer" />
 		<variable name="dashboard_port" value="5000" />
 		<variable name="network" value="my-net" />
-		<variable name="master_IP_address" value="127.0.0.1" />
-		<variable name="optional_worker_IP_addresses_file" value="undefined" />
-		<variable name="optional_hdfs_IP_address" value="127.0.0.1" />
-		<variable name="spark_portal_host_name" value="try.activeeon.com" />
+		<variable name="spark_portal_host_name" value="https://try.activeeon.com" />
 	</variables>
 	<description>
     	<![CDATA[ Deployment of Spark. ]]>
     </description>
 	<genericInformation>
-   	    <info name="pca.service.id" value="Spark" />
-	    <info name="pca.action.fromState" value="VOID" />
-	    <info name="pca.action.toState" value="RUNNING" />
-	    <info name="workflow.icon"
-		  value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
-	    <info name="Documentation"
-		  value="http://activeeon.com/resources/activeeon-deploy-swarm-hdfs-spark.pdf" />
+   	    <info name="pca.service.id" value="HDFS-Spark" />
+		<info name="pca.states" value="(SWARM_DEPLOYED,SPARK_DEPLOYED)(HDFS_DEPLOYED,HDFS_SPARK_DEPLOYED)"/>
+	    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
+	    <info name="Documentation" value="http://activeeon.com/resources/activeeon-deploy-swarm-hdfs-spark.pdf" />
 	    <info name="group" value="public-objects" />
 	</genericInformation>
 	<taskFlow>
+		<task name="get_IP_addresses_from_pca">
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+					<pathElement path="logging-interceptor-2.7.5.jar"/>
+					<pathElement path="okhttp-2.7.5.jar"/>
+					<pathElement path="okio-1.6.0.jar"/>
+					<pathElement path="gson-2.6.2.jar"/>
+					<pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
+			<scriptExecutable>
+				<script>
+					<code language="groovy">
+						<![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Get IP addresses from the PCA service instance
+// spark master ---
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+def service_instance_end_points = service_instance_data.getInstanceEndpoints()
+def node_0_IP_address = service_instance_end_points.get("node_0_IP_address")
+variables.put("spark_master_IP_address", node_0_IP_address)
+
+// spark slaves ---
+def spark_slave_IP_addresses = service_instance_end_points.findAll { it.key =~ /node_\d+_IP_address/ }.values()
+variables.put("spark_slave_IP_addresses", spark_slave_IP_addresses.join("\n"))
+
+// optional HDFS namenode ---
+def service_instance_status = service_instance_data.getInstanceStatus()
+if (service_instance_status == "HDFS_DEPLOYED")
+	variables.put("optional_hdfs_IP_address", node_0_IP_address)
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+		</task>
 		<task name="run_master_in_container">
 			<genericInformation>
 				<info name="task.icon"
 					value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
 			</genericInformation>
+			<depends>
+				<task ref="get_IP_addresses_from_pca"/>
+			</depends>
 			<selection>
 				<script>
 					<code language="javascript">
 						<![CDATA[
-if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(variables.get('master_IP_address'))) {
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(variables.get('spark_master_IP_address'))) {
     selected = true;
 } else {
    selected = false;
@@ -77,10 +133,6 @@ echo "... run_master_in_container"
 			<depends>
 				<task ref="run_master_in_container" />
 			</depends>
-			<inputFiles>
-				<files includes="$optional_worker_IP_addresses_file"
-					accessMode="transferFromUserSpace" />
-			</inputFiles>
 			<scriptExecutable>
 				<script>
 					<code language="groovy">
@@ -88,23 +140,17 @@ echo "... run_master_in_container"
 println "process_worker_IP_addresses ..."
 
 // Retrieve the datanode IP addresses
-String optional_worker_IP_addresses_file = variables.get("optional_worker_IP_addresses_file")
-def file = new File(optional_worker_IP_addresses_file)
-
-// By default, if there is no optional_worker_IP_addresses_file specified, let's start locally 2 workers
-def file_content = "127.0.0.1\n127.0.0.1"
-if (file.exists())
-	file_content = file.text
+def spark_slave_IP_addresses = variables.get("spark_slave_IP_addresses")
 
 // 1 IP address per replicated task
-String[] lines_array = file_content.split("\n")
-result = lines_array
+String[] spark_slave_IP_addresses_array = spark_slave_IP_addresses.split("\n")
 
 // Store the worker number
-variables["nb_workers"] = lines_array.length
+def nb_spark_slaves = spark_slave_IP_addresses_array.length
+variables["nb_spark_slaves"] = nb_spark_slaves
 
 // Store IP addresses in variables for the replicated task selection scripts
-for (int i = 0; i < lines_array.length; i++)
+for (int i = 0; i < nb_spark_slaves; i++)
 {
    variables["IP_address_"+i] = lines_array[i]
    println "variable " + variables["IP_address_"+i]
@@ -120,7 +166,7 @@ println "... process_worker_IP_addresses"
 					<script>
 						<code language="groovy">
               <![CDATA[
-runs=variables.get("nb_workers")
+runs=variables.get("nb_spark_slaves")
 ]]>
 						</code>
 					</script>
@@ -169,24 +215,65 @@ echo "... run_worker_in_container"
 				</script>
 			</scriptExecutable>
 		</task>
-		<task name="end_deployment">
+		<task name="Update_service_state">
 			<genericInformation>
-				<info name="task.icon"
-					value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
+				<info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
 			</genericInformation>
 			<depends>
 				<task ref="run_worker_in_container" />
 			</depends>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+					<pathElement path="logging-interceptor-2.7.5.jar"/>
+					<pathElement path="okhttp-2.7.5.jar"/>
+					<pathElement path="okio-1.6.0.jar"/>
+					<pathElement path="gson-2.6.2.jar"/>
+					<pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
 			<scriptExecutable>
 				<script>
-					<code language="javascript">
-            <![CDATA[
-var myObject = {};
-myObject.instance_id= variables.get("instance_name");
-myObject.instance_status="RUNNING";
-myObject.instance_endpoint= variables.get('spark_portal_host_name') + ":" + variables.get("dashboard_port");
+					<code language="groovy">
+						<![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
 
-result=JSON.stringify(myObject);
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def spark_portal_host_name = variables.get("spark_portal_host_name")
+def dashboard_port = variables.get("dashboard_port")
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Update the related service instance status
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+def service_instance_status = service_instance_data.getInstanceStatus()
+
+if (service_instance_status == "HDFS_DEPLOYED")
+	service_instance_data.setInstanceStatus("HDFS_SPARK_DEPLOYED")
+else if (service_instance_status == "SWARM_DEPLOYED")
+	service_instance_data.setInstanceStatus("SPARK_DEPLOYED")
+
+service_instance_data.getInstanceEndpoints().put("spark_portal", spark_portal_host_name + ":" + dashboard_port)
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>

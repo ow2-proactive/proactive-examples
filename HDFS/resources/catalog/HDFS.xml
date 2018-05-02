@@ -6,32 +6,84 @@
 	<variables>
 		<variable name="instance_name" value="hdfsContainer" />
 		<variable name="dashboard_port" value="6000" />
-		<variable name="namenode_IP_address" value="127.0.0.1" />
-		<variable name="optional_datanode_IP_addresses_file" value="undefined" />
 		<variable name="datanode_starting_port" value="50010" />
 		<variable name="fs_name" value="25.25.25.2" />
 		<variable name="network" value="my-net" />
-		<variable name="hdfs_portal_host_name" value="try.activeeon.com" />
+		<variable name="hdfs_portal_host_name" value="https://try.activeeon.com" />
 	</variables>
 	<description>
     	<![CDATA[ Deployment of HDFS. ]]>
     </description>
 	<genericInformation>
-	    <info name="pca.service.id" value="HDFS" />
-	    <info name="pca.action.fromState" value="VOID" />
-	    <info name="pca.action.toState" value="RUNNING" />
-	    <info name="workflow.icon"
-		  value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
-	    <info name="Documentation"
-		  value="http://activeeon.com/resources/activeeon-deploy-swarm-hdfs-spark.pdf" />
+	    <info name="pca.service.id" value="HDFS-Spark" />
+		<info name="pca.states" value="(SWARM_DEPLOYED,HDFS_DEPLOYED)"/>
+	    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
+	    <info name="Documentation" value="http://activeeon.com/resources/activeeon-deploy-swarm-hdfs-spark.pdf" />
 	    <info name="group" value="public-objects" />
 	</genericInformation>
 	<taskFlow>
+		<task name="get_IP_addresses_from_pca">
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+					<pathElement path="logging-interceptor-2.7.5.jar"/>
+					<pathElement path="okhttp-2.7.5.jar"/>
+					<pathElement path="okio-1.6.0.jar"/>
+					<pathElement path="gson-2.6.2.jar"/>
+					<pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
+			<scriptExecutable>
+				<script>
+					<code language="groovy">
+						<![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Get IP addresses from the PCA service instance
+// namenode ---
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+def service_instance_end_points = service_instance_data.getInstanceEndpoints()
+def node_0_IP_address = service_instance_end_points.get("node_0_IP_address")
+variables.put("namenode_IP_address", node_0_IP_address)
+
+// datanodes ---
+def datanode_IP_addresses = service_instance_end_points.findAll { it.key =~ /node_\d+_IP_address/ }.values()
+variables.put("datanode_IP_addresses", datanode_IP_addresses.join("\n"))
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+		</task>
 		<task name="run_namenode_in_container">
 			<genericInformation>
 				<info name="task.icon"
 					value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
 			</genericInformation>
+			<depends>
+				<task ref="get_IP_addresses_from_pca"/>
+			</depends>
 			<selection>
 				<script>
 					<code language="javascript">
@@ -72,10 +124,6 @@ echo "... run_namenode_in_container"
 			<depends>
 				<task ref="run_namenode_in_container" />
 			</depends>
-			<inputFiles>
-				<files includes="$optional_datanode_IP_addresses_file"
-					accessMode="transferFromUserSpace" />
-			</inputFiles>
 			<scriptExecutable>
 				<script>
 					<code language="groovy">
@@ -83,25 +131,19 @@ echo "... run_namenode_in_container"
 println "process_datanode_IP_addresses ..."
 
 // Retrieve the datanode IP addresses
-def optional_datanode_IP_addresses_file = variables.get("optional_datanode_IP_addresses_file")
-def file = new File(optional_datanode_IP_addresses_file)
-
-// By default, if there is no optional_datanode_IP_addresses_file specified, let's start locally 2 datanodes
-def file_content = "127.0.0.1\n127.0.0.1"
-if (file.exists())
-	file_content = file.text
+def datanode_IP_addresses = variables.get("datanode_IP_addresses")
 
 // 1 IP address per replicated task
-String[] lines_array = file_content.split("\n")
-result = lines_array
+String[] datanode_IP_addresses_array = datanode_IP_addresses.split("\n")
 
 // Store the datanode number
-variables["nb_datanode"] = lines_array.length
+def nb_datanodes = datanode_IP_addresses_array.length
+variables["nb_datanodes"] = nb_datanodes
 
 // Store IP addresses in variables for the replicated task selection scripts
-for (int i = 0; i < lines_array.length; i++)
+for (int i = 0; i < nb_datanodes; i++)
 {
-   variables["IP_address_"+i] = lines_array[i]
+   variables["IP_address_"+i] = datanode_IP_addresses_array[i]
    println "variable " + variables["IP_address_"+i]
 }
 
@@ -115,7 +157,7 @@ println "... process_datanode_IP_addresses"
 					<script>
 						<code language="groovy">
               <![CDATA[
-runs=variables.get("nb_datanode")
+runs=variables.get("nb_datanodes")
 ]]>
 						</code>
 					</script>
@@ -171,24 +213,59 @@ echo "... run_datanode_in_container"
 				</script>
 			</scriptExecutable>
 		</task>
-		<task name="end_deployment">
+		<task name="Update_service_state">
 			<genericInformation>
-				<info name="task.icon"
-					value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
+				<info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
 			</genericInformation>
 			<depends>
 				<task ref="run_datanode_in_container" />
 			</depends>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+					<pathElement path="logging-interceptor-2.7.5.jar"/>
+					<pathElement path="okhttp-2.7.5.jar"/>
+					<pathElement path="okio-1.6.0.jar"/>
+					<pathElement path="gson-2.6.2.jar"/>
+					<pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
 			<scriptExecutable>
 				<script>
-					<code language="javascript">
-            <![CDATA[
-var myObject = {};
-myObject.instance_id= variables.get("instance_name");
-myObject.instance_status="RUNNING";
-myObject.instance_endpoint= variables.get("hdfs_portal_host_name") + ":" + variables.get("dashboard_port");
+					<code language="groovy">
+						<![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
 
-result=JSON.stringify(myObject);
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def hdfs_portal_host_name = variables.get("hdfs_portal_host_name")
+def dashboard_port = variables.get("dashboard_port")
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Update the related service instance
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("HDFS_DEPLOYED")
+service_instance_data.getInstanceEndpoints().put("hdfs_portal", hdfs_portal_host_name + ":" + dashboard_port)
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>
