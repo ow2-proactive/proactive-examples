@@ -9,12 +9,12 @@
         maxNumberOfExecution="2"
 >
   <variables>
-    <variable name="dashboard_host_name" value="https://try.activeeon.com" />
-    <variable name="dashboard_port" value="8500" />
-    <variable name="instance_name" value="try.activeeon.com" />
+    <variable name="consul_port" value="8500" />
+    <variable name="swarm_manager_port" value="4000" />
+    <variable name="instance_name" value="my_instance" />
     <variable name="networkName" value="my-net" />
-    <variable name="subnet" value="25.25.25.0/24" />
-    <variable name="userSSH" value="cperUser" />
+ <!--   <variable name="subnet" value="25.25.25.0/24" />
+    <variable name="userSSH" value="cperUser" />-->
   </variables>
   <description>
     <![CDATA[ Deployment of swarm. ]]>
@@ -51,6 +51,7 @@
         <script>
           <code language="groovy">
             <![CDATA[
+/*
 import io.swagger.client.ApiClient
 import io.swagger.client.api.ServiceInstanceRestApi
 import io.swagger.client.model.ServiceInstanceData
@@ -69,14 +70,11 @@ def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 
 // Get the targeted resources the PCA service instance
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-//def service_instance_end_points = service_instance_data.getInstanceEndpoints()
-//def nodes_urls_map = service_instance_end_points.findAll { it.key =~ /node_url_\d+/ }
 def node_source_name = service_instance_data.getVariables().get("node_source_name")
 def nb_nodes = service_instance_data.getVariables().get("nb_nodes")
-//variables << nodes_urls_map
-//variables.put("nb_nodes", nodes_urls_map.size())
-variables.put("node_source_name", node_source_name)
-variables.put("nb_nodes", nb_nodes)
+*/
+variables.put("node_source_name", "local"/*node_source_name*/)
+variables.put("nb_nodes", "3"/*nb_nodes*/)
 ]]>
           </code>
         </script>
@@ -90,14 +88,6 @@ variables.put("nb_nodes", nb_nodes)
         <script>
           <code language="groovy">
             <![CDATA[
-/*import org.objectweb.proactive.api.PAActiveObject
-
-def node_url_0= variables.get("node_url_0")
-if (PAActiveObject.getNode().getNodeInformation().getURL() == node_url_0) {
-    selected = true
-} else {
-   selected = false
-}*/
 if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
     selected = true
 } else {
@@ -109,39 +99,42 @@ if (variables.get("node_source_name").equals(System.getProperty("proactive.node.
       </selection>
       <scriptExecutable>
         <script>
-          <code language="bash">
+          <code language="groovy">
             <![CDATA[
-# REQUIREMENTS
-# http://www.thegeekstuff.com/2016/02/docker-machine-create-generic/
-# passwordless or use ssh agent
+// REQUIREMENTS
+// http://www.thegeekstuff.com/2016/02/docker-machine-create-generic/
+// passwordless or use ssh agent
 
-# DOCKER ISSUE
-# The only temporary fix is to let your user explicitly allow sudo to be used without a password.
-# edit /etc/sudoers and add  YOURUSERNAME ALL=(ALL) NOPASSWD:ALL
-# This is until #1586 is merged
+// DOCKER ISSUE
+// The only temporary fix is to let your user explicitly allow sudo to be used without a password.
+// edit /etc/sudoers and add  YOURUSERNAME ALL=(ALL) NOPASSWD:ALL
+// This is until #1586 is merged
 
-# TIPS on try
-# sudo journalctl -fu docker.service
-# sudo systemctl start docker
-# always check /etc/systemd/system/docker.service if daemon did not run
+// TIPS on try
+// sudo journalctl -fu docker.service
+// sudo systemctl start docker
+// always check /etc/systemd/system/docker.service if daemon did not run
 
-echo "start_consul ..."
 
-nameMachine=$variables_instance_name
-sshUser=$variables_userSSH
+import org.objectweb.proactive.core.util.ProActiveInet
 
-docker-machine create --driver generic --generic-ip-address localhost --generic-ssh-user $sshUser ${nameMachine}-consul-machine
-docker $(docker-machine config ${nameMachine}-consul-machine) run -d --restart=always -p $variables_dashboard_port":8500" -h "consul" --name ${nameMachine}-swarm-consul progrium/consul -server -bootstrap
+println "start_consul ..."
 
-echo "... start_consul"
+def consul_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
+variables.put("consul_IP_address", consul_IP_address)
+
+def cmd = ["docker", "run", "-d", "-p", variables.get("consul_port") + ":8500", "--name", variables.get("instance_name") + "-consul", "progrium/consul", "-server", "-bootstrap", "-advertise", consul_IP_address]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_consul"
 ]]>
           </code>
         </script>
       </scriptExecutable>
     </task>
-    <task name="start_swarm_master">
+    <task name="start_swarm_manager">
       <depends>
-        <task ref="check_consul"/>
+        <task ref="start_consul"/>
       </depends>
       <selection>
         <script>
@@ -158,26 +151,39 @@ if (variables.get("node_source_name").equals(System.getProperty("proactive.node.
       </selection>
       <scriptExecutable>
         <script>
-          <code language="bash">
+          <code language="groovy">
             <![CDATA[
-echo "start_swarm_master ..."
+import org.objectweb.proactive.core.util.ProActiveInet
 
-sshUser=$variables_userSSH
-nameMachine=$variables_instance_name
-networkInterfaceSwarm=$(ssh -T $sshUser@localhost "ip route get 8.8.8.8" | awk '{ print $5; exit }')
-consul_machine_ip=$(docker-machine ip ${nameMachine}-consul-machine)
+println "start_swarm_manager ..."
 
-docker-machine create --driver generic --generic-ip-address localhost --generic-ssh-user $sshUser --swarm --swarm-master --swarm-discovery="consul://$consul_machine_ip:8500" --engine-opt="cluster-store=consul://$consul_machine_ip:8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376" $nameMachine
+def swarm_manager_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
+variables.put("swarm_manager_IP_address", swarm_manager_IP_address)
+def consul_IP_address = variables.get("consul_IP_address")
 
-echo "... start_swarm_master"
+def cmd = ["docker", "run", "-d", "-p", variables.get("swarm_manager_port") + ":4000", "--name", variables.get("instance_name") + "-swarm_manager", "swarm", "manage", "-H", ":4000", "--replication", "--advertise", swarm_manager_IP_address + ":4000", "consul://" + consul_IP_address + ":8500"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_swarm_manager"
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs = variables.get("nb_nodes")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
     </task>
     <task name="start_swarm_agents">
       <depends>
-        <task ref="useless_0"/>
+        <task ref="start_swarm_manager"/>
       </depends>
       <selection>
         <script>
@@ -194,20 +200,20 @@ if (variables.get("node_source_name").equals(System.getProperty("proactive.node.
       </selection>
       <scriptExecutable>
         <script>
-          <code language="bash">
+          <code language="groovy">
             <![CDATA[
-echo "start_swarm_agents ..."
+import org.objectweb.proactive.core.util.ProActiveInet
 
-swarm_agents_IP_addresses=$variables_swarm_agents_IP_addresses
-sshUser=$variables_userSSH
-nameMachine=$variables_instance_name
-task_id=$variables_PA_TASK_REPLICATION
-consul_machine_ip=$(docker-machine ip ${nameMachine}-consul-machine)
+println "start_swarm_agents ..."
 
-networkInterfaceSwarm=$(ssh -T $sshUser@localhost "ip route get 8.8.8.8" | awk '{ print $5; exit }');
-docker-machine create --driver generic --generic-ip-address localhost --generic-ssh-user $sshUser --swarm --swarm-discovery="consul://$consul_machine_ip:8500" --engine-opt="cluster-store=consul://$consul_machine_ip:8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376"  ${nameMachine}-swarm-node-$task_id;
+def task_id = variables.get("PA_TASK_REPLICATION")
+def consul_IP_address = variables.get("consul_IP_address")
+def swarm_node_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
 
-echo "... start_swarm_agents"
+def cmd = ["docker", "run", "-d", "swarm", "join", "--name", variables.get("instance_name") + "-swarm_node_" + task_id, "--advertise", swarm_node_IP_address + ":2375", "consul://" + consul_IP_address + ":8500"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_swarm_agents"
 ]]>
           </code>
         </script>
@@ -272,7 +278,7 @@ println "... update_service_state"
         </script>
       </scriptExecutable>
     </task>
-    <task name="check_consul">
+    <!--<task name="check_consul">
       <depends>
         <task ref="set_iterator_value"/>
       </depends>
@@ -342,7 +348,7 @@ variables["iterator"]=variables.get("attempt");
     </task>
     <task name="set_iterator_value2">
       <depends>
-        <task ref="start_swarm_master"/>
+        <task ref="start_swarm_manager"/>
       </depends>
       <scriptExecutable>
         <script>
@@ -407,7 +413,7 @@ if(variables.get("iterator")>=0){
           </script>
         </loop>
       </controlFlow>
-    </task>
+    </task>-->
     <task name="create_overlay_network">
       <depends>
         <task ref="start_swarm_agents"/>
@@ -453,7 +459,7 @@ echo "... create_overlay_network"
         </script>
       </scriptExecutable>
     </task>
-    <task name="useless_0">
+    <!--<task name="useless_0">
       <description>
         <![CDATA[ The simplest task, ran by a groovy engine. ]]>
       </description>
@@ -480,6 +486,6 @@ runs = variables.get("nb_nodes")
           </script>
         </replicate>
       </controlFlow>
-    </task>
+    </task>-->
   </taskFlow>
 </job>
