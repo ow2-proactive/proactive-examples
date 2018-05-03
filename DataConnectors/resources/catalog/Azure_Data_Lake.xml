@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Azure_Data_Lake" projectName="4. Cloud"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="AZ_CRON_MONITOR" value="* * * * *" />
+    <variable name="AZ_DLA_ACCOUNT" value=""/>
+    <variable name="AZ_DLA_JOB" value=""/>
+    <variable name="AZ_DLA_OUTPUT" value=""/>
+    <variable name="AZ_DLA_SCRIPT" value=""/>
+    <variable name="AZ_DLS_ACCOUNT" value=""/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow allows to submit a U-SQL job to Azure Data Analytics and retrieve the result file. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Submit_job">
+      <description>
+        <![CDATA[ Connect and submit a job to Azure Data Lake ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+        <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="$AZ_DLA_SCRIPT" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <pre>
+        <script>
+          <code language="bash">
+            <![CDATA[
+#Verify installation of Azure CLI
+if ! type "az" >/dev/null 2>&1; then
+  echo "Installing Azure CLI"
+
+  # Update sources and install Microsoft's generic key
+  AZ_REPO=$(lsb_release -cs)
+  echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $AZ_REPO main" | \
+     sudo tee /etc/apt/sources.list.d/azure-cli.list
+  sudo apt-key adv --keyserver packages.microsoft.com --recv-keys 52E16F86FEE04B979B07E28DB02C46DF417A0893
+
+  # Install new key needed as of May 2018
+  curl -L https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+
+  #install Azure CLI
+  sudo apt-get install apt-transport-https
+  sudo apt-get update && sudo apt-get install azure-cli
+
+fi
+
+echo "Azure CLI is installed"
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//Check all credentials and variables are set
+if (!credentials.get("AZ_U") || !credentials.get("AZ_P")) {
+  println("Credentials AZ_U and/or AZ_P are not set, please add them.")
+  System.exit(1)
+} else if (!variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLS_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
+  println("All the workflow variables are required, please fill them accordingly.")
+  System.exit(1)  
+}
+//Connect to Azure Data Lake
+def connection_string
+if (credentials.get("AZ_T") == null) {
+  connection_string = "az login -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P")
+} else {
+  connection_string = "az login --service-principal -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P") + " -t " + credentials.get("AZ_T")
+}
+println(connection_string.execute().text)
+//Define output file name in usql script (works in Linux and OSX)
+def i = ("sed --version".execute().text.contains("GNU")) ? '--' : '""'
+def sed_string =  "sed -i " + i + " s/OUTPUT_FILE/" + variables.get("AZ_DLA_OUTPUT") + "/ " + variables.get("AZ_DLA_SCRIPT")
+sed_string.execute()
+//Upload script
+def upload_string = "az dls fs upload --account " + variables.get("AZ_DLS_ACCOUNT") + " --source-path " + variables.get("AZ_DLA_SCRIPT") + " --destination-path / --overwrite"
+println(upload_string.execute().text)
+//Submit job and save ID
+def submit_string = "az dla job submit --account " + variables.get("AZ_DLA_ACCOUNT") + " --job-name " + variables.get("AZ_DLA_JOB") + " --script @" + variables.get("AZ_DLA_SCRIPT")
+def job = new groovy.json.JsonSlurper().parseText(submit_string.execute().text)
+println("Submitted job id " + job.jobId)
+variables.put("AZ_DLA_JOB_ID", job.jobId)
+variables.put("IS_FINISHED","false")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Wait_for_job">
+      <description>
+        <![CDATA[ Periodically monitor the status of the submitted job, waiting for it to be finished ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+        <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
+      </genericInformation>
+      <depends>
+        <task ref="Submit_job"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="bash">
+            <![CDATA[
+#Verify installation of Azure CLI
+if ! type "az" >/dev/null 2>&1; then
+  echo "Installing Azure CLI"
+
+  # Update sources and install Microsoft's generic key
+  AZ_REPO=$(lsb_release -cs)
+  echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $AZ_REPO main" | \
+     sudo tee /etc/apt/sources.list.d/azure-cli.list
+  sudo apt-key adv --keyserver packages.microsoft.com --recv-keys 52E16F86FEE04B979B07E28DB02C46DF417A0893
+
+  # Install new key needed as of May 2018
+  curl -L https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+
+  #install Azure CLI
+  sudo apt-get install apt-transport-https
+  sudo apt-get update && sudo apt-get install azure-cli
+
+fi
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//Check all credentials and variables are set
+if (!credentials.get("AZ_U") || !credentials.get("AZ_P") || !variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLS_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
+  println("Missing credentials and/or variables, please make sure to set them all.")
+  System.exit(1)
+}
+//Connect to Azure Data Lake
+def connection_string
+if (credentials.get("AZ_T") == null) {
+  connection_string = "az login -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P")
+} else {
+  connection_string = "az login --service-principal -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P") + " -t " + credentials.get("AZ_T")
+}
+connection_string.execute()
+//Get Job Status
+def search_string = "az dla job show --account " + variables.get("AZ_DLA_ACCOUNT") + " --job-identity " + variables.get("AZ_DLA_JOB_ID")
+def job = new groovy.json.JsonSlurper().parseText(search_string.execute().text)
+//Wait for the job to finish
+if (job.endTime != null) {
+  variables.put("IS_FINISHED","true")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="Wait_for_job">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+if(variables.get("IS_FINISHED") ==  "false"){
+	loop = variables.get("AZ_CRON_MONITOR");
+}else{
+	loop = false;
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+    </task>
+    <task name="Display_result">
+      <description>
+        <![CDATA[ Display the result file ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+        <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
+      </genericInformation>
+      <depends>
+        <task ref="Wait_for_job"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="bash">
+            <![CDATA[
+#Verify installation of Azure CLI
+if ! type "az" >/dev/null 2>&1; then
+  echo "Installing Azure CLI"
+
+  # Update sources and install Microsoft's generic key
+  AZ_REPO=$(lsb_release -cs)
+  echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $AZ_REPO main" | \
+     sudo tee /etc/apt/sources.list.d/azure-cli.list
+  sudo apt-key adv --keyserver packages.microsoft.com --recv-keys 52E16F86FEE04B979B07E28DB02C46DF417A0893
+
+  # Install new key needed as of May 2018
+  curl -L https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+
+  #install Azure CLI
+  sudo apt-get install apt-transport-https
+  sudo apt-get update && sudo apt-get install azure-cli
+
+fi
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+//Check all credentials and variables are set
+if (!credentials.get("AZ_U") || !credentials.get("AZ_P") || !variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLS_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
+  println("Missing credentials and/or variables, please make sure to set them all.")
+  System.exit(1)
+}
+//Connect to Azure Data Lake
+def connection_string
+if (credentials.get("AZ_T") == null) {
+  connection_string = "az login -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P")
+} else {
+  connection_string = "az login --service-principal -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P") + " -t " + credentials.get("AZ_T")
+}
+connection_string.execute()
+//Download output file
+def download_string = "az dls fs download --account " + variables.get("AZ_DLS_ACCOUNT") + " --source-path /" + variables.get("AZ_DLA_OUTPUT") + " --destination-path " + variables.get("AZ_DLA_OUTPUT")
+println(download_string.execute().text)
+//Display file
+println("Output file " + variables.get("AZ_DLA_OUTPUT") + ":")
+println(["cat", variables.get("AZ_DLA_OUTPUT")].execute().text)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$AZ_DLA_OUTPUT" accessMode="transferToUserSpace"/>
+      </outputFiles>
+    </task>
+  </taskFlow>
+</job>
