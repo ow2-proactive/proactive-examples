@@ -6,26 +6,21 @@
 	<variables>
 		<variable name="instance_name" value="sparkContainer" />
 		<variable name="dashboard_port" value="5000" />
-		<variable name="master_host_IP_address" value="127.0.0.1" />
 		<variable name="network" value="my-net" />
-		<variable name="optional_worker_host_IP_addresses_file"
-			value="undefined" />
+		<variable name="master_IP_address" value="127.0.0.1" />
+		<variable name="optional_worker_IP_addresses_file" value="undefined" />
 		<variable name="optional_hdfs_IP_address" value="127.0.0.1" />
-		<variable name="host_name" value="try.activeeon.com" />
+		<variable name="spark_portal_host_name" value="https://try.activeeon.com" />
 	</variables>
 	<description>
     	<![CDATA[ Deployment of Spark. ]]>
     </description>
 	<genericInformation>
-		<info name="pca.service.model" value="2" />
-		<info name="pca.service.type" value="platform" />
-		<info name="pca.service.name" value="spark" />
-		<info name="pca.service.description" value="spark" />
-		<info name="pca.action.type" value="create" />
-		<info name="pca.action.name" value="deployment" />
-		<info name="pca.action.origin_state" value="null" />
-		<info name="pca.action.icon"
-			value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
+   	    <info name="pca.service.id" value="HDFS-Spark" />
+		<info name="pca.states" value="(SWARM_DEPLOYED,SPARK_DEPLOYED)(HDFS_DEPLOYED,HDFS_SPARK_DEPLOYED)"/>
+	    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
+	    <info name="Documentation" value="http://activeeon.com/resources/activeeon-deploy-swarm-hdfs-spark.pdf" />
+	    <info name="group" value="public-objects" />
 	</genericInformation>
 	<taskFlow>
 		<task name="run_master_in_container">
@@ -33,15 +28,29 @@
 				<info name="task.icon"
 					value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
 			</genericInformation>
+			<selection>
+				<script>
+					<code language="javascript">
+						<![CDATA[
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(variables.get('master_IP_address'))) {
+    selected = true;
+} else {
+   selected = false;
+}
+]]>
+					</code>
+				</script>
+			</selection>
 			<scriptExecutable>
 				<script>
 					<code language="bash">
             <![CDATA[
+echo "run_master_in_container ..."
+
 master_container_name=$variables_instance_name"Master"
 
-docker run -dit --publish=$variables_dashboard_port:8080 --name=$master_container_name --hostname=$master_container_name --net=$variables_network activeeon/hdfs-spark:latest
-
-docker exec $master_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ /usr/local/hadoop/etc/hadoop/core-site.xml.template > /usr/local/hadoop/etc/hadoop/core-site.xml; ./$SPARK_HOME/sbin/start-master.sh'
+docker run -dit --publish=$variables_dashboard_port:8080 --name=$master_container_name --hostname=$master_container_name --net=$variables_network activeeon/hdfs-spark:1.0
+docker exec $master_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; $SPARK_HOME/sbin/start-master.sh'
 
 # Ensure Master is started
 while [ "$(docker exec "$master_container_name" jps | grep Master | cut -d ' ' -f 2)" != "Master" ]
@@ -50,32 +59,7 @@ do
 	sleep 5s
 done
 
-echo "SPARK MASTER STARTING IN "$master_container_name" ..."
-
-# Ensure the spark master url is written in the log
-spark_master_url=""
-while [ -z "$spark_master_url" ]
-do
-	spark_master_url="$(docker exec "$master_container_name" /bin/sh -c 'grep "Starting Spark master at" $SPARK_HOME/logs/* | cut -d " " -f 9')"
-	echo "sleep 5s"
-	sleep 5s
-done
-
-echo "... STARTED AT "$spark_master_url" ..."
-
-# Ensure MasterWebUI is started
-while [ -z "$(docker exec "$master_container_name" /bin/sh -c 'grep "Started MasterWebUI at" $SPARK_HOME/logs/*')" ]
-do
-	echo "sleep 5s"
-	sleep 5s
-done
-
-echo "... MASTERWEBUI ACCESSIBLE !"
-
-touch results_$variables_PA_JOB_ID.txt
-echo $spark_master_url > results_$variables_PA_JOB_ID.txt
-
-echo "... MASTERWEBUI URL IN FILE"
+echo "... run_master_in_container"
 ]]>
 					</code>
 				</script>
@@ -91,18 +75,20 @@ echo "... MASTERWEBUI URL IN FILE"
 				<task ref="run_master_in_container" />
 			</depends>
 			<inputFiles>
-				<files includes="$optional_worker_host_IP_addresses_file"
+				<files includes="$optional_worker_IP_addresses_file"
 					accessMode="transferFromUserSpace" />
 			</inputFiles>
 			<scriptExecutable>
 				<script>
 					<code language="groovy">
             <![CDATA[
-// Retrieve the datanode IP addresses
-String optional_worker_host_IP_addresses_file = variables.get("optional_worker_host_IP_addresses_file")
-def file = new File(optional_worker_host_IP_addresses_file)
+println "process_worker_IP_addresses ..."
 
-// By default, if there is no optional_worker_host_IP_addresses_file specified, let's start locally 2 workers
+// Retrieve the datanode IP addresses
+def optional_worker_IP_addresses_file = variables.get("optional_worker_IP_addresses_file")
+def file = new File(optional_worker_IP_addresses_file)
+
+// By default, if there is no optional_worker_IP_addresses_file specified, let's start locally 2 workers
 def file_content = "127.0.0.1\n127.0.0.1"
 if (file.exists())
 	file_content = file.text
@@ -120,6 +106,8 @@ for (int i = 0; i < lines_array.length; i++)
    variables["IP_address_"+i] = lines_array[i]
    println "variable " + variables["IP_address_"+i]
 }
+
+println "... process_worker_IP_addresses"
 ]]>
 					</code>
 				</script>
@@ -164,39 +152,79 @@ if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(worker_I
 				<script>
 					<code language="bash">
             <![CDATA[
+echo "run_worker_in_container ..."
+
 master_container_name=$variables_instance_name"Master"
 worker_container_name=$variables_instance_name"Worker"$variables_PA_TASK_REPLICATION
 
-echo "SPARK WORKER STARTING IN "$worker_container_name" ..."
+docker run -dit --name=$worker_container_name --hostname=$worker_container_name --net=$variables_network activeeon/hdfs-spark:1.0
+docker exec $worker_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; $SPARK_HOME/sbin/start-slave.sh spark://'$master_container_name':7077'
 
-docker run -dit --name=$worker_container_name --hostname=$worker_container_name --net=$variables_network activeeon/hdfs-spark:latest
-
-docker exec $worker_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ /usr/local/hadoop/etc/hadoop/core-site.xml.template > /usr/local/hadoop/etc/hadoop/core-site.xml; ./$SPARK_HOME/sbin/start-slave.sh spark://'$master_container_name':7077'
-
-echo "... STARTED"
+echo "... run_worker_in_container"
 ]]>
 					</code>
 				</script>
 			</scriptExecutable>
 		</task>
-		<task name="end_deployment">
+		<task name="Update_service_state">
 			<genericInformation>
-				<info name="task.icon"
-					value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
+				<info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
 			</genericInformation>
 			<depends>
 				<task ref="run_worker_in_container" />
 			</depends>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+					<pathElement path="logging-interceptor-2.7.5.jar"/>
+					<pathElement path="okhttp-2.7.5.jar"/>
+					<pathElement path="okio-1.6.0.jar"/>
+					<pathElement path="gson-2.6.2.jar"/>
+					<pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
 			<scriptExecutable>
 				<script>
-					<code language="javascript">
-            <![CDATA[
-var myObject = {};
-myObject.id= variables.get("instance_name");
-myObject.status="RUNNING";
-myObject.endpoint= variables.get("host_name") + ":" + variables.get("dashboard_port");
+					<code language="groovy">
+						<![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
 
-result=JSON.stringify(myObject);
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def optional_hdfs_IP_address = variables.get("optional_hdfs_IP_address")
+def spark_portal_host_name = variables.get("spark_portal_host_name")
+def dashboard_port = variables.get("dashboard_port")
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Update the related service instance status
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+
+if (optional_hdfs_IP_address.isEmpty())
+	service_instance_data.setInstanceStatus("SPARK_DEPLOYED")
+else
+	service_instance_data.setInstanceStatus("HDFS_SPARK_DEPLOYED")
+
+service_instance_data.getInstanceEndpoints().put("spark_portal", spark_portal_host_name + ":" + dashboard_port)
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>

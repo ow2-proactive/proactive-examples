@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.10"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+        name="bench_eur_stock_option_pricing" projectName="Pricing Workflows"
+        priority="normal"
+        onTaskError="continueJobExecution"
+        maxNumberOfExecution="2"
+>
+  <variables>
+    <variable name="GPU_NODES_ONLY" value="False"  model="PA:Boolean"/>
+    <variable name="nbOptionsPerKernel" value="65536" />
+    <variable name="nbMCPerOption" value="262144" />
+    <variable name="nbKernelInvocations" value="10" />
+    <variable name="validationThreshold" value="0.1" />
+    <variable name="floatOrDouble" value="float" />
+    <variable name="nbTasks" value="4" />
+  </variables>
+  <description>
+    <![CDATA[ Price European stock options using Monte Carlo simulations from ProActive replicated tasks. Each task executes an OpenCL kernel to simulate paths of each option. Validation is performed by comparing the results with the analytical solution of the Black & Scholes equation. For the OpenCL sources see "intel_ocl_montecarlo.zip" in https://software.intel.com/en-us/intel-opencl-support/code-samples ]]>
+  </description>
+  <genericInformation>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/opencl.png"/>
+    <info name="Documentation" value="https://www.khronos.org/opencl/"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="split_kernel_invocations">
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "Split_kernel_invocations ..."
+
+
+// Retrieve variables
+def nbKernelInvocations = variables.get("nbKernelInvocations").toInteger()
+def nbTasks = variables.get("nbTasks").toInteger()
+
+// Estimate nbKernelInvocations per task
+def nbKernelInvocations_per_task = (int)(nbKernelInvocations / nbTasks)
+if (nbKernelInvocations % nbTasks != 0)
+	nbKernelInvocations_per_task++
+
+def nbKernelInvocations_left = nbKernelInvocations
+def nbKernelInvocations_task = 0
+(0..nbTasks-1).each {
+     // How many invocations must we give?
+     if(it == nbTasks-1)
+     	nbKernelInvocations_task = nbKernelInvocations_left
+     else
+  	nbKernelInvocations_task = nbKernelInvocations_per_task
+
+     // Update nbKernelInvocations_left
+     nbKernelInvocations_left = nbKernelInvocations_left - nbKernelInvocations_task
+
+     // Store nbKernelInvocations_task
+     variables["nbKernelInvocations_task_${it}"] = nbKernelInvocations_task
+     println "nbKernelInvocations_task " + nbKernelInvocations_task
+}
+
+
+println "... Split_kernel_invocations"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nbTasks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="openCL_call_put_pricing">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/opencl.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="split_kernel_invocations"/>
+      </depends>
+      <inputFiles>
+        <files  includes="MonteCarlo" accessMode="transferFromGlobalSpace"/>
+        <files  includes="montecarlo.cl" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script
+                type="static" >
+          <code language="groovy">
+            <![CDATA[
+def env_variables = System.getenv().toString()
+def can_use_GPU =  env_variables.contains("opencl") && (env_variables.contains("nvidia") || env_variables.contains("amd"))
+def can_use_CPU = env_variables.contains("opencl") && env_variables.contains("intel")
+
+selected = (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && can_use_GPU) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false") && can_use_CPU)
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def task_id = variables.get('PA_TASK_REPLICATION')
+def nbKernelInvocations_task = variables.get("nbKernelInvocations_task_" + task_id)
+println "nbKernelInvocations_task " + nbKernelInvocations_task
+def nbOptionsPerKernel = variables.get("nbOptionsPerKernel")
+def nbMCPerOption = variables.get("nbMCPerOption")
+def validationThreshold = variables.get("validationThreshold")
+def floatOrDouble = variables.get("floatOrDouble").toLowerCase()
+
+// Set executable permission
+def MonteCarlo_file_path = new File(localspace, "MonteCarlo").absolutePath
+["chmod", "+x", MonteCarlo_file_path].execute().waitForProcessOutput(System.out, System.err)
+
+// Build the command
+def cmd = [MonteCarlo_file_path, "-o", nbOptionsPerKernel, "-s", nbMCPerOption, "-i", nbKernelInvocations_task, "-e", validationThreshold, "-a", floatOrDouble]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="merge">
+      <depends>
+        <task ref="openCL_call_put_pricing"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println ""
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
