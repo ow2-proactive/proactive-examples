@@ -9,7 +9,7 @@
      maxNumberOfExecution="2">
   <variables>
     <variable name="CASSANDRA_HOSTNAME" value="localhost" />
-    <variable name="CASSANDRA_KEYSPACE" value="activeeon" />
+    <variable name="CASSANDRA_KEYSPACE" value="" />
     <variable name="CASSANDRA_PORT" value="9042" />
   </variables>
   <description>
@@ -26,10 +26,10 @@
       <description>
         <![CDATA[ This task allows importing data from Cassandra.
 The task requires the following third-party credentials: CASSANDRA_USERNAME and CASSANDRA_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
-It requires the following variables:
-$CASSANDRA_DATABASE: the database to use. It is created if it does not exist
-$CASSANDRA_COLLECTION: the collection to use. It is created if it does not exist
-$CASSANDRA_OUPUT: The name of the output csv file.
+It uses the following variables:
+$CASSANDRA_DATABASE (required) the database to use. It is created if it does not exist
+$CASSANDRA_COLLECTION (required) the collection to use. It is created if it does not exist
+$CASSANDRA_OUPUT (optional) is a relative path in the data space used to save the results in a CSV file.
 The imported data is also exported in a JSON format using the variable $DATAFRAME_JSON. ]]>
       </description>
       <variables>
@@ -51,7 +51,7 @@ The imported data is also exported in a JSON format using the variable $DATAFRAM
               <![CDATA[
 #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
 # Prepare Docker parameters 
-containerName = 'java' 
+containerName = 'activeeon/dlm3'
 dockerRunCommand =  'docker run ' 
 dockerParameters = '--rm ' 
 # Prepare ProActive home volume 
@@ -81,7 +81,7 @@ from cassandra.cluster import Cluster
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.query import dict_factory
 
-print("BEGIN Import_Data FROM CASSANDRA ...")
+print("BEGIN Import_Data from CASSANDRA ...")
 PORT = 9042
 
 if variables.get("CASSANDRA_HOSTNAME"):
@@ -105,12 +105,12 @@ if credentials.get("CASSANDRA_USERNAME") is not None and credentials.get("CASSAN
 else:
     print("You first need to add third-party credentials (CASSANDRA_USERNAME and CASSANDRA_PASSWORD) for the database in the scheduler-portal.")
     sys.exit(1)
-if variables.get("CASSANDRA_QUERY") is not None:
+if variables.get("CASSANDRA_QUERY"):
     QUERY = variables.get("CASSANDRA_QUERY")
 else:
     print("CASSANDRA_QUERY not defined by the user.")
     sys.exit(1)
-if variables.get("CASSANDRA_OUTPUT") is not None:
+if variables.get("CASSANDRA_OUTPUT"):
     CASSANDRA_OUTPUT = variables.get("CASSANDRA_OUTPUT")
 
 IS_LABELED_DATA = 'False'
@@ -186,7 +186,6 @@ try:
     resultMetadata.put("content.type", "text/csv")
     
     # If an CASSANDRA_OUTPUT path in the dataspace is designated, then write to this file.
-    print(dataframe)
     if CASSANDRA_OUTPUT:
          dataframe.to_csv(path_or_buf=CASSANDRA_OUTPUT, index=False)
 except NameError:
@@ -209,7 +208,7 @@ The task requires the following third-party credentials: CASSANDRA_USERNAME and 
 It requires the following variables:
 $CASSANDRA_TABLE (required) Data is stored in tables containing rows of columns, similar to SQL definitions.. It is created if it does not exist
 $CASSANDRA_KEY (required) A primary key identifies the location and order of stored data. The primary key is defined when the table is created and cannot be altered.
-$CASSANDRA_INPUT (required) A csv file to be inserted in Cassandra. This variable can:
+$CASSANDRA_INPUT (required) is the relative path of the CSV file that contains data to be imported. This variable can:
  - An URL. Valid URL schemes include http, ftp, s3, and file. 
  - A relative path in the data space of a csv file. ]]>
       </description>
@@ -232,7 +231,7 @@ $CASSANDRA_INPUT (required) A csv file to be inserted in Cassandra. This variabl
               <![CDATA[
 #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
 # Prepare Docker parameters 
-containerName = 'java' 
+containerName = 'activeeon/dlm3'
 dockerRunCommand =  'docker run ' 
 dockerParameters = '--rm ' 
 # Prepare ProActive home volume 
@@ -259,11 +258,12 @@ preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + wor
 import pandas as pd
 import numpy as np
 import re
+import sys
 from cassandra.cluster import Cluster
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.query import dict_factory
 
-print("BEGIN Import_Data FROM CASSANDRA ...")
+print("BEGIN Export_Data to CASSANDRA ...")
 PORT = 9042
 
 if variables.get("CASSANDRA_HOSTNAME"):
@@ -318,7 +318,7 @@ auth_provider = PlainTextAuthProvider(
 cluster = Cluster(contact_points=[HOSTNAME], port=PORT, auth_provider=auth_provider)
 session = cluster.connect(KEYSPACE)
 
-print("INSERTING DATA IN CASASNDRA...")
+print("INSERTING DATA IN CASSANDRA...")
 print('CASSANDRA_HOSTNAME='+HOSTNAME)
 print('CASSANDRA_PORT=', PORT)
 print('CASSANDRA_KEYSPACE='+KEYSPACE)
@@ -328,14 +328,10 @@ print('PRIMARY_KEY=' + PRIMARY_KEY)
 dataframe = pd.read_csv(CASSANDRA_INPUT, sep='\t|;|,',index_col=None, engine='python')
 column_names = list(dataframe.columns.values) 
 column_types= re.sub("\d", "",','.join('{}'.format(*k) for k in zip(dataframe.dtypes))).split(',')
-#print(column_names)
-#print(column_types)
-#print(dataframe)
 TABLE_HEADER = ',\n'.join('{} {}'.format(*t) for t in zip(column_names, column_types))
 CREATE_TABLE = """CREATE TABLE IF NOT EXISTS {0}.{1}({2},
   PRIMARY KEY ({3}));""".format(KEYSPACE, TABLE, TABLE_HEADER, PRIMARY_KEY)
 
-#print(CREATE_TABLE)
 session.execute(CREATE_TABLE)
 INSERT_STATEMENT = """ INSERT INTO {0} ({1}) VALUES """.format(TABLE, ','.join(map(str, column_names)))
 BATCH_SIZE = dataframe.size
@@ -343,8 +339,11 @@ BATCH_QUERY = 'BEGIN BATCH\n'
 for row in dataframe.itertuples(index = False):
     BATCH_QUERY += """{0}({1})\n""".format(INSERT_STATEMENT ,','.join(map(str, row)))
 BATCH_QUERY += 'APPLY BATCH;'
-#print(BATCH_QUERY)
-session.execute(BATCH_QUERY)
+try:
+    session.execute(BATCH_QUERY)
+except Exception as e:
+    print(e)
+    sys.exit(1)
 print("END Export_Data")
 ]]>
           </code>
