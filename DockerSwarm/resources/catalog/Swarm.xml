@@ -9,10 +9,11 @@
         maxNumberOfExecution="2"
 >
   <variables>
-    <variable name="consul_port" value="8500" />
+    <variable name="consul_UI_port" value="8500" />
     <variable name="swarm_manager_port" value="4000" />
-    <variable name="instance_name" value="my_instance" />
+    <variable name="instance_name" value="my-instance" />
     <variable name="network_name" value="my-net" />
+    <variable name="subnet" value="25.25.25.0/24" />
   </variables>
   <description>
     <![CDATA[ Deployment of swarm. ]]>
@@ -49,7 +50,7 @@
         <script>
           <code language="groovy">
             <![CDATA[
-/*
+
 import io.swagger.client.ApiClient
 import io.swagger.client.api.ServiceInstanceRestApi
 import io.swagger.client.model.ServiceInstanceData
@@ -70,9 +71,9 @@ def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
 def node_source_name = service_instance_data.getVariables().get("node_source_name")
 def nb_nodes = service_instance_data.getVariables().get("nb_nodes")
-*/
-variables.put("node_source_name", "local"/*node_source_name*/)
-variables.put("nb_nodes", "2"/*nb_nodes*/)
+
+variables.put("node_source_name", node_source_name)
+variables.put("nb_nodes", nb_nodes)
 ]]>
           </code>
         </script>
@@ -118,11 +119,16 @@ import org.objectweb.proactive.core.util.ProActiveInet
 
 println "start_consul ..."
 
+// Retrieve variables
+def consul_UI_port = variables.get("consul_UI_port")
+def instance_name = variables.get("instance_name")
+
+// Get the current IP address and store it
 def consul_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
-println "consul_IP_address " + consul_IP_address
 variables.put("consul_IP_address", consul_IP_address)
 
-def cmd = ["docker", "run", "-d", "-p", variables.get("consul_port") + ":8500", "--name", variables.get("instance_name") + "-consul", "progrium/consul", "-server", "-bootstrap", "-advertise", consul_IP_address]
+// Start consul
+def cmd = ["docker", "run", "-d", "-p", consul_UI_port + ":8500", "--name", instance_name + "-consul", "progrium/consul", "-server", "-bootstrap", "-advertise", consul_IP_address]
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
 println "... start_consul"
@@ -156,13 +162,18 @@ import org.objectweb.proactive.core.util.ProActiveInet
 
 println "start_swarm_manager ..."
 
+// Retrieve variables
+def consul_IP_address = variables.get("consul_IP_address")
+def swarm_manager_port = variables.get("swarm_manager_port")
+def instance_name = variables.get("instance_name")
+
+// Get the current IP address and store it
 def swarm_manager_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
 println "swarm_manager_IP_address " + swarm_manager_IP_address
 variables.put("swarm_manager_IP_address", swarm_manager_IP_address)
 
-def consul_IP_address = variables.get("consul_IP_address")
-
-def cmd = ["docker", "run", "-d", "-p", variables.get("swarm_manager_port") + ":4000", "--name", variables.get("instance_name") + "-swarm_manager", "swarm", "manage", "-H", ":4000", "--replication", "--advertise", swarm_manager_IP_address + ":4000", "consul://" + consul_IP_address + ":8500"]
+// Start the swarm manager
+def cmd = ["docker", "run", "-d", "-p", swarm_manager_port + ":4000", "--name", instance_name + "-swarm_manager", "swarm", "manage", "-H", ":4000", "--replication", "--advertise", swarm_manager_IP_address + ":4000", "consul://" + consul_IP_address + ":8500"]
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
 println "... start_swarm_manager"
@@ -207,12 +218,16 @@ import org.objectweb.proactive.core.util.ProActiveInet
 
 println "start_swarm_agents ..."
 
-def task_id = variables.get("PA_TASK_REPLICATION")
+// Retrieve variables
 def consul_IP_address = variables.get("consul_IP_address")
-def swarm_node_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
-println "swarm_node_IP_address " + swarm_node_IP_address + " consul_IP_address " + consul_IP_address
+def instance_name = variables.get("instance_name")
+def task_id = variables.get("PA_TASK_REPLICATION")
 
-def cmd = ["docker", "run", "-d", "--name", variables.get("instance_name") + "-swarm_node_" + task_id, "swarm", "join",  "--advertise", swarm_node_IP_address + ":2375", "consul://" + consul_IP_address + ":8500"]
+// Get the current IP address
+def swarm_node_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
+
+// Start a swarm node
+def cmd = ["docker", "run", "-d", "--name", instance_name + "-swarm_node_" + task_id, "swarm", "join",  "--advertise", swarm_node_IP_address + ":2375", "consul://" + consul_IP_address + ":8500"]
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
 println "... start_swarm_agents"
@@ -232,9 +247,12 @@ println "... start_swarm_agents"
             <![CDATA[
 println "create_overlay_network ..."
 
+// Retrieve variables
 def network_name = variables.get("network_name")
+def subnet = variables.get("subnet")
 
-def cmd = ["docker", "network", "create", network_name]
+// Create the overlay network across the entire Swarm cluster
+def cmd = ["docker", "network", "create", network_name, "--subnet", subnet]
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
 println "... create_overlay_network"
@@ -278,8 +296,8 @@ println "update_service_state ..."
 // Retrieve variables
 def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
 def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
-def dashboard_host_name = variables.get("dashboard_host_name")
-def dashboard_port = variables.get("dashboard_port")
+def consul_IP_address = variables.get("consul_IP_address")
+def consul_UI_port = variables.get("consul_UI_port")
 
 // Define other variables
 def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
@@ -293,7 +311,7 @@ def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 // Update the related service instance
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
 service_instance_data.setInstanceStatus("SWARM_DEPLOYED")
-service_instance_data.getInstanceEndpoints().put("consul_portal", dashboard_host_name + ":" + dashboard_port)
+service_instance_data.getInstanceEndpoints().put("consul_UI", consul_IP_address + ":" + consul_UI_port)
 service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 
 println "... update_service_state"
