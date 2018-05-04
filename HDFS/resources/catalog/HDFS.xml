@@ -9,12 +9,11 @@
 		maxNumberOfExecution="2"
 >
 	<variables>
-		<variable name="dashboard_port" value="6000" />
+		<variable name="HDFS_UI_port" value="6500" />
 		<variable name="datanode_starting_port" value="50010" />
 		<variable name="fs_name" value="25.25.25.2" />
-		<variable name="hdfs_portal_host_name" value="https://try.activeeon.com" />
-		<variable name="instance_name" value="hdfsContainer" />
-		<variable name="network" value="my-net" />
+		<variable name="instance_name" value="my-instance" />
+		<variable name="network_name" value="my-net" />
 	</variables>
 	<description>
 		<![CDATA[ Deployment of HDFS. ]]>
@@ -101,15 +100,38 @@ if (variables.get("node_source_name").equals(System.getProperty("proactive.node.
 				<script>
 					<code language="groovy">
 						<![CDATA[
-echo "run_namenode_in_container ..."
+println "run_namenode_in_container ..."
 
-namenode_container_name=$variables_instance_name"Namenode"
+//namenode_container_name=$variables_instance_name"Namenode"
 
-docker run -dit --publish=$variables_dashboard_port:9870 --name=$namenode_container_name --hostname=$namenode_container_name --net=$variables_network activeeon/hdfs-spark:1.0
-docker exec $namenode_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_fs_name':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; rm -r /tmp; hdfs namenode -format -force'
-docker exec $namenode_container_name /bin/sh -c 'hdfs --daemon start namenode'
+//docker run -dit --publish=$variables_dashboard_port:9870 --name=$namenode_container_name --hostname=$namenode_container_name --net=$variables_network activeeon/hdfs-spark:1.0
+//docker exec $namenode_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_fs_name':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; rm -r /tmp; hdfs namenode -format -force'
+//docker exec $namenode_container_name /bin/sh -c 'hdfs --daemon start namenode'
 
-echo "... run_namenode_in_container"
+
+// Retrieve variables
+def HDFS_UI_port = variables.get("HDFS_UI_port")
+def instance_name = variables.get("instance_name")
+def network_name = variables.get("network_name")
+def fs_name = variables.get("fs_name")
+
+def namenode_container_name = instance_name + "-namenode"
+
+// Start the namenode docker container
+def cmd = ["docker", "run", "-dit", "--publish", HDFS_UI_port + ":9870", "--name", namenode_container_name, "--net", network_name, "activeeon/hdfs-spark:1.0"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Namenode configuration
+def docker_config_command = "sed s/IP:PORT/" + fs_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml; rm -r /tmp; hdfs namenode -format -force"
+cmd = ["docker", "exec", namenode_container_name, "/bin/sh", "-c", docker_config_command]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Start namenode
+def docker_start_command = "hdfs --daemon start namenode"
+cmd = ["docker", "exec", namenode_container_name, "/bin/sh", "-c", docker_start_command]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... run_namenode_in_container"
 ]]>
 					</code>
 				</script>
@@ -131,15 +153,18 @@ runs=variables.get("nb_nodes")
 						<![CDATA[
 import groovy.json.JsonSlurper
 
-def docker_container_namenode = variables.get("instance_name") + "Namenode"
-def jsonToParse = new StringBuilder()
+def namenode_container_name = variables.get("instance_name") + "-namenode"
+def network_name = variables.get("network_name")
 
 // Retrieve the namenode IP address in the overlay network
-["docker","inspect", docker_container_namenode].execute().waitForProcessOutput(jsonToParse , System.err)
-
+def jsonToParse = new StringBuilder()
+["docker","inspect", namenode_container_name].execute().waitForProcessOutput(jsonToParse , System.err)
 def jsonSlurper = new JsonSlurper()
 def object = jsonSlurper.parseText(jsonToParse+"")
-variables.put("namenode_IP_address", object.get(0).get("NetworkSettings").get("Networks").get("my-net").get("IPAddress"))
+def namenode_IP_address = object.get(0).get("NetworkSettings").get("Networks").get(network_name).get("IPAddress")
+
+// And store it
+variables.put("namenode_IP_address", namenode_IP_address)
 ]]>
 					</code>
 				</script>
@@ -167,23 +192,42 @@ if (variables.get("node_source_name").equals(System.getProperty("proactive.node.
 			</selection>
 			<scriptExecutable>
 				<script>
-					<code language="bash">
+					<code language="groovy">
 						<![CDATA[
-echo "start_datanode ..."
+println "start_datanode ..."
 
-# Retrieve variables
-task_id=$variables_PA_TASK_REPLICATION
-datanode_container_name=$variables_instance_name"Datanode"$task_id
-datanode_port=$(expr $variables_datanode_starting_port + $task_id)
+// Retrieve variables
+// task_id=$variables_PA_TASK_REPLICATION
+// datanode_container_name=$variables_instance_name"Datanode"$task_id
+// datanode_port=$(expr $variables_datanode_starting_port + $task_id)
 
-echo "file_system_port "$file_system_port
-echo "datanode_port "$datanode_port
-echo "DATANODE STARTING IN "$datanode_container_name" ..."
+//echo "file_system_port "$file_system_port
+//echo "datanode_port "$datanode_port
+//echo "DATANODE STARTING IN "$datanode_container_name" ..."
 
-docker run -dit --name=$datanode_container_name --hostname=$datanode_container_name --net=$variables_network activeeon/hdfs-spark:1.0
-docker exec $datanode_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_fs_name':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; sed s/PORT/'$datanode_port'/ $HADOOP_HOME/etc/hadoop/hdfs-site.xml.template > $HADOOP_HOME/etc/hadoop/hdfs-site.xml; rm -r /tmp; hdfs --daemon start datanode'
+//docker run -dit --name=$datanode_container_name --hostname=$datanode_container_name --net=$variables_network activeeon/hdfs-spark:1.0
+//docker exec $datanode_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_fs_name':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; sed s/PORT/'$datanode_port'/ $HADOOP_HOME/etc/hadoop/hdfs-site.xml.template > $HADOOP_HOME/etc/hadoop/hdfs-site.xml; rm -r /tmp; hdfs --daemon start datanode'
 
-echo "... start_datanode"
+
+// Retrieve variables
+def fs_name = variables.get("fs_name")
+def task_id = variables.get("PA_TASK_REPLICATION") as Integer
+def datanode_starting_port = variables.get("datanode_starting_port") as Integer
+def network_name = variables.get("network_name")
+
+def datanode_container_name = variables.get("instance_name") + "-datanode-" + task_id
+def datanode_port = datanode_starting_port + task_id
+
+// Start the datanode docker container
+def cmd = ["docker", "run", "-dit", "--name", datanode_container_name, "--net", network_name, "activeeon/hdfs-spark:1.0"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Datanode configuration + Start
+def docker_config_command = "sed s/IP:PORT/" + fs_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml; sed s/PORT/" + datanode_port + "/ \$HADOOP_HOME/etc/hadoop/hdfs-site.xml.template > \$HADOOP_HOME/etc/hadoop/hdfs-site.xml; rm -r /tmp; hdfs --daemon start datanode"
+cmd = ["docker", "exec", datanode_container_name, "/bin/sh", "-c", docker_config_command]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_datanode"
 ]]>
 					</code>
 				</script>
@@ -225,9 +269,8 @@ import io.swagger.client.model.ServiceInstanceData
 // Retrieve variables
 def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
 def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
-def hdfs_portal_host_name = variables.get("hdfs_portal_host_name")
-def dashboard_port = variables.get("dashboard_port")
 def namenode_IP_address = variables.get("namenode_IP_address")
+def HDFS_UI_port = variables.get("HDFS_UI_port")
 
 // Define other variables
 def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
@@ -241,7 +284,7 @@ def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 // Update the related service instance
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
 service_instance_data.setInstanceStatus("HDFS_DEPLOYED")
-service_instance_data.getInstanceEndpoints().put("hdfs_portal", hdfs_portal_host_name + ":" + dashboard_port)
+service_instance_data.getInstanceEndpoints().put("HDFS_UI", namenode_IP_address + ":" + HDFS_UI_port)
 service_instance_data.getInstanceEndpoints().put("namenode_IP_address", namenode_IP_address)
 service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
