@@ -4,10 +4,9 @@
 	name="Spark" projectName="Cloud Automation - Deployment" priority="normal"
 	onTaskError="continueJobExecution" maxNumberOfExecution="2">
 	<variables>
-		<variable name="instance_name" value="sparkContainer" />
-		<variable name="dashboard_port" value="5000" />
-		<variable name="network" value="my-net" />
-		<variable name="spark_portal_host_name" value="https://try.activeeon.com" />
+		<variable name="spark_UI_port" value="5000" />
+		<variable name="instance_name" value="my-instance" />
+		<variable name="network_name" value="my-net" />
 	</variables>
 	<description>
     	<![CDATA[ Deployment of Spark. ]]>
@@ -20,7 +19,7 @@
 	    <info name="group" value="public-objects" />
 	</genericInformation>
 	<taskFlow>
-		<task name="get_IP_addresses_from_pca">
+		<task name="get_resources_from_service_instance">
 			<inputFiles>
 				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
 				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
@@ -59,42 +58,37 @@ def api_client = new ApiClient()
 api_client.setBasePath(pca_url)
 def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 
-// Get IP addresses from the PCA service instance
-// spark master ---
+// Get the targeted resources the PCA service instance
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+def service_instance_variables = service_instance_data.getVariables()
+variables.put("node_source_name", service_instance_variables.get("node_source_name"))
+variables.put("nb_nodes", service_instance_variables.get("nb_nodes"))
+variables.put("subnet", service_instance_variables.get("subnet"))
+
+// Get optional namenode IP address in overlay
 def service_instance_end_points = service_instance_data.getInstanceEndpoints()
-def node_0_IP_address = service_instance_end_points.get("node_0_IP_address")
-variables.put("spark_master_IP_address", node_0_IP_address)
-
-// spark slaves ---
-def spark_slave_IP_addresses = service_instance_end_points.findAll { it.key =~ /node_\d+_IP_address/ }.values()
-variables.put("spark_slave_IP_addresses", spark_slave_IP_addresses.join("\n"))
-
-// optional HDFS namenode ---
-def service_instance_status = service_instance_data.getInstanceStatus()
-if (service_instance_status == "HDFS_DEPLOYED")
-	variables.put("optional_hdfs_IP_address", node_0_IP_address)
+variables.put("namenode_IP_address", service_instance_end_points.get("namenode_IP_address"))
 ]]>
 					</code>
 				</script>
 			</scriptExecutable>
 		</task>
-		<task name="run_master_in_container">
+		<task name="start_spark_master">
 			<genericInformation>
 				<info name="task.icon"
 					value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
 			</genericInformation>
 			<depends>
-				<task ref="get_IP_addresses_from_pca"/>
+				<task ref="get_resources_from_service_instance"/>
 			</depends>
 			<selection>
 				<script>
-					<code language="javascript">
+					<code language="groovy">
 						<![CDATA[
-if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(variables.get('spark_master_IP_address'))) {
-    selected = true;
+if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
 } else {
-   selected = false;
+   selected = false
 }
 ]]>
 					</code>
@@ -102,61 +96,48 @@ if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(variable
 			</selection>
 			<scriptExecutable>
 				<script>
-					<code language="bash">
-            <![CDATA[
-echo "run_master_in_container ..."
-
-master_container_name=$variables_instance_name"Master"
-
-docker run -dit --publish=$variables_dashboard_port:8080 --name=$master_container_name --hostname=$master_container_name --net=$variables_network activeeon/hdfs-spark:1.0
-docker exec $master_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; $SPARK_HOME/sbin/start-master.sh'
-
-# Ensure Master is started
-while [ "$(docker exec "$master_container_name" jps | grep Master | cut -d ' ' -f 2)" != "Master" ]
-do
-	echo "sleep 5s"
-	sleep 5s
-done
-
-echo "... run_master_in_container"
-]]>
-					</code>
-				</script>
-			</scriptExecutable>
-			<controlFlow block="none"></controlFlow>
-		</task>
-		<task name="process_worker_IP_addresses">
-			<genericInformation>
-				<info name="task.icon"
-					value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
-			</genericInformation>
-			<depends>
-				<task ref="run_master_in_container" />
-			</depends>
-			<scriptExecutable>
-				<script>
 					<code language="groovy">
             <![CDATA[
-println "process_worker_IP_addresses ..."
+import org.objectweb.proactive.core.util.ProActiveInet
+import org.apache.commons.net.util.SubnetUtils
 
-// Retrieve the datanode IP addresses
-def spark_slave_IP_addresses = variables.get("spark_slave_IP_addresses")
+println "start_spark_master ..."
 
-// 1 IP address per replicated task
-String[] spark_slave_IP_addresses_array = spark_slave_IP_addresses.split("\n")
+// Retrieve variables
+def instance_name = variables.get("instance_name")
+def spark_UI_port = variables.get("spark_UI_port")
+def namenode_IP_address = variables.get("namenode_IP_address")
+def network_name = variables.get("network_name")
+def subnet = variables.get("subnet")
 
-// Store the worker number
-def nb_spark_slaves = spark_slave_IP_addresses_array.length
-variables["nb_spark_slaves"] = nb_spark_slaves
+// Get the current IP address and store it
+// Consider the first eligible IP address without including those in the overlay
+def subnet_utils = new SubnetUtils(subnet)
+def spark_master_IP_address = ProActiveInet.getInstance().getEligibleAdresses().findAll{ !subnet_utils.getInfo().isInRange(it.getHostAddress()) }.get(0).getHostAddress()
+println "HI spark_master_IP_address " + spark_master_IP_address
+variables.put("spark_master_IP_address", spark_master_IP_address)
 
-// Store IP addresses in variables for the replicated task selection scripts
-for (int i = 0; i < nb_spark_slaves; i++)
-{
-   variables["IP_address_"+i] = lines_array[i]
-   println "variable " + variables["IP_address_"+i]
+def spark_master_container_name = instance_name + "-spark-master"
+
+// Start the spark master docker container
+def cmd = ["docker", "run", "-dit", "--publish", spark_UI_port + ":8080", "--name", spark_master_container_name, "--net", network_name, "activeeon/hdfs-spark:1.0"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Spark master configuration + Start
+def docker_config_command = "sed s/IP:PORT/" + namenode_IP_address + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml; \$SPARK_HOME/sbin/start-master.sh"
+cmd = ["docker", "exec", spark_master_container_name, "/bin/sh", "-c", docker_config_command]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Ensure Master is started
+cmd = ["docker", "exec", spark_master_container_name, "jps"]
+def output = new StringBuilder()
+
+while (!output.toString().contains("Master")){
+	cmd.execute().waitForProcessOutput(output, System.err)
+	sleep(1000)
 }
 
-println "... process_worker_IP_addresses"
+println "... start_spark_master"
 ]]>
 					</code>
 				</script>
@@ -165,33 +146,30 @@ println "... process_worker_IP_addresses"
 				<replicate>
 					<script>
 						<code language="groovy">
-              <![CDATA[
-runs=variables.get("nb_spark_slaves")
+							<![CDATA[
+runs=variables.get("nb_nodes")
 ]]>
 						</code>
 					</script>
 				</replicate>
 			</controlFlow>
 		</task>
-		<task name="run_worker_in_container">
+		<task name="start_spark_slave">
 			<genericInformation>
 				<info name="task.icon"
 					value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
 			</genericInformation>
 			<depends>
-				<task ref="process_worker_IP_addresses" />
+				<task ref="start_spark_master" />
 			</depends>
 			<selection>
 				<script>
-					<code language="javascript">
+					<code language="groovy">
             <![CDATA[
-var task_id = variables.get('PA_TASK_REPLICATION');
-var worker_IP_address = variables.get('IP_address_' + task_id);
-
-if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(worker_IP_address)) {
-    selected = true;
+if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
 } else {
-   selected = false;
+   selected = false
 }
 ]]>
 					</code>
@@ -199,28 +177,40 @@ if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(worker_I
 			</selection>
 			<scriptExecutable>
 				<script>
-					<code language="bash">
+					<code language="groovy">
             <![CDATA[
-echo "run_worker_in_container ..."
+println "start_spark_slave ..."
 
-master_container_name=$variables_instance_name"Master"
-worker_container_name=$variables_instance_name"Worker"$variables_PA_TASK_REPLICATION
+// Retrieve variables
+def instance_name = variables.get("instance_name")
+def task_id = variables.get("PA_TASK_REPLICATION") as Integer
+def network_name = variables.get("network_name")
+def namenode_IP_address = variables.get("namenode_IP_address")
 
-docker run -dit --name=$worker_container_name --hostname=$worker_container_name --net=$variables_network activeeon/hdfs-spark:1.0
-docker exec $worker_container_name /bin/sh -c 'sed s/IP:PORT/'$variables_optional_hdfs_IP_address':9000/ $HADOOP_HOME/etc/hadoop/core-site.xml.template > $HADOOP_HOME/etc/hadoop/core-site.xml; $SPARK_HOME/sbin/start-slave.sh spark://'$master_container_name':7077'
+def spark_master_container_name = instance_name + "-spark-master"
+def spark_slave_container_name = variables.get("instance_name") + "-spark-slave-" + task_id
 
-echo "... run_worker_in_container"
+// Start the spark slave container
+def cmd = ["docker", "run", "-dit", "--name", spark_slave_container_name, "--net", network_name, "activeeon/hdfs-spark:1.0"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Spark slave configuration + Start
+def docker_config_command = "sed s/IP:PORT/" + namenode_IP_address + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml; \$SPARK_HOME/sbin/start-slave.sh spark://" + spark_master_container_name + ":7077"
+cmd = ["docker", "exec", spark_slave_container_name, "/bin/sh", "-c", docker_config_command]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_spark_slave"
 ]]>
 					</code>
 				</script>
 			</scriptExecutable>
 		</task>
-		<task name="Update_service_state">
+		<task name="update_service_instance">
 			<genericInformation>
 				<info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" />
 			</genericInformation>
 			<depends>
-				<task ref="run_worker_in_container" />
+				<task ref="start_spark_slave" />
 			</depends>
 			<inputFiles>
 				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
@@ -251,8 +241,8 @@ import io.swagger.client.model.ServiceInstanceData
 // Retrieve variables
 def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
 def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
-def spark_portal_host_name = variables.get("spark_portal_host_name")
-def dashboard_port = variables.get("dashboard_port")
+def spark_master_IP_address = variables.get("spark_master_IP_address")
+def spark_UI_port = variables.get("spark_UI_port")
 
 // Define other variables
 def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
@@ -267,12 +257,14 @@ def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
 def service_instance_status = service_instance_data.getInstanceStatus()
 
-if (service_instance_status == "HDFS_DEPLOYED")
+if (service_instance_status == "HDFS_DEPLOYED->HDFS_SPARK_DEPLOYED"){
 	service_instance_data.setInstanceStatus("HDFS_SPARK_DEPLOYED")
-else if (service_instance_status == "SWARM_DEPLOYED")
+}
+else if (service_instance_status == "SWARM_DEPLOYED->SPARK_DEPLOYED"){
 	service_instance_data.setInstanceStatus("SPARK_DEPLOYED")
+}
 
-service_instance_data.getInstanceEndpoints().put("spark_portal", spark_portal_host_name + ":" + dashboard_port)
+service_instance_data.getInstanceEndpoints().put("spark_UI", "http://" + spark_master_IP_address + ":" + spark_UI_port)
 service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>

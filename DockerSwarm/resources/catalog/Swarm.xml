@@ -1,20 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.10"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="Swarm" projectName="Cloud Automation - Deployment"
-    priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.10"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+        name="Swarm" projectName="Cloud Automation - Deployment"
+        priority="normal"
+        onTaskError="continueJobExecution"
+        maxNumberOfExecution="2"
 >
   <variables>
-    <variable name="dashboard_host_name" value="https://try.activeeon.com" />
-    <variable name="dashboard_port" value="8500" />
-    <variable name="instance_name" value="try.activeeon.com" />
-    <variable name="networkName" value="my-net" />
+    <variable name="consul_UI_port" value="8500" />
+    <variable name="swarm_manager_port" value="4000" />
+    <variable name="instance_name" value="my-instance" />
+    <variable name="network_name" value="my-net" />
     <variable name="subnet" value="25.25.25.0/24" />
-    <variable name="userSSH" value="cperUser" />
   </variables>
   <description>
     <![CDATA[ Deployment of swarm. ]]>
@@ -22,12 +21,13 @@
   <genericInformation>
     <info name="Documentation" value="http://activeeon.com/resources/activeeon-deploy-swarm-hdfs-spark.pdf"/>
     <info name="group" value="public-objects"/>
+    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
     <info name="pca.service.id" value="HDFS-Spark"/>
     <info name="pca.states" value="(PA_NODES_RESERVED,SWARM_DEPLOYED)"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png"/>
   </genericInformation>
   <taskFlow>
-    <task name="get_IP_addresses_from_pca">
+    <task name="get_resources_from_service_instance">
       <inputFiles>
         <files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
         <files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
@@ -50,6 +50,7 @@
         <script>
           <code language="groovy">
             <![CDATA[
+
 import io.swagger.client.ApiClient
 import io.swagger.client.api.ServiceInstanceRestApi
 import io.swagger.client.model.ServiceInstanceData
@@ -66,17 +67,13 @@ def api_client = new ApiClient()
 api_client.setBasePath(pca_url)
 def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 
-// Get IP addresses from the PCA service instance
-// consul and swarm master ---
+// Get the targeted resources the PCA service instance
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-def service_instance_end_points = service_instance_data.getInstanceEndpoints()
-def node_0_IP_address = service_instance_end_points.get("node_0_IP_address")
-variables.put("consul_IP_address", node_0_IP_address)
-variables.put("swarm_master_IP_address", node_0_IP_address)
+def node_source_name = service_instance_data.getVariables().get("node_source_name")
+def nb_nodes = service_instance_data.getVariables().get("nb_nodes")
 
-// swarm agents ---
-def swarm_agents_IP_addresses = service_instance_end_points.findAll { it.key =~ /node_\d+_IP_address/ }.values().join("\n")
-variables.put("swarm_agents_IP_addresses", swarm_agents_IP_addresses)
+variables.put("node_source_name", node_source_name)
+variables.put("nb_nodes", nb_nodes)
 ]]>
           </code>
         </script>
@@ -84,97 +81,188 @@ variables.put("swarm_agents_IP_addresses", swarm_agents_IP_addresses)
     </task>
     <task name="start_consul">
       <depends>
-        <task ref="get_IP_addresses_from_pca"/>
+        <task ref="get_resources_from_service_instance"/>
       </depends>
+      <selection>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
+} else {
+   selected = false
+}
+]]>
+          </code>
+        </script>
+      </selection>
       <scriptExecutable>
         <script>
-          <code language="bash">
+          <code language="groovy">
             <![CDATA[
-# REQUIREMENTS
-# http://www.thegeekstuff.com/2016/02/docker-machine-create-generic/
-# passwordless or use ssh agent
+// REQUIREMENTS
+// http://www.thegeekstuff.com/2016/02/docker-machine-create-generic/
+// passwordless or use ssh agent
 
-# DOCKER ISSUE
-# The only temporary fix is to let your user explicitly allow sudo to be used without a password.
-# edit /etc/sudoers and add  YOURUSERNAME ALL=(ALL) NOPASSWD:ALL
-# This is until #1586 is merged
+// DOCKER ISSUE
+// The only temporary fix is to let your user explicitly allow sudo to be used without a password.
+// edit /etc/sudoers and add  YOURUSERNAME ALL=(ALL) NOPASSWD:ALL
+// This is until #1586 is merged
 
-# TIPS on try
-# sudo journalctl -fu docker.service
-# sudo systemctl start docker
-# always check /etc/systemd/system/docker.service if daemon did not run
+// TIPS on try
+// sudo journalctl -fu docker.service
+// sudo systemctl start docker
+// always check /etc/systemd/system/docker.service if daemon did not run
 
-echo "start_consul ..."
 
-ipConsul=$variables_consul_IP_address
-nameMachine=$variables_instance_name
-sshUser=$variables_userSSH
+import org.objectweb.proactive.core.util.ProActiveInet
 
-docker-machine create --driver generic --generic-ip-address $ipConsul --generic-ssh-user $sshUser ${nameMachine}-consul-machine
-docker $(docker-machine config ${nameMachine}-consul-machine) run -d --restart=always -p $variables_dashboard_port":8500" -h "consul" --name ${nameMachine}-swarm-consul progrium/consul -server -bootstrap
+println "start_consul ..."
 
-echo "... start_consul"
+// Retrieve variables
+def consul_UI_port = variables.get("consul_UI_port")
+def instance_name = variables.get("instance_name")
+
+// Get the current IP address and store it
+def consul_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
+variables.put("consul_IP_address", consul_IP_address)
+
+// Start consul
+def cmd = ["docker", "run", "-d", "-p", consul_UI_port + ":8500", "--name", instance_name + "-consul", "progrium/consul", "-server", "-bootstrap", "-advertise", consul_IP_address]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_consul"
 ]]>
           </code>
         </script>
       </scriptExecutable>
     </task>
-    <task name="start_swarm_master_agent">
+    <task name="start_swarm_manager">
       <depends>
-        <task ref="check_consul"/>
+        <task ref="start_consul"/>
       </depends>
+      <selection>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
+} else {
+   selected = false
+}
+]]>
+          </code>
+        </script>
+      </selection>
       <scriptExecutable>
         <script>
-          <code language="bash">
+          <code language="groovy">
             <![CDATA[
-echo "start_swarm_master_agent ..."
+import org.objectweb.proactive.core.util.ProActiveInet
 
-sshUser=$variables_userSSH
-swarm_master_IP_address=$variables_swarm_master_IP_address
-nameMachine=$variables_instance_name
-networkInterfaceSwarm=$(ssh -T $sshUser@$swarm_master_IP_address "ip route get 8.8.8.8" | awk '{ print $5; exit }')
+println "start_swarm_manager ..."
 
-docker-machine create --driver generic --generic-ip-address $swarm_master_IP_address --generic-ssh-user $sshUser --swarm --swarm-master --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376" $nameMachine
+// Retrieve variables
+def consul_IP_address = variables.get("consul_IP_address")
+def swarm_manager_port = variables.get("swarm_manager_port")
+def instance_name = variables.get("instance_name")
 
-echo "... start_swarm_master_agent"
+// Get the current IP address and store it
+def swarm_manager_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
+variables.put("swarm_manager_IP_address", swarm_manager_IP_address)
+
+// Start the swarm manager
+def cmd = ["docker", "run", "-d", "-p", swarm_manager_port + ":4000", "--name", instance_name + "-swarm_manager", "swarm", "manage", "-H", ":4000", "--replication", "--advertise", swarm_manager_IP_address + ":4000", "consul://" + consul_IP_address + ":8500"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_swarm_manager"
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs = variables.get("nb_nodes")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
     </task>
     <task name="start_swarm_agents">
       <depends>
-        <task ref="check_consul2"/>
+        <task ref="start_swarm_manager"/>
       </depends>
+      <selection>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
+} else {
+   selected = false
+}
+]]>
+          </code>
+        </script>
+      </selection>
       <scriptExecutable>
         <script>
-          <code language="bash">
+          <code language="groovy">
             <![CDATA[
-echo "start_swarm_agents ..."
+import org.objectweb.proactive.core.util.ProActiveInet
 
-swarm_agents_IP_addresses=$variables_swarm_agents_IP_addresses
-sshUser=$variables_userSSH
-nameMachine=$variables_instance_name
-i=0
+println "start_swarm_agents ..."
 
-for swarm_agent_IP_address in $swarm_agents_IP_addresses
-do
-  i=$((i+1));
-  echo "COUCOU2 "$swarm_agent_IP_address
-  networkInterfaceSwarm=$(ssh -T $sshUser@$swarm_agent_IP_address "ip route get 8.8.8.8" | awk '{ print $5; exit }');
-  docker-machine create --driver generic --generic-ip-address $swarm_agent_IP_address --generic-ssh-user $sshUser --swarm --swarm-discovery="consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-store=consul://$(docker-machine ip ${nameMachine}-consul-machine):8500" --engine-opt="cluster-advertise=${networkInterfaceSwarm}:2376"  ${nameMachine}-swarm-node-${i};
-done
+// Retrieve variables
+def consul_IP_address = variables.get("consul_IP_address")
+def instance_name = variables.get("instance_name")
+def task_id = variables.get("PA_TASK_REPLICATION")
 
+// Get the current IP address
+def swarm_node_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
 
-echo "... start_swarm_agents"
+// Start a swarm node
+def cmd = ["docker", "run", "-d", "--name", instance_name + "-swarm_node_" + task_id, "swarm", "join",  "--advertise", swarm_node_IP_address + ":2375", "consul://" + consul_IP_address + ":8500"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... start_swarm_agents"
 ]]>
           </code>
         </script>
       </scriptExecutable>
     </task>
-    <task name="Update_service_state">
+
+    <task name="create_overlay_network">
       <depends>
-        <task ref="Create_overlay_network"/>
+        <task ref="start_swarm_agents"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "create_overlay_network ..."
+
+// Retrieve variables
+def network_name = variables.get("network_name")
+def subnet = variables.get("subnet")
+
+// Create the overlay network across the entire Swarm cluster
+def cmd = ["docker", "network", "create", network_name, "--subnet", subnet]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+println "... create_overlay_network"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="update_service_instance">
+      <depends>
+        <task ref="create_overlay_network"/>
       </depends>
       <inputFiles>
         <files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
@@ -202,11 +290,13 @@ import io.swagger.client.ApiClient
 import io.swagger.client.api.ServiceInstanceRestApi
 import io.swagger.client.model.ServiceInstanceData
 
+println "update_service_state ..."
+
 // Retrieve variables
 def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
 def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
-def dashboard_host_name = variables.get("dashboard_host_name")
-def dashboard_port = variables.get("dashboard_port")
+def consul_IP_address = variables.get("consul_IP_address")
+def consul_UI_port = variables.get("consul_UI_port")
 
 // Define other variables
 def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
@@ -220,177 +310,10 @@ def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 // Update the related service instance
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
 service_instance_data.setInstanceStatus("SWARM_DEPLOYED")
-service_instance_data.getInstanceEndpoints().put("consul_portal", dashboard_host_name + ":" + dashboard_port)
+service_instance_data.getInstanceEndpoints().put("consul_UI", "http://" + consul_IP_address + ":" + consul_UI_port)
 service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="check_consul">
-      <depends>
-        <task ref="set_iterator_value"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println "check_consul ..."
 
-//check that the docker daemon is running on the consul machine
-def command = "docker-machine env "+variables.get("instance_name")+"-consul-machine"
-def sout = new StringBuilder(), serr = new StringBuilder()
-command.execute().waitForProcessOutput(sout,serr)
-println "sout " + sout
-println "serr " + serr
-
-def error = serr.count("Error");
-if(error <= 0){
- 	variables.put("iterator",0) 
-}
-
-println "... check_consul"
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow >
-        <loop target="check_consul">
-          <script>
-            <code language="javascript">
-              <![CDATA[
-variables["iterator"]=variables.get("iterator")-1;
-if(variables.get("iterator")>=0){
-    loop = '* * * * *';
-  	println("waiting");
-} else {
-    loop = false;
-}
-]]>
-            </code>
-          </script>
-        </loop>
-      </controlFlow>
-    </task>
-    <task name="set_iterator_value">
-      <description>
-        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
-      </description>
-      <depends>
-        <task ref="start_consul"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="javascript">
-            <![CDATA[
-variables["iterator"]=variables.get("attempt");
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="set_iterator_value2">
-      <description>
-        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
-      </description>
-      <depends>
-        <task ref="start_swarm_master_agent"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="javascript">
-            <![CDATA[
-variables["iterator"]=variables.get("attempt");
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="check_consul2">
-      <depends>
-        <task ref="set_iterator_value2"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println "check_consul2 ..."
-
-//check that the docker daemon is running on the consul machine
-def command = "docker-machine env "+variables.get("instance_name")+"-consul-machine"
-def sout = new StringBuilder(), serr = new StringBuilder()
-command.execute().waitForProcessOutput(sout,serr)
-println "sout " + sout
-println "serr " + serr
-
-def error = serr.count("Error");
-if(error <= 0){
- 	variables.put("iterator",0) 
-}
-
-println "... check_consul2"
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow >
-        <loop target="check_consul2">
-          <script>
-            <code language="javascript">
-              <![CDATA[
-variables["iterator"]=variables.get("iterator")-1;
-if(variables.get("iterator")>=0){
-    loop = '* * * * *';
-  	println("waiting");
-} else {
-    loop = false;
-}
-]]>
-            </code>
-          </script>
-        </loop>
-      </controlFlow>
-    </task>
-    <task name="Create_overlay_network">
-      <depends>
-        <task ref="start_swarm_agents"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="bash">
-            <![CDATA[
-echo "Create_overlay_network ..."
-
-networkName=$variables_networkName
-machineName=$variables_instance_name;
-attempt=20;
-sleepTime=1;
-DOCKER_TLS_VERIFY="";
-
-i=0;
-while [ $i -lt $attempt ]; do
-    ((i++));
-	eval $(docker-machine env $machineName);
-    if [ -n "$DOCKER_TLS_VERIFY" ];
-    then
-		i=$(($attempt+1));
-    else
-		sleep $sleepTime;
-		echo "Waiting $sleepTime s";		
-    fi
-done
-
-if [ $i -eq $(($attempt+1)) ];
-then
-	echo "Variables sucessfully set up";
-else
-  	echo "After $attempt attempts, fail to set up the docker variables, connection aborted";
-fi
-
-
-docker network create --driver overlay --subnet=$variables_subnet $networkName
-
-echo "... Create_overlay_network"
+println "... update_service_state"
 ]]>
           </code>
         </script>

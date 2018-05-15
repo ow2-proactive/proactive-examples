@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="ServiceDeployerConsumer" 
+	projectName="3. Synchronization Examples"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2"
+>
+  <variables>
+    <variable name="NB_READERS" value="3" model="PA:INTEGER"/>
+    <variable name="SERVER_PORT_BASE" value="9000" model="PA:INTEGER"/>
+  </variables>
+  <description>
+    <![CDATA[ An example workflow which starts a socket server and keeps it running inside a task (ServiceInstance), while other tasks are interacting the server (ServiceReader). A final task, TerminateService, allows the ServiceInstance to terminate. ]]>
+  </description>
+  <genericInformation>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_wait_for_any_replicate.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="ServiceInstance">
+      <description>
+        <![CDATA[ Deploys a Socket Server, and keeps running while the server is up ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_wait_for_any_replicate.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.net.*
+import com.google.common.collect.*
+  
+channel = "Job_" + variables.get("PA_JOB_ID")  
+serverPort = Integer.parseInt(variables.get("SERVER_PORT_BASE")) + Integer.parseInt(variables.get("PA_JOB_ID"))
+serverHost = InetAddress.getLocalHost().getHostName()
+
+server = new ServerSocket(serverPort)
+
+synchronizationapi.createChannelIfAbsent(channel, false)
+serverInfo = ImmutableMap.builder().put("SERVER_HOST",serverHost).put("SERVER_PORT", serverPort).put("KEEP_SERVER_UP",true).build()
+synchronizationapi.putAll(channel, serverInfo)
+
+while(synchronizationapi.get(channel, "KEEP_SERVER_UP")) {
+   server.accept { socket ->
+        socket.withStreams { input, output ->           
+           output << "[${new Date()}] HELLO\n"
+           println ">> MESSAGE: ${input.newReader().readLine()}"
+        }
+    }
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Split">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_wait_for_any_replicate.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+channel = "Job_" + variables.get("PA_JOB_ID")
+synchronizationapi.createChannelIfAbsent(channel, false)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=Integer.parseInt(variables.get("NB_READERS"))
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="ServiceReader">
+      <description>
+        <![CDATA[ Reads from a socket server ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_wait_for_any_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.net.*
+
+channel = "Job_" + variables.get("PA_JOB_ID")
+synchronizationapi.waitUntil(channel, "SERVER_HOST", "{k,x -> x != null}")
+
+serverHost = synchronizationapi.get(channel, "SERVER_HOST")
+serverPort = synchronizationapi.get(channel, "SERVER_PORT")
+
+socket = new Socket(serverHost, serverPort)
+
+socket.withStreams { input, output ->
+    output << variables.get("PA_TASK_NAME")
+    println input.newReader().readLine()
+}
+
+socket.close()
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="TerminateService">
+      <description>
+        <![CDATA[ As a merge operation, we simply print the results from previous tasks. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_wait_for_any_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="ServiceReader"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.net.*
+
+channel = "Job_" + variables.get("PA_JOB_ID")
+
+synchronizationapi.put(channel, "KEEP_SERVER_UP", false)
+
+// Send a message to the server to unblock it and acknoledge it must terminate
+serverHost = synchronizationapi.get(channel, "SERVER_HOST")
+serverPort = synchronizationapi.get(channel, "SERVER_PORT")
+
+socket = new Socket(serverHost, serverPort)
+
+socket.withStreams { input, output ->
+    println input.newReader().readLine()
+    output << "Service will be terminated"
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Clean">
+      <description>
+        <![CDATA[ Clean channel ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_wait_for_any_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="ServiceInstance"/>
+        <task ref="TerminateService"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+channel = "Job_" + variables.get("PA_JOB_ID")  
+
+synchronizationapi.deleteChannel(channel)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
