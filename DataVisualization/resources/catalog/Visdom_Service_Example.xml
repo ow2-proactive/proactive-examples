@@ -6,10 +6,10 @@
     name="Visdom_Service_Example" projectName="Visdom Workflows"
     priority="normal"
     onTaskError="continueJobExecution"
-     maxNumberOfExecution="2"
->
+     maxNumberOfExecution="2">
   <variables>
-    <variable name="instance_name" value="visdom-server-1" />
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
+    <variable name="visdom_instance_name" value="visdom-server-1" />
   </variables>
   <description>
     <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies.
@@ -23,12 +23,12 @@ You can share Visdom service reusing the same instance name. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="data-visualization"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
     <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_visdom"/>
     <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
   </genericInformation>
   <taskFlow>
-    <task name="Bind_or_Start_Visdom_Service"
+    <task name="Start_Visdom_Service"
     
     
     onTaskError="cancelJob" >
@@ -36,55 +36,102 @@ You can share Visdom service reusing the same instance name. ]]>
         <![CDATA[ The simplest task, ran by a groovy engine. ]]>
       </description>
       <variables>
-        <variable name="service_model" value="http://models.activeeon.com/pca/visdom" inherited="false" />
-        <variable name="instance_name" value="visdom-server-1" inherited="true" />
+        <variable name="visdom_service_id" value="Visdom" inherited="false" />
+        <variable name="visdom_instance_name" value="visdom-server-1" inherited="true" />
       </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+      </genericInformation>
       <inputFiles>
-        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
       <forkEnvironment >
         <additionalClasspath>
-          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
         </additionalClasspath>
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-
-]]>
-            </code>
-          </script>
-        </envScript>
       </forkEnvironment>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
-import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+import io.swagger.client.model.ServiceDescription
 
+// Get schedulerapi access
 schedulerapi.connect()
 
-pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
-sessionId = schedulerapi.getSession();
+// Acquire session id
+def session_id = schedulerapi.getSession()
+println(session_id)
 
-api = new CloudAutomationApi(pcaUrl, sessionId);
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
 
-endpoint = api.getServiceEndpointOrCreate(variables.get("service_model"), variables.get("instance_name"));
-endpoint = endpoint.replaceAll("\n",'');
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 
-println "Service " + variables.get("service_model") + " is available on " + endpoint
+// Check existing visdom instances
+def visdom_service_id = variables.get("visdom_service_id") 
+def visdom_instance_name = variables.get("visdom_instance_name")
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
 
-variables.put("endpoint", endpoint)
-result = '<meta http-equiv="refresh" content="1; url=http://' + endpoint + '/" />'
-result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
-resultMetadata.put("content.type", "text/html")
+for (ServiceInstanceData service_instance_data : service_instances) {
+  
+	if ( (service_instance_data.getServiceId() == visdom_service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      
+      if (service_instance_data.getVariables().get("instance_name") == visdom_instance_name) {
+        instance_exists = true
+        variables.put("visdom_instance_id", service_instance_data.getInstanceId())
+        variables.put("visdom_endpoint", service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue())
+        println(variables.get("visdom_endpoint"))
+        break
+      }
+  	}
+}
+
+if (!instance_exists){
+  // Prepare visdom description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(variables.get("visdom_service_id"))
+  serviceDescription.putVariablesItem("instance_name",variables.get("visdom_instance_name"))
+  
+  // Run visdom
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire visdom Instance ID
+  def service_instance_id  = service_instance_data.getInstanceId()
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id  
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire visdom endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  visdom_instance_name = service_instance_data.getVariables().get("instance_name")
+  variables.put("visdom_instance_id", service_instance_data.getInstanceId())
+  variables.put("visdom_endpoint", service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue())
+  println(variables.get("visdom_endpoint"))
+  
+  result = '<meta http-equiv="refresh" content="1; url=' + variables.get("visdom_endpoint") + '" />'
+  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+  resultMetadata.put("content.type", "text/html")
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
     </task>
-    <task name="Wait_Until_Validation"
+    <task name="Wait_For_Validation"
     
     
     onTaskError="pauseJob" >
@@ -127,7 +174,7 @@ print "Web Validation sent"
         </script>
       </scriptExecutable>
     </task>
-    <task name="Terminate_Visdom_Service"
+    <task name="Stop_Visdom_Service"
     
     
     onTaskError="cancelJob" >
@@ -135,38 +182,55 @@ print "Web Validation sent"
         <![CDATA[ The simplest task, ran by a groovy engine. ]]>
       </description>
       <variables>
-        <variable name="service_model" value="http://models.activeeon.com/pca/visdom" inherited="false" />
-        <variable name="instance_name" value="visdom-server-1" inherited="true" />
+        <variable name="visdom_instance_id" value="Visdom" inherited="true" />
+        <variable name="visdom_instance_name" value="visdom-server-1" inherited="true" />
       </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+      </genericInformation>
       <depends>
-        <task ref="Wait_Until_Validation"/>
+        <task ref="Wait_For_Validation"/>
       </depends>
       <inputFiles>
-        <files  includes="cloud-automation-service-client-1.0.0-all.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
       <forkEnvironment >
         <additionalClasspath>
-          <pathElement path="cloud-automation-service-client-1.0.0-all.jar"/>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
         </additionalClasspath>
       </forkEnvironment>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
-import org.ow2.proactive.pca.client.api.CloudAutomationApi;
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+import io.swagger.client.model.ServiceDescription
 
+// Get schedulerapi access
 schedulerapi.connect()
-pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
-sessionId = schedulerapi.getSession();
 
-api = new CloudAutomationApi(pcaUrl, sessionId);
+// Acquire session id
+def session_id = schedulerapi.getSession()
+println(session_id)
 
-println "Terminating " + variables.get("service_model") + " / " + variables.get("instance_name");
-try{
-  api.terminateServiceFromInstanceName(variables.get("service_model"), variables.get("instance_name"));
-}catch(Exception ex){
-  println "Service was already terminated"
-}
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Finish Visdom
+ServiceDescription visdomFinishService = new ServiceDescription()
+visdomFinishService.setBucketName("cloud-automation") 
+visdomFinishService.setWorkflowName("Finish_Visdom")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, variables.get("visdom_instance_id"), visdomFinishService)
+
 ]]>
           </code>
         </script>
@@ -176,31 +240,37 @@ try{
       <description>
         <![CDATA[ The simplest task, ran by a python engine. ]]>
       </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+      </variables>
       <depends>
-        <task ref="Bind_or_Start_Visdom_Service"/>
+        <task ref="Start_Visdom_Service"/>
       </depends>
       <forkEnvironment javaHome="/usr" >
         <envScript>
           <script>
             <code language="python">
               <![CDATA[
-#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters 
-containerName = 'activeeon/dlm3' 
-dockerRunCommand =  'docker run ' 
-dockerParameters = '--rm ' 
-# Prepare ProActive home volume 
-paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-# Prepare working directory (For Dataspaces and serialized task file) 
-workspaceHost = localspace 
-workspaceContainer = localspace 
-workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-# Prepare container working directory 
-containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
 ]]>
             </code>
           </script>
@@ -212,9 +282,16 @@ preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + wor
             <![CDATA[
 from visdom import Visdom
 
-VISDOM_HOST,VISDOM_PORT = variables.get("endpoint").split(":")
+visdom_endpoint = variables.get("visdom_endpoint")
+print(visdom_endpoint)
 
-print("Connecting to %s" % VISDOM_PORT)
+if visdom_endpoint is not None:
+  visdom_endpoint = visdom_endpoint.replace("http://", "")
+  print(visdom_endpoint)
+
+(VISDOM_HOST, VISDOM_PORT) = visdom_endpoint.split(":")
+
+print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
 vis = Visdom(server="http://"+VISDOM_HOST,port=int(VISDOM_PORT))
 assert vis.check_connection()
 
