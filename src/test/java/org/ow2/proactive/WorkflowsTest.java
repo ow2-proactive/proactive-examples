@@ -27,18 +27,12 @@ import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.assertThat;
 
 
-/**
- * This test checks:
- * 1. Every single workflow of packages distributed by Activeeon (as all the workflows from proactive-examples), MUST HAVE a Workflow Generic Information "pa.action.icon" with a meaningful Icon
- * 2. URL of this icon MUST reference a local file
- * 3. If a workflow has a single task, this task MUST HAVE a Task Generic Information "task.icon" with the same icon as the Workflow
- */
 @RunWith(Parameterized.class)
 public class WorkflowsTest {
 
     private final static String ICON_URL_PATH_PREFIX = "/automation-dashboard/";
 
-    private final static String JOB_ICON_KEY_NAME = "workflow.icon";
+    private final static String WORKFLOW_ICON_KEY_NAME = "workflow.icon";
 
     private final static String TASK_ICON_KEY_NAME = "task.icon";
 
@@ -97,22 +91,18 @@ public class WorkflowsTest {
             }
         });
 
-        /*
-         * 1. Every single workflow of packages distributed by Activeeon (as all the workflows from
-         * proactive-examples),
-         * MUST HAVE a Workflow Generic Information "pa.action.icon" with a meaningful Icon
-         */
-        String pcaActionIconValue = this.job.getGenericInformation().get(JOB_ICON_KEY_NAME);
-        assertThat("The wf MUST HAVE a Workflow Generic Information: " + JOB_ICON_KEY_NAME,
-                   pcaActionIconValue,
+        // Check mandatory generic informations
+        String workflowIconValue = this.job.getGenericInformation().get(WORKFLOW_ICON_KEY_NAME);
+        assertThat("The wf MUST HAVE a Workflow Generic Information: " + WORKFLOW_ICON_KEY_NAME,
+                   workflowIconValue,
                    notNullValue());
-        assertThat("The wf MUST HAVE a meaningful Icon in a Workflow Generic Information: " + JOB_ICON_KEY_NAME,
-                   pcaActionIconValue,
+        assertThat("The wf MUST HAVE a meaningful Icon in a Workflow Generic Information: " + WORKFLOW_ICON_KEY_NAME,
+                   workflowIconValue,
                    is(not(emptyString())));
 
         // 2. URL of this icon MUST reference a local file
-        assertThat("URL of the icon " + JOB_ICON_KEY_NAME + " MUST reference a local file",
-                   pcaActionIconValue,
+        assertThat("URL of the icon " + WORKFLOW_ICON_KEY_NAME + " MUST reference a local file",
+                   workflowIconValue,
                    startsWith(ICON_URL_PATH_PREFIX));
 
         // 3. If a workflow has a single task, this task MUST HAVE a Task Generic Information "task.icon" with the same icon as the Workflow
@@ -125,9 +115,9 @@ public class WorkflowsTest {
                        taskIconValue,
                        notNullValue());
             assertThat("The task MUST HAVE a Task Generic Information " + TASK_ICON_KEY_NAME +
-                       " with the same icon as the Workflow: " + JOB_ICON_KEY_NAME,
+                       " with the same icon as the Workflow: " + WORKFLOW_ICON_KEY_NAME,
                        taskIconValue,
-                       equalTo(pcaActionIconValue));
+                       equalTo(workflowIconValue));
 
         }
     }
