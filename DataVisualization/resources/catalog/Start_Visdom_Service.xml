@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Start_Visdom_Service" projectName="Visdom"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="visdom_instance_name" value="visdom-server-1" />
+  </variables>
+  <description>
+    <![CDATA[ Start the Visdom server as a service. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-visualization"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_bind_or_start_visdom_service"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_Visdom_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <variables>
+        <variable name="visdom_service_id" value="Visdom" inherited="false" />
+        <variable name="visdom_instance_name" value="visdom-server-1" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_bind_or_start_visdom_service"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+import io.swagger.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+println(session_id)
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Check existing visdom instances
+def visdom_service_id = variables.get("visdom_service_id") 
+def visdom_instance_name = variables.get("visdom_instance_name")
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances) {
+	if ( (service_instance_data.getServiceId() == visdom_service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      if (service_instance_data.getVariables().get("instance_name") == visdom_instance_name) {
+        instance_exists = true
+        variables.put("visdom_instance_id", service_instance_data.getInstanceId())
+        variables.put("visdom_endpoint", service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue())
+        println(variables.get("visdom_endpoint"))
+        break
+      }
+  	}
+}
+
+if (!instance_exists){
+  // Prepare visdom description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(variables.get("visdom_service_id"))
+  serviceDescription.putVariablesItem("instance_name", variables.get("visdom_instance_name"))
+  
+  // Run visdom
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire visdom Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id  
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire visdom endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  visdom_instance_name = service_instance_data.getVariables().get("instance_name")
+  variables.put("visdom_instance_id", service_instance_data.getInstanceId())
+  variables.put("visdom_endpoint", service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue())
+  println(variables.get("visdom_endpoint"))
+  
+  result = '<meta http-equiv="refresh" content="1; url=' + variables.get("visdom_endpoint") + '" />'
+  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+  resultMetadata.put("content.type", "text/html")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>
