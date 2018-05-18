@@ -1,0 +1,345 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="MongoDB" projectName="3. NoSQL"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="MONGODB_DATABASE" value="" />
+    <variable name="MONGODB_HOSTNAME" value="localhost" />
+    <variable name="MONGODB_PORT" value="27018" model="PA:Integer"/>
+  </variables>
+  <description>
+    <![CDATA[ Import or export data from/to MongoDB. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Export_to_MongoDB">
+      <description>
+        <![CDATA[ This task allows exporting data to MongoDB.
+The task requires the following third-party credentials: MONGODB_USERNAME and MONGODB_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
+It uses the following variables:
+$MONGODB_DATABASE (required) the database to use. It is created if it does not exist
+$MONGODB_COLLECTION (required) the collection to use. It is created if it does not exist
+$MONGODB_INPUT (required) A JSON Object/Array to be inserted in MongoDB. This variable can:
+ - A String describing the JSON Object/Array
+ - A relative path in the data space of a JSON file. ]]>
+      </description>
+      <variables>
+        <variable name="MONGODB_COLLECTION" value="" inherited="false" />
+        <variable name="MONGODB_INPUT" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="$MONGODB_INPUT" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import pandas as pd
+from pymongo import MongoClient
+from bson.json_util import dumps, loads
+import json
+
+def get_input_type(input):
+    """
+    A util for detecting whether the input string is a valid json or a file path/url
+    """
+    if input.startswith(("{", "[")):
+        print("Exporting a JSON String")
+        return loads(input)
+    else:
+        print("Exporting JSON File:{0}".format(input))
+        json_data = open(input, "r").read()
+        return loads(json_data)
+        
+
+def connect_mongo(host, port, username, password, db):
+    """
+    A util for making a connection to mongo
+    """
+
+    if username and password:
+        mongo_uri = 'mongodb://%s:%s@%s:%s/%s' % (username, password, host, port,db)
+        conn = MongoClient(mongo_uri)
+    else:
+        conn = MongoClient(host, port)
+    return conn[db]
+
+def write_mongo(db, collection, inputs, host, port, username, password, no_id=True):
+    """
+    Write to MongoDB from a DataFrame
+    """
+
+    # Connect to MongoDB
+    db = connect_mongo(host=host, port=port, username=username, password=password, db=db)
+    # Point to a Collection to write to
+    cursor = db[collection]
+    # if returns true, then JSON Array
+    if isinstance(inputs, list):
+        inserts = cursor.insert_many(inputs)
+        if len(inserts.inserted_ids) == len(inputs):
+            print("Successfully inserted [{0}/{1}] documents.".format(len(inserts.inserted_ids), len(inputs)))
+            return 'True'
+        else:
+            print("Failed to insert all documents. Only [{0}/{1}] were inserted".format(len(inserts.inserted_ids), len(inputs)))
+            return 'False'
+    elif isinstance(inputs,dict):
+        inserts = cursor.insert_one(inputs)
+        if inserts.inserted_id:
+            print("Successfully inserted 1 documents")
+        else:
+            print("Failed to insert document.")
+
+PORT = 27017
+MODE= 'QUERY'
+
+if variables.get("MONGODB_HOSTNAME"):
+    HOSTNAME = variables.get("MONGODB_HOSTNAME")
+else:
+    print("MONGODB_HOSTNAME not defined by the user.")
+    sys.exit(1)
+if variables.get("MONGODB_PORT"):
+    PORT = int(variables.get("MONGODB_PORT"))
+else:
+    print("MONGODB_PORT not defined by the user. Using the default value:"+PORT)
+if variables.get("MONGODB_DATABASE"):
+    DATABASE = variables.get("MONGODB_DATABASE")
+else:
+    print("MONGODB_DATABASE not defined by the user.")
+    sys.exit(1)
+if variables.get("MONGODB_COLLECTION"):
+    COLLECTION = variables.get("MONGODB_COLLECTION")
+else:
+    print("MONGODB_COLLECTION not defined by the user.")
+    sys.exit(1)
+if credentials.get("MONGODB_USERNAME") is not None and credentials.get("MONGODB_PASSWORD") is not None:
+    MONGODB_USERNAME = credentials.get("MONGODB_USERNAME")
+    MONGODB_PASSWORD=credentials.get("MONGODB_PASSWORD")
+else:
+    print("You first need to add third-party credentials for the database in the scheduler-portal.")
+    sys.exit(1)
+if variables.get("MONGODB_INPUT"):
+    INPUT = get_input_type(variables.get("MONGODB_INPUT"))
+
+print("BEGIN Export Data to mongoDB")
+print("INSERTING DATA IN MONGODB...")
+print('MONGODB_HOSTNAME='+HOSTNAME)
+print('MONGODB_PORT=', PORT)
+print('MONGODB_DATABASE='+DATABASE)
+print('MONGODB_COLLECTION='+COLLECTION)
+    
+# Insert INPUT in mongoDB
+write_mongo(DATABASE, COLLECTION, INPUT, HOSTNAME,  PORT,  MONGODB_USERNAME,  MONGODB_PASSWORD)
+print("END Export Data")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Import_from_MongoDB">
+      <description>
+        <![CDATA[ This task allows importing data from MongoDB.
+The task requires the following third-party credentials: MONGODB_USERNAME and MONGODB_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
+It uses the following variables:
+$MONGODB_DATABASE (required) the database to use. It is created if it does not exist
+$MONGODB_COLLECTION (required) the collection to use. It is created if it does not exist
+$MONGODB_QUERY (optional) A query used to find documents in MongoDB.
+$MONGODB_OUTPUT (optional) is a relative path in the data space used to save the results in a CSV file.
+The output of this task is saved to the local space in a JSON file (result.json) containing a JSON array of the results. It can be aquired in the depending tasks using the result[0] scheme. ]]>
+      </description>
+      <variables>
+        <variable name="MONGODB_COLLECTION" value="" inherited="false" />
+        <variable name="MONGODB_QUERY" value="" inherited="false" />
+        <variable name="MONGODB_OUTPUT" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Export_to_MongoDB"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import pandas as pd
+import json
+from pymongo import MongoClient
+from bson.json_util import dumps, loads
+
+
+PORT = 27017
+MODE= 'QUERY'
+
+if variables.get("MONGODB_HOSTNAME"):
+    HOSTNAME = variables.get("MONGODB_HOSTNAME")
+else:
+    print("MONGODB_HOSTNAME is not defined by the user.")
+    sys.exit(1)
+if variables.get("MONGODB_PORT"):
+    PORT = int(variables.get("MONGODB_PORT"))
+else:
+    print("MONGODB_PORT is not defined by the user. Using the default value:"+PORT)
+if variables.get("MONGODB_DATABASE"):
+    DATABASE = variables.get("MONGODB_DATABASE")
+else:
+    print("MONGODB_DATABASE is not defined by the user.")
+    sys.exit(1)
+if variables.get("MONGODB_COLLECTION"):
+    COLLECTION = variables.get("MONGODB_COLLECTION")
+else:
+    print("MONGODB_COLLECTION is not defined by the user.")
+    sys.exit(1)
+if credentials.get("MONGODB_USERNAME") is not None and credentials.get("MONGODB_PASSWORD") is not None:
+    MONGODB_USERNAME = credentials.get("MONGODB_USERNAME")
+    MONGODB_PASSWORD=credentials.get("MONGODB_PASSWORD")
+else:
+    print("You first need to add third-party credentials for the database in the scheduler-portal.")
+    sys.exit(1)
+if variables.get("MONGODB_QUERY"):
+    # This is a workaround to force the variable string value into json
+    QUERY=loads(variables.get('MONGODB_QUERY'))
+else:
+    print("MONGODB_QUERY is not defined by the user. Fetching all collections")
+    QUERY={}
+if variables.get("MONGODB_OUTPUT"):
+    MONGODB_OUTPUT = variables.get("MONGODB_OUTPUT")
+
+IS_LABELED_DATA = 'False'
+try:
+    LABEL = variables.get("LABEL")
+    if LABEL:
+        IS_LABELED_DATA='True'
+except NameError:
+    pass
+
+def connect_mongo(host, port, username, password, db):
+    """
+    A util for making a connection to mongo
+    """
+
+    if username and password:
+        mongo_uri = 'mongodb://%s:%s@%s:%s/%s' % (username, password, host, port,db)
+        conn = MongoClient(mongo_uri)
+    else:
+        conn = MongoClient(host, port)
+    return conn[db]
+
+
+def read_mongo(db, collection, query, host, port, username, password, no_id=True):
+    """
+    Read from MongoDB and Store into DataFrame
+    """
+
+    # Connect to MongoDB
+    db = connect_mongo(host=host, port=port, username=username, password=password, db=db)
+    # Make a query to the specific DB and Collection
+    cursor = db[collection].find(query)
+
+    # Expand the cursor and deserialize into JSON
+    json_result = dumps(list(cursor))
+
+    return json_result
+
+print("BEGIN Import Data from mongoDB")
+print("EXECUTING QUERY...")
+print('MONGODB_HOSTNAME='+HOSTNAME)
+print('MONGODB_PORT=', PORT)
+print('MONGODB_DATABASE='+DATABASE)
+print('MONGODB_COLLECTION='+COLLECTION)
+print('MONGODB_QUERY='+dumps(QUERY))
+if MONGODB_OUTPUT:
+    print('MONGODB_OUTPUT='+ MONGODB_OUTPUT)
+# Execute search query and return results as JSON String
+json_result = read_mongo(DATABASE, COLLECTION, QUERY, HOSTNAME,  PORT,  MONGODB_USERNAME,  MONGODB_PASSWORD)
+
+if MONGODB_OUTPUT:
+         with open(MONGODB_OUTPUT, 'w') as outfile:
+             json.dump(json_result, outfile)
+
+# Write the results as a bytearray.
+result = json_result.encode('utf-8')
+resultMetadata.put("file.extension", ".json")
+resultMetadata.put("file.name", "result.json")
+resultMetadata.put("content.type", "application/json")
+print("END Import Data")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$MONGODB_OUTPUT" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+  </taskFlow>
+</job>

@@ -4,52 +4,95 @@
 	name="HDFS_delete" projectName="Cloud Automation - Lifecycle" priority="normal"
 	onTaskError="continueJobExecution" maxNumberOfExecution="2">
 	<variables>
-		<variable name="instance_name" value="hdfsContainer" />
+		<variable name="instance_name" value="my-instance" />
 	</variables>
 	<description>
     	<![CDATA[ Delete HDFS instance. ]]>
     </description>
 	<genericInformation>
- 	    <info name="pca.service.id" value="HDFS" />
-	    <info name="pca.action.fromState" value="RUNNING" />
-	    <info name="pca.action.toState" value="FINISHED" />
-	    <info name="pca.action.icon"
-		  value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
+ 	    <info name="pca.service.id" value="HDFS-Spark" />
+		<info name="pca.states" value="(HDFS_DEPLOYED,SWARM_DEPLOYED)"/>
+	    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
 	    <info name="group" value="public-objects" />
 	</genericInformation>
 	<taskFlow>
-		<task name="Delete_Docker_PaaS">
+		<task name="delete_docker_containers">
 			<genericInformation>
 				<info name="task.icon"
 					value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" />
 			</genericInformation>
 			<scriptExecutable>
 				<script>
-					<code language="bash">
+					<code language="groovy">
             <![CDATA[
-docker rm -fv $(docker ps -a -q --filter "name=$variables_instance_name")
+def instance_name = variables.get("instance_name")
+def containers_id = new StringBuilder()
+
+// List the datanode docker containers to remove
+def cmd = ["docker", "ps", "-a", "-q", "--filter", "name=" + instance_name + "-datanode"]
+cmd.execute().waitForProcessOutput(containers_id, System.err)
+
+// Remove them
+cmd = ["docker", "rm", "-fv"] + containers_id.toString().split("\n").toList()
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Remove the namenode docker container
+cmd = ["docker", "rm", "-fv", instance_name + "-namenode"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
 ]]>
 					</code>
 				</script>
 			</scriptExecutable>
 			<controlFlow block="none"></controlFlow>
 		</task>
-		<task name="end_deployment">
+		<task name="update_service_instance">
 			<depends>
-				<task ref="Delete_Docker_PaaS" />
+				<task ref="delete_docker_containers" />
 			</depends>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+					<pathElement path="logging-interceptor-2.7.5.jar"/>
+					<pathElement path="okhttp-2.7.5.jar"/>
+					<pathElement path="okio-1.6.0.jar"/>
+					<pathElement path="gson-2.6.2.jar"/>
+					<pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
 			<scriptExecutable>
 				<script>
-					<code language="python">
+					<code language="groovy">
 						<![CDATA[
-import json
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
 
-instanceOutput = {}
-instanceOutput['instance_status'] = "FINISHED"
-instanceOutput['instance_endpoint'] = ""
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
 
-result = json.dumps(instanceOutput)
-print result
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Update the related service instance status
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("SWARM_DEPLOYED")
+service_instance_data.getInstanceEndpoints().remove("HDFS_UI")
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>

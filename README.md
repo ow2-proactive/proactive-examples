@@ -132,7 +132,7 @@ task zip (type: Zip){
 #  The rules for added workflows
 All the workflows added in proactive-examples project have to follow the next rules:
 
-  . Every single workflow of packages distributed by Activeeon (as all the workflows from proactive-examples), MUST HAVE a Workflow Generic Information "pa.action.icon" with a meaningful Icon
+  . Every single workflow of packages distributed by Activeeon (as all the workflows from proactive-examples), MUST HAVE a Workflow Generic Information "workflow.icon" with a meaningful Icon
   . URL of this icon MUST reference a local file
   . If a workflow has a single task, this task MUST HAVE a Task Generic Information "task.icon" with the same icon as the Workflow
 

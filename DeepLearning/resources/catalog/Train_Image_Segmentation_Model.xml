@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Train_Image_Segmentation_Model" onTaskError="continueJobExecution" priority="normal" projectName="4. Train Model" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+  </variables>
+  <description>
+    <![CDATA[ Train a model using a Segmentation network. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="deep-learning"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
+<info name="Documentation" value=" https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_train_image_segmentation_model"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task name="Train_Image_Segmentation_Model">
+      <description>
+        <![CDATA[ Train a model using a Segmentation network. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="NUM_EPOCHS" value="1"/>
+        <variable inherited="false" name="BATCH_SIZE" value="1"/>
+        <variable inherited="false" name="NUM_WORKERS" value="1"/>
+        <variable inherited="true" name="NUM_CLASSES" value="5"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
+        <info name="task.documentation" value=" https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_train_image_segmentation_model"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Train_Segmentation")
+
+import time
+import os
+import copy
+import uuid
+import json
+import argparse
+import numpy as np 
+from PIL import Image
+ 
+from os.path import join, exists
+from os import remove, listdir, makedirs
+from ast import literal_eval as make_tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.init as init
+import torch.nn.functional as F
+from torch.utils.data import Dataset 
+
+from torch.utils import model_zoo
+from torchvision import models
+  
+from argparse import ArgumentParser
+from torch.optim import SGD, Adam
+from torch.autograd import Variable
+from torch.utils.data import DataLoader
+from torchvision.transforms import ToTensor, ToPILImage, Normalize, Scale
+from torchvision.transforms import Compose
+
+
+NUM_EPOCHS  = 1
+BATCH_SIZE  = 4
+NUM_WORKERS = 2
+SHUFFLE     = True
+NUM_CLASSES = 5
+
+
+if 'variables' in locals():
+  if variables.get("NUM_EPOCHS") is not None:
+    NUM_EPOCHS = int(str(variables.get("NUM_EPOCHS")))
+    NUM_CLASSES = int(str(variables.get("NUM_CLASSES")))
+  DATASET_PATH  = variables.get("DATASET_PATH")
+  NET_MODEL     = variables.get("NET_MODEL")
+  NET_TRANSFORM = variables.get("NET_TRANSFORM")
+  NET_CRITERION = variables.get("NET_CRITERION") 
+  IMG_SIZE = variables.get("IMG_SIZE")
+
+assert DATASET_PATH is not None
+assert NET_MODEL is not None
+assert NET_TRANSFORM is not None
+assert NET_CRITERION is not None
+
+IMG_SIZE = make_tuple(IMG_SIZE)
+IMG_SIZE = tuple(IMG_SIZE)
+
+# Load NET model
+exec(NET_MODEL)
+
+# Load CNN transform
+# data_transforms
+exec(NET_TRANSFORM)
+
+
+# VOC12 DATASET
+EXTENSIONS = ['.jpg', '.png']
+
+def load_image(file):
+    return Image.open(file)
+
+def is_image(filename):
+    return any(filename.endswith(ext) for ext in EXTENSIONS)
+
+def image_path(root, basename, extension):
+    return os.path.join(root, f'{basename}{extension}')
+
+def image_basename(filename):
+    return os.path.basename(os.path.splitext(filename)[0])
+
+class VOC12(Dataset):
+
+    def __init__(self, root, input_transform=None, target_transform=None):
+        self.images_root = os.path.join(root, 'images')
+        self.labels_root = os.path.join(root, 'classes')
+
+        self.filenames = [image_basename(f)
+            for f in os.listdir(self.labels_root) if is_image(f)]
+        self.filenames.sort()
+
+        self.input_transform = input_transform
+        self.target_transform = target_transform
+
+    def __getitem__(self, index):
+        filename = self.filenames[index]
+
+        with open(image_path(self.images_root, filename, '.jpg'), 'rb') as f:
+            image = load_image(f).convert('RGB')
+            image_size = image.size
+        with open(image_path(self.labels_root, filename, '.png'), 'rb') as f:
+            label = load_image(f).convert('P')
+            file_name = image_path(self.labels_root, filename, '.png')
+
+        if self.input_transform is not None:
+            image = self.input_transform(image)
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return image, label, image_size, file_name 
+
+    def __len__(self):
+        return len(self.filenames)
+
+
+# Load train dataset
+DATASET_TRAIN_PATH = join(DATASET_PATH, 'train')
+loader = DataLoader(VOC12(DATASET_TRAIN_PATH, input_transform, target_transform), 
+                    num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
+
+
+# http://pytorch.org/docs/master/cuda.html#torch.cuda.is_available
+# Returns a bool indicating if CUDA is currently available.
+use_gpu = torch.cuda.is_available()
+
+
+if use_gpu:
+  model = model.cuda()
+model.train()
+
+weight = torch.ones(NUM_CLASSES) 
+weight[0] = 0 
+
+# Load NET criterion
+exec(NET_CRITERION)
+
+if use_gpu:
+  criterion = CrossEntropyLoss2d(weight.cuda())
+else:
+  criterion = CrossEntropyLoss2d(weight)   
+  
+# Observe that all parameters are being optimized
+optimizer_ft = SGD(model.parameters(), 1e-3, .9)
+
+
+def train_model(model, criterion, optimizer, num_epochs):
+  since = time.time()   
+  best_model = copy.deepcopy(model.state_dict())
+  best_acc = 0.0
+  for epoch in range(1, NUM_EPOCHS+1):     
+      epoch_loss = []
+     
+      for step, (images, labels, image_size, filename) in enumerate(loader):
+          if use_gpu:
+              images = images.cuda()
+              labels = labels.cuda()
+          inputs = Variable(images)
+          targets = Variable(labels)
+          outputs = model(inputs)  
+
+          optimizer.zero_grad()
+          loss = criterion(outputs, targets[:, 0]) 
+          loss.backward()
+          optimizer.step()   
+          
+          epoch_loss.append(loss.data[0]) 
+          epoch_acc = sum(epoch_loss) / len(epoch_loss)
+  
+          print(f'loss: {epoch_acc} (epoch: {epoch}, step: {step})')
+
+      if epoch_acc > best_acc:
+          best_acc = epoch_acc
+          best_model = copy.deepcopy(model.state_dict())
+  print()        
+       
+  time_elapsed = time.time() - since
+  print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
+  model.load_state_dict(best_model)          
+  return model
+
+# Return the best model
+best_model = train_model(model, criterion, optimizer_ft, num_epochs=NUM_EPOCHS)  
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Create an empty dir
+MODEL_FOLDER = join('models', ID)
+if exists(MODEL_FOLDER):
+  shutil.rmtree(MODEL_FOLDER)
+makedirs(MODEL_FOLDER)
+print("MODEL_FOLDER: " + MODEL_FOLDER)
+
+# Save trained model
+print('Saving trained model...')
+MODEL_PATH = join(MODEL_FOLDER, "model.pt")
+torch.save(best_model, MODEL_PATH)
+
+print("Model information: ")
+print("MODEL_PATH:  " + MODEL_PATH)
+
+if 'variables' in locals():
+  variables.put("MODEL_FOLDER", MODEL_FOLDER)
+  variables.put("MODEL_PATH", MODEL_PATH)
+ 
+
+print("END Train_Segmentation")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="bash">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
+      <outputFiles>
+        <files accessMode="transferToGlobalSpace" includes="$MODEL_FOLDER/**"/>
+      </outputFiles>
+    </task>
+  </taskFlow>
+</job>

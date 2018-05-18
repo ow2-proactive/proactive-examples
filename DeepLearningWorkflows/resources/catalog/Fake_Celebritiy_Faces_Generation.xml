@@ -1,0 +1,553 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Fake_Celebritiy_Faces_Generation" projectName="4. Custom AI workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="NB_IMAGES" value="64" model="PA:Integer"/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow generates a wild diversity of fake faces using a GAN model that was trained based on thousands of real celebrity photos. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="deep-learning-workflows"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/woman_face.png"/>
+    <info name="Documentation" value="https://www.activeeon.com/public_content/documentation/dev/MLOS/MLOSUserGuide.html#_custom_ai_workflows"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Split_Images">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+if 'variables' in locals():
+  NB_IMAGES = int(variables.get("NB_IMAGES"))
+  
+result = []
+for i in range(1,NB_IMAGES+1):
+	img_name = str(i)+".png"
+	result.append(img_name)
+
+
+variables.put("IMAGES_LIST", result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("NB_IMAGES")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="Face_Generator">
+      <description>
+        <![CDATA[ This task will be replicated according to the 'runs' value specified in the replication script. It will generate a different image during each run. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split_Images"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import wget  
+import argparse
+import shutil
+import numpy as np
+import torchvision.utils as vutils
+import urllib.request
+import time
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from os import remove, listdir, makedirs
+from torch.autograd import Variable, grad
+from torch.nn.init import xavier_normal
+from torchvision import datasets, transforms
+from os.path import join, exists
+
+replication = variables.get('PA_TASK_REPLICATION')
+image_path = results[0].value()[replication]
+#result = image_path
+
+#DATA_PATH = '/home/xander/data/img_align_celeba/'
+MODEL_FOLDER = join('models', 'ID')
+if exists(MODEL_FOLDER):
+  shutil.rmtree(MODEL_FOLDER)
+makedirs(MODEL_FOLDER)
+
+resume_file = 'Epoch+018.pt'
+#cuda = torch.cuda.is_available()
+batch_size = 1
+z_dim = 128
+tag_num = 19
+imsize = 128
+start_epoch = 0
+max_epochs = 100000
+lambda_adv = tag_num
+lambda_gp = 0.5
+learning_rate = 0.0002
+
+
+url = "https://s3.eu-west-2.amazonaws.com/activeeon-public/models/Epoch+018.pt"
+request = urllib.request.Request(url)
+
+
+urllib.request.urlretrieve(url, resume_file)  
+
+
+def swish(x):
+    return x * F.sigmoid(x)
+
+class StableBCELoss(nn.modules.Module):
+   def __init__(self):
+         super(StableBCELoss, self).__init__()
+   def forward(self, input, target):
+         neg_abs = - input.abs()
+         loss = input.clamp(min=0) - input * target + (1 + neg_abs.exp()).log()
+         return loss.mean()
+
+class FeatureExtractor(nn.Module):
+    def __init__(self, cnn, feature_layer=11):
+        super(FeatureExtractor, self).__init__()
+        self.features = nn.Sequential(*list(cnn.features.children())[:(feature_layer+1)])
+
+    def forward(self, x):
+        return self.features(x)
+
+class residualBlock(nn.Module):
+    def __init__(self, in_channels=64, k=3, n=64, s=1):
+        super(residualBlock, self).__init__()
+
+        self.conv1 = nn.Conv2d(in_channels, n, k, stride=s, padding=1)
+        self.bn1 = nn.BatchNorm2d(n)
+        self.conv2 = nn.Conv2d(n, n, k, stride=s, padding=1)
+        self.bn2 = nn.BatchNorm2d(n)
+
+        self.ac = nn.ReLU()
+
+    def forward(self, x):
+        y = self.ac(self.bn1(self.conv1(x)))
+        # print y.size()
+        return self.bn2(self.conv2(y)) + x
+
+
+class upsampleBlock(nn.Module):
+    # Implements resize-convolution
+    def __init__(self, in_channels, out_channels):
+        super(upsampleBlock, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, 3, stride=1, padding=1)
+        self.shuffler = nn.PixelShuffle(2)
+        self.bn = nn.BatchNorm2d(in_channels)
+
+        self.ac = nn.ReLU()
+
+    def forward(self, x):
+        return self.ac(self.bn(self.shuffler(self.conv(x))))
+
+
+class ResBlock(nn.Module):
+    def __init__(self, in_channels=64, k=3, n=64, s=1):
+        super(ResBlock, self).__init__()
+
+        self.conv1 = nn.Conv2d(in_channels, n, k, stride=s, padding=1)
+        self.conv2 = nn.Conv2d(n, n, k, stride=s, padding=1)
+
+        self.ac = nn.LeakyReLU()
+
+    def forward(self, x):
+        y = self.ac(self.conv1(x))
+        return self.ac(self.conv2(y) + x)
+
+class DBlock(nn.Module):
+    def __init__(self, n=64, k=3, s=1):
+        super(DBlock, self).__init__()
+
+        self.block1 = ResBlock(n, k, n, s)
+        self.block2 = ResBlock(n, k, n, s)
+
+        self.conv1 = nn.Conv2d(n, 2*n, 4, stride=2, padding=1)
+
+        self.ac = nn.LeakyReLU()
+
+    def forward(self, x):
+        x = self.block1(x)
+        x = self.block2(x)
+        return self.ac(self.conv1(x))
+
+
+# custom weights initialization called on G and D
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        m.weight.data.normal_(0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+
+
+class Generator(nn.Module):
+    def __init__(self, n_residual_blocks=16, upsample_factor=6, tag_num=19):
+        super(Generator, self).__init__()
+        self.n_residual_blocks = n_residual_blocks
+        self.upsample_factor = upsample_factor
+
+        self.dense = nn.Linear(128+tag_num, 64*16*16)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(True)
+
+        for i in range(self.n_residual_blocks):
+            self.add_module('residual_block' + str(i+1), residualBlock())
+
+        self.bn2 = nn.BatchNorm2d(64)
+
+        for i in range(self.upsample_factor//2):
+            self.add_module('upsample' + str(i+1), upsampleBlock(64, 256))
+
+        self.conv3 = nn.Conv2d(64, 3, 9, stride=1, padding=4)
+        self.tanh = nn.Tanh()
+
+    def forward(self, x):
+        x = self.dense(x)
+        x = x.view(-1, 64, 16, 16)
+        x = self.relu(self.bn1(x))
+
+        y = x.clone()
+        for i in range(self.n_residual_blocks):
+            y = self.__getattr__('residual_block' + str(i+1))(y)
+
+        x = self.relu(self.bn2(y)) + x
+
+        for i in range(self.upsample_factor//2):
+            x = self.__getattr__('upsample' + str(i+1))(x)
+
+        return self.tanh(self.conv3(x))
+
+#class Discriminator(nn.Module):
+#    def __init__(self, tag_num=19):
+#        super(Discriminator, self).__init__()
+#        self.conv1 = nn.Conv2d(3, 32, 4, stride=2, padding=1)
+
+#        self.block1 = DBlock(n=32)
+#        self.block2 = DBlock(n=64)
+#        self.block3 = DBlock(n=128)
+#        self.block4 = DBlock(n=256)
+#        self.block5 = DBlock(n=512)
+
+#        self.head1 = nn.Linear(1024*2*2, 1)
+#        self.head2 = nn.Linear(1024*2*2, tag_num)
+
+#        self.ac = nn.LeakyReLU()
+#        self.sigmoid = nn.Sigmoid()
+
+#    def forward(self, x):
+#        x = self.ac(self.conv1(x))
+#        x = self.block1(x)
+#        x = self.block2(x)
+#        x = self.block3(x)
+#        x = self.block4(x)
+#        x = self.block5(x)
+#        x = x.view(x.size()[0], -1)
+
+#        return self.head1(x), self.head2(x) # Use with numerically stable torch.nn.BCEWithLogitsLoss() during training
+        # return self.sigmoid(self.head1(x)), self.sigmoid(self.head2(x))
+generator = Generator()
+generator.apply(weights_init)
+
+#discriminator = Discriminator()
+#discriminator.apply(weights_init)
+
+opt_g = torch.optim.Adam(generator.parameters(), lr=learning_rate, betas=(0.5, 0.999))
+#opt_d = torch.optim.Adam(discriminator.parameters(), lr=learning_rate, betas=(0.5, 0.999))
+
+
+if resume_file:
+    if os.path.isfile(resume_file):
+        print("=> loading checkpoint '{}'".format(resume_file))
+        checkpoint = torch.load(resume_file, map_location={'cuda:0': 'cpu'})
+        start_epoch = checkpoint['epoch']
+        best_loss = checkpoint['loss_g'] + checkpoint['loss_d']
+        generator.load_state_dict(checkpoint['g_state_dict'])
+        #discriminator.load_state_dict(checkpoint['d_state_dict'])
+        opt_g.load_state_dict(checkpoint['g_optimizer'])
+        #opt_d.load_state_dict(checkpoint['d_optimizer'])
+        print("=> loaded checkpoint '{}' (epoch {})"
+              .format(resume_file, checkpoint['epoch']))
+    else:
+        print("=> no checkpoint found at '{}'".format(resume_file))
+
+
+
+#criterion = torch.nn.BCEWithLogitsLoss() # StableBCELoss() #
+#X = Variable(torch.FloatTensor(batch_size, 3, imsize, imsize))
+z = Variable(torch.FloatTensor(batch_size, z_dim))
+tags = Variable(torch.FloatTensor(batch_size, tag_num))
+#labels = Variable(torch.FloatTensor(batch_size))
+
+z.data.normal_(0, 1)
+tags.data.uniform_(to=1)
+rep = torch.cat((z, tags.clone()), 1)
+    
+fake = generator(rep)
+    
+IMAGE_FOLDER = "face_images"
+if exists(IMAGE_FOLDER):
+  shutil.rmtree(IMAGE_FOLDER)
+makedirs(IMAGE_FOLDER)
+IMAGE_PATH = join(IMAGE_FOLDER, image_path)
+
+vutils.save_image(fake.data.view(batch_size, 3, imsize, imsize),IMAGE_PATH)
+
+#image_path = 'fake_samples_epoch.png'
+
+with open(IMAGE_PATH, "rb") as binary_file:
+    FILE_BIN = binary_file.read()
+
+result = FILE_BIN
+resultMetadata.put("file.name", "output_image.png")
+resultMetadata.put("content.type", "image/png")
+
+if 'variables' in locals():
+  variables.put("IMAGE_FOLDER", IMAGE_FOLDER)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="$IMAGE_FOLDER/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="Export_Images">
+      <description>
+        <![CDATA[ As a merge operation, we simply compress the different images generated by previous tasks. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Face_Generator"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$IMAGE_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import os
+import zipfile
+import shutil
+
+if 'variables' in locals():
+	IMAGE_FOLDER   = variables.get("IMAGE_FOLDER")
+    
+shutil.make_archive("images", 'zip', IMAGE_FOLDER)
+
+
+with open("images.zip", "rb") as binary_file:
+    FILE_BIN = binary_file.read()
+assert FILE_BIN is not None
+result = FILE_BIN
+
+if 'variables' in locals():
+	resultMetadata.put("file.extension", ".zip")
+	resultMetadata.put("file.name", "images.zip")
+	resultMetadata.put("content.type", "application/octet-stream")
+	print("END Export_Images")
+else:
+	print("It is not possible to export the images")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Visualize_Images">
+      <description>
+        <![CDATA[ As a merge operation, we simply visualize the different images generated by previous tasks. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Face_Generator"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$IMAGE_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import os
+from PIL import Image
+from torchvision.utils import make_grid
+import torch
+import torchvision.transforms as transforms
+import numpy as np
+
+if 'variables' in locals():
+	IMAGE_FOLDER   = variables.get("IMAGE_FOLDER")
+	IMAGES_LIST   = variables.get("IMAGES_LIST")
+    
+list_images = []
+for i in range(len(IMAGES_LIST)):
+	x = Image.open(os.path.join(IMAGE_FOLDER, IMAGES_LIST[i]))
+	try:
+		image = np.asarray( x, dtype='uint8' )
+	except SystemError:
+		image = np.asarray( x.getdata(), dtype='uint8' )
+	im = transforms.ToTensor()(image)
+	list_images.append(im)
+    
+grid = make_grid(list_images,padding=10)
+ndarr = grid.mul(255).clamp(0, 255).byte().permute(1, 2, 0).cpu().numpy()
+im = Image.fromarray(ndarr)
+im.save("image.png")
+
+with open("image.png", "rb") as binary_file:
+    FILE_BIN = binary_file.read()
+assert FILE_BIN is not None
+result = FILE_BIN
+if 'variables' in locals():
+	resultMetadata.put("file.extension", ".png")
+	resultMetadata.put("content.type", "image/png")
+	print("END Visualize_Images")
+else:
+	print("It is not possible to visualize the images")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>

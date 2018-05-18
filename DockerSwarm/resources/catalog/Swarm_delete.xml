@@ -5,68 +5,101 @@
 	priority="normal" onTaskError="continueJobExecution"
 	maxNumberOfExecution="2">
 	<variables>
-		<variable name="instance_name" value="try.activeeon.com" />
+		<variable name="instance_name" value="my-instance" />
+		<variable name="network_name" value="my-net" />
 	</variables>
 	<description>
     	<![CDATA[ . ]]>
     </description>
     <genericInformation>
-        <info name="pca.service.id" value="Swarm" />
-	<info name="pca.action.fromState" value="RUNNING" />
-	<info name="pca.action.toState" value="FINISHED" />
-	<info name="pca.action.icon"
-	      value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png" />
-	<info name="group" value="public-objects" />
-    </genericInformation>
+      	<info name="pca.service.id" value="HDFS-Spark"/>
+		<info name="pca.states" value="(SWARM_DEPLOYED,PA_NODES_RESERVED)"/>
+		<info name="Documentation" value="http://activeeon.com/resources/activeeon-deploy-swarm-hdfs-spark.pdf" />
+		<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png" />
+		<info name="group" value="public-objects" />
+
+	</genericInformation>
 	<taskFlow>
-		<task name="Delete_Docker_PaaS">
+		<task name="delete_swarm">
 			<genericInformation>
 				<info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png"/>
 			</genericInformation>
 			<scriptExecutable>
 				<script>
-					<code language="bash">
+					<code language="groovy">
             <![CDATA[
-nameMachine=$variables_instance_name
+def instance_name = variables.get("instance_name")
+def network_name = variables.get("network_name")
+def containers_id = new StringBuilder()
 
-eval "$(docker-machine env ${nameMachine}-swarm-master)"
-docker rm -f swarm-agent-master
-docker rm -f swarm-agent
+// List the swarm docker containers to remove
+def cmd = ["docker", "ps", "-a", "-q", "--filter", "name=" + instance_name + "-swarm"]
+cmd.execute().waitForProcessOutput(containers_id, System.err)
 
-for x in `docker-machine ls --filter "name=^.*${nameMachine}-swarm-node-.*$" --format "{{.Name}}"`
-do
-	eval "$(docker-machine env $x)"
-	docker rm -f swarm-agent
-done
+// Remove them
+cmd = ["docker", "rm", "-fv"] + containers_id.toString().split("\n").toList()
+cmd.execute().waitForProcessOutput(System.out, System.err)
 
-eval "$(docker-machine env ${nameMachine}-consul-machine)"
-docker rm -f ${nameMachine}-swarm-consul
+// Remove the consul docker container
+cmd = ["docker", "rm", "-fv", instance_name + "-consul"]
+cmd.execute().waitForProcessOutput(System.out, System.err)
 
-for x in `docker-machine ls --filter "name=^.*${nameMachine}.*$" --format "{{.Name}}"`
-do
-	docker-machine rm -y -f $x
-done
+// Remove the overlay network
+cmd = ["docker", "network", "rm", network_name]
+cmd.execute().waitForProcessOutput(System.out, System.err)
 ]]>
 					</code>
 				</script>
 			</scriptExecutable>
 		</task>
-		<task name="end_deployment">
+		<task name="update_servince_instance">
 			<depends>
-				<task ref="Delete_Docker_PaaS" />
+				<task ref="delete_swarm" />
 			</depends>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="logging-interceptor-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okhttp-2.7.5.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="okio-1.6.0.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="gson-2.6.2.jar" accessMode="transferFromGlobalSpace"/>
+				<files  includes="spring-web-4.2.5.RELEASE.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+					<pathElement path="logging-interceptor-2.7.5.jar"/>
+					<pathElement path="okhttp-2.7.5.jar"/>
+					<pathElement path="okio-1.6.0.jar"/>
+					<pathElement path="gson-2.6.2.jar"/>
+					<pathElement path="spring-web-4.2.5.RELEASE.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
 			<scriptExecutable>
 				<script>
-					<code language="python">
+					<code language="groovy">
 						<![CDATA[
-import json
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
 
-instanceOutput = {}
-instanceOutput['instance_status'] = "FINISHED"
-instanceOutput['instance_endpoint'] = ""
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
 
-result = json.dumps(instanceOutput)
-print result
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Update the related service instance
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("PA_NODES_RESERVED")
+service_instance_data.getInstanceEndpoints().remove("consul_UI")
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>

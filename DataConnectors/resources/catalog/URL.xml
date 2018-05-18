@@ -6,48 +6,184 @@
     name="URL" projectName="1. File"
     priority="normal"
     onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
-  <variables>
-    <variable name="HOSTNAME" value="" />
-  </variables>
+     maxNumberOfExecution="2"
+>
   <description>
-    <![CDATA[ Import file(s) from the given URL ]]>
+    <![CDATA[ Import files from a given URL using HTTP, HTTPS, or FILE protocols. ]]>
   </description>
   <genericInformation>
-    <info name="pca.action.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/url_import.png"/>
-    <info name="Documentation" value="doc.activeeon.com/latest/"/>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/url_import.png"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_file"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="import_from_url">
+    <task name="url-connector">
       <description>
-        <![CDATA[ Import files from a given URL using HTTP, HTTPS, or FILE protocols.
-If $EXTRACT_ARCHIVE is True, the imported file will be extracted if it is an archive. ]]>
+        <![CDATA[ $FILE_URL (required)  Link to a file accessible using HTTP, HTTPS, SFTP or FTP protocols.
+FTP and SFTP urls must have the following patterns:
+FTP url ftp://<username>:<password>@<hostname>:<port>/<relativePath>
+SFTP url sftp://<username>@<hostname>[:<port>][/<relativePath>]
+$LOCAL_RELATIVE_PATH relative path in the dataspace to which we download file(s).
+$EXTRACT_ARCHIVE is a boolean. If set to true, the imported file will be extracted if it is an archive. ]]>
       </description>
       <variables>
-        <variable name="EXTRACT_ARCHIVE" value="False" inherited="false" model="PA:Boolean"/>
+        <variable name="EXTRACT_ARCHIVE" value="false" inherited="false" model="PA:Boolean"/>
+        <variable name="FILE_URL" value="" inherited="false" />
+        <variable name="LOCAL_RELATIVE_PATH" value="" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/url_import.png"/>
-        <info name="Documentation" value="doc.activeeon.com/latest/"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_file"/>
       </genericInformation>
-      <pre>
-        <script>
-          <code language="bash">
-            <![CDATA[
-
-]]>
-          </code>
-        </script>
-      </pre>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
+import java.io.IOException;
+import java.io.FileOutputStream;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.io.File;
+import java.util.Map;
+import java.util.HashMap;
+import java.nio.file.Paths;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
 
+SCHEME_LIST = ["HTTP", "HTTPS", "FTP", "SFTP"];
+
+schedulerapi.connect();
+//Default value is getLocalSpace() because it will always be writable and moreover can be used to transfer files to another data space (global, user)
+LOCAL_RELATIVE_PATH = schedulerapi.getLocalSpace();
+
+if (!variables.get("LOCAL_RELATIVE_PATH").isEmpty()) {
+    LOCAL_RELATIVE_PATH = variables.get("LOCAL_RELATIVE_PATH");
+}
+if (!variables.get("FILE_URL").isEmpty()) {
+    FILE_URL = variables.get("FILE_URL");
+} else {
+    throw new IllegalArgumentException("You have to specify a valid URL. Empty value is not allowed.");
+}
+
+EXTRACT_ARCHIVE = Boolean.parseBoolean(variables.get("EXTRACT_ARCHIVE"));
+
+String scheme = getScheme(FILE_URL);
+URI uri = new URI(FILE_URL);
+switch (scheme.toUpperCase()) {
+    case "HTTP":
+    case "HTTPS":
+    System.out.println("HTTP(S) Url detected. Downloading file from " + FILE_URL);
+    try {
+        String savePath = Paths.get(LOCAL_RELATIVE_PATH, new File(uri.getPath()).getName()).toString();
+        downloadUsingNIO(FILE_URL, savePath);
+      	System.out.println("file DOWNLOADED successfully to: " + savePath);
+      	if (EXTRACT_ARCHIVE && savePath.endsWith(".zip")){
+      	    extractArchive(savePath, LOCAL_RELATIVE_PATH);
+      	}
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    break;
+
+    //FTP url ftp://<username>:<password>@<hostname>:[<port>]/<relativePath>
+    case "FTP":
+        System.out.println("FTP Url detected. Launching the FTP-connector.");
+        Map<String, String> jobVariables= new HashMap();
+    	String password = getPassword(uri);
+    	String username = getUsername(uri);
+    	if(password != null && username != null){
+            ftpUrlKey = "ftp://" + username + "@" + uri.getHost();
+            schedulerapi.putThirdPartyCredential(ftpUrlKey, password);
+        }
+        jobVariables.put("FTP_LOCAL_RELATIVE_PATH", LOCAL_RELATIVE_PATH);
+        jobVariables.put("FTP_EXTRACT_ARCHIVE", EXTRACT_ARCHIVE);
+        String remotePath = uri.getPath().startsWith("/") ? uri.getPath().substring(1): uri.getPath();
+        jobVariables.put("FTP_REMOTE_RELATIVE_PATH",  remotePath);
+        jobVariables.put("FTP_PORT",  uri.getPort()>-1?uri.getPort():21);
+    	jobVariables.put("FTP_HOSTNAME",  uri.getHost());
+    	jobVariables.put("FTP_USERNAME",  username);
+        schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"),"data-connectors","FTP", jobVariables);
+        System.out.println("Submitting the FTP workflow from the Catalog");
+    break;
+
+    //SFTP url sftp://<username>[:<password>]@<hostname>[:<port>]/<relativePath>
+    case "SFTP":
+        System.out.println("SFTP Url detected. Launching the SFTP-connector.");
+        String password = getPassword(uri);
+    	String username = getUsername(uri);
+        if(username == null){
+            throw new IllegalArgumentException("You have to specify a username to access SFTP server.");
+        }
+    	if(password != null && username != null){
+            sftpUrlKey = "sftp://" + username + "@" + uri.getHost();
+            schedulerapi.putThirdPartyCredential(sftpUrlKey, password);
+        }
+        Map<String, String> jobVariables= new HashMap();
+        jobVariables.put("SFTP_LOCAL_RELATIVE_PATH", LOCAL_RELATIVE_PATH);
+        jobVariables.put("SFTP_EXTRACT_ARCHIVE", EXTRACT_ARCHIVE);
+        String remotePath = uri.getPath().startsWith("/") ? uri.getPath().substring(1): uri.getPath();
+        jobVariables.put("SFTP_REMOTE_RELATIVE_PATH",  remotePath);
+        jobVariables.put("SFTP_HOSTNAME",  uri.getHost());
+        jobVariables.put("SFTP_PORT",  uri.getPort()>-1?uri.getPort():22);
+        jobVariables.put("SFTP_USERNAME",  username);
+        schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"),"data-connectors","SFTP",jobVariables);
+        System.out.println("Submitting the SFTP workflow from the Catalog");
+
+}
+
+def getScheme(String fileUrl) throws URISyntaxException, MalformedURLException {
+    URI uri = new URI(fileUrl);
+    String scheme =  uri.getScheme();
+    if(!SCHEME_LIST.contains(scheme.toUpperCase())) {
+        throw new MalformedURLException("Error: not recognized URL scheme. Scheme has to be http, https, ftp or sftp.");
+    }
+    return scheme;
+}
+
+void downloadUsingNIO(String urlStr, String file) throws IOException {
+    URL url = new URL(urlStr);
+    File parentDir = new File(file).getParentFile();
+    if (parentDir != null && !parentDir.exists()) {
+        parentDir.mkdirs();
+    }
+    ReadableByteChannel rbc = Channels.newChannel(url.openStream());
+    FileOutputStream fos = new FileOutputStream(file);
+    fos.getChannel().transferFrom(rbc, 0, Long.MAX_VALUE);
+    fos.close();
+    rbc.close();
+}
+
+def getPassword(URI uri) {
+    String userInfo = uri.getUserInfo();
+    if (userInfo != null && userInfo.split(":", 2).length > 1) {
+        return userInfo.split(":", 2)[1];
+    }
+    return null;
+}
+
+def getUsername(URI uri) {
+    String userInfo = uri.getUserInfo();
+    if (userInfo != null && userInfo.split(":", 2).length > 0) {
+        return userInfo.split(":", 2)[0];
+    }
+    return null;
+}
+
+void extractArchive(String localFilePath, String sftpLocalRelativePath) {
+    System.out.println("Decompressing archive: " + localFilePath);
+    ZipUtil.unpack(new File(localFilePath), new File(sftpLocalRelativePath));
+    System.out.println("Archive decompressed successfully at: " + sftpLocalRelativePath);
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <outputFiles>
+        <files  includes="$LOCAL_RELATIVE_PATH**" accessMode="transferToGlobalSpace"/>
+        <files  includes="$LOCAL_RELATIVE_PATH/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
     </task>
   </taskFlow>
 </job>

@@ -1,48 +1,101 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<job xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:proactive:jobdescriptor:3.8"
-	xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
-	name="Zookeeper" projectName="Cloud Automation - Deployment" priority="normal"
-	onTaskError="pauseJob" maxNumberOfExecution="2">
-	<variables>
-		<variable name="instance_name" value="zookeeper-server-1" />
-	</variables>
-	<description>
-    	<![CDATA[ Deployment of the Zookeeper server. ]]>
-    </description>
-    <genericInformation>
-        <info name="pca.service.id" value="Zookeeper" />
-	<info name="pca.action.fromState" value="VOID" />
-	<info name="pca.action.toState" value="RUNNING" />
-	<info name="pca.action.icon"
-	      value="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg" />
-	<info name="group" value="public-objects" />
-	</genericInformation>
-	<taskFlow>
-		<task name="end_deployment">
-			<depends>
-				<task ref="start_zookeeper" />
-			</depends>
-			<scriptExecutable>
-				<script>
-					<code language="javascript">
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Zookeeper" projectName="Cloud Automation - Deployment"
+    priority="normal"
+    onTaskError="pauseJob"
+     maxNumberOfExecution="2">
+
+  <variables>
+    <variable name="instance_name" value="zookeeper-server-1" />
+  </variables>
+  <description>
+    <![CDATA[ Deployment of the Zookeeper server. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="cloud-automation"/>
+    <info name="group" value="public-objects"/>
+    <info name="pca.service.id" value="Zookeeper"/>
+    <info name="pca.states" value="(VOID,RUNNING)"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Update_Service_Instance">
+      <description>
+        <![CDATA[ Update service instance data ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Zookeeper"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
             <![CDATA[
-var resultObj={}
-resultObj.instance_id=variables.get("instance_name")
-resultObj.instance_status="RUNNING"
-resultObj.instance_endpoint=variables.get("endpoint")
-result = JSON.stringify(resultObj);
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Acquire service instance id
+def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
+println(service_instance_id)
+
+// Set service instance status to running
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("RUNNING")
+
+// Set service instance status endpoint
+HashMap<String, String> endpoints = new HashMap<String, String>()
+service_instance_data = service_instance_data.putInstanceEndpointsItem(variables.get("instance_name"),variables.get("endpoint"))
+
+// Update service instance data
+service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id,service_instance_data)
+
+// Inform other platforms (like Kafka) that Zookeeper is running
+channel = "Service_Instance_" + service_instance_id  
+synchronizationapi.createChannelIfAbsent(channel, false)
+synchronizationapi.put(channel,"RUNNING",true)
+
+def instance_name = service_instance_data.getVariables().get("instance_name")
+synchronizationapi.put(channel,"INSTANCE_NAME",instance_name)
 ]]>
-					</code>
-				</script>
-			</scriptExecutable>
-		</task>
-		<task name="start_zookeeper">
-			<description>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Start_Zookeeper">
+      <description>
         <![CDATA[ Pull Zookeeper image and start a container ]]>
       </description>
-			<scriptExecutable>
-				<script>
-					<code language="bash">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
             <![CDATA[
 printf "Pulling Apache Zookeeper image \n"
 docker pull zookeeper
@@ -76,12 +129,12 @@ echo "$port" > $CONTAINER"_port"
 
 # Endpoint added to the job variables using a groovy post-script
 ]]>
-					</code>
-				</script>
-			</scriptExecutable>
-			<post>
-				<script>
-					<code language="groovy">
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
             <![CDATA[
 def PA_SCHEDULER_REST_URL = variables.get('PA_SCHEDULER_REST_URL')
 def hostname = new URL(PA_SCHEDULER_REST_URL).getHost()
@@ -92,9 +145,92 @@ println endpoint
 
 variables.put("endpoint", endpoint)
 ]]>
-					</code>
-				</script>
-			</post>
-		</task>
-	</taskFlow>
+          </code>
+        </script>
+      </post>
+    </task>
+    <task name="Loop_Over_Instance_Status">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg"/>
+      </genericInformation>
+      <depends>
+        <task ref="Update_Service_Instance"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service");
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Acquire service instance id
+def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
+println(service_instance_id)
+
+// Construct synchro channel
+channel = "Service_Instance_" + service_instance_id  
+//synchronizationapi.createChannelIfAbsent(channel, false)
+
+// Delete service instance from database is set to false
+synchronizationapi.put(channel,"DELETE_LAUNCHED",false) 
+synchronizationapi.put(channel,"DELETE_INSTANCE",false) 
+
+// Loop over service instance status
+def current_status = "RUNNING"
+def container = variables.get("instance_name")
+		
+while(current_status=="RUNNING") {
+  sleep(30000);
+  
+  // Check docker container status 
+  def ByteArrayOutputStream sout = new ByteArrayOutputStream();
+  def ByteArrayOutputStream serr = new ByteArrayOutputStream();
+  def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${container}"].execute().waitForProcessOutput(sout, serr)
+  def container_running = new String(sout.toByteArray()).trim()
+  
+  if ((container_running!="true") && (synchronizationapi.get(channel,"DELETE_LAUNCHED") ==  false)){
+    
+          current_status = 'ERROR'
+          
+          // Update docker container is not running
+          def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+          service_instance_data.setInstanceStatus(current_status)
+          service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id,service_instance_data)
+      
+          break    
+  }
+  
+  // Check service instance status
+  current_status = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id).getInstanceStatus() 
+  
+  println "$current_status"
+}
+
+// Allow the Delete workflow to be fulfilled
+synchronizationapi.put(channel,"DELETE_INSTANCE",true)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
 </job>
