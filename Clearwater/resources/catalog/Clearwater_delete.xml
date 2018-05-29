@@ -1,61 +1,73 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:proactive:jobdescriptor:3.8"
 	xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
-	name="ClearWaterDeleteDocker" projectName="Cloud Automation - Lifecycle"
+	name="Clearwater_delete" projectName="Cloud Automation - Lifecycle"
 	priority="normal" onTaskError="continueJobExecution"
 	maxNumberOfExecution="2">
-	<variables>
-		<variable name="instance_name" value="Clearwater" />
-	</variables>
 	<description>
     <![CDATA[ Delete Clearwater instance. ]]>
     </description>
     <genericInformation>
-      	  <info name="pca.service.id" value="Clearwater" />
-	  <info name="pca.action.fromState" value="RUNNING" />
-	  <info name="pca.action.toState" value="FINISHED" />
-	  <info name="workflow.icon"
-		value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png" />
-	  <info name="group" value="public-objects" />
+		<info name="group" value="public-objects"/>
+		<info name="pca.service.id" value="Clearwater"/>
+		<info name="pca.states" value="(RUNNING,FINISHED)(ERROR,FINISHED)"/>
+		<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png"/>
 	</genericInformation>
 	<taskFlow>
-		<task name="delete_docker">
-			<description>
-        <![CDATA[ The simplest task, ran by a bash engine. ]]>
-      </description>
+		<task name="delete_clearwater_and_update_servince_instance">
 			<genericInformation>
 				<info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png"/>
 			</genericInformation>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.1.0.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.1.0.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
 			<scriptExecutable>
 				<script>
-					<code language="bash">
+					<code language="groovy">
             <![CDATA[
-docker rm -fv $(docker ps -a -q --filter "name=^[^\w\s]\d*_$variables_instance_name(bono|sprout|ellis|homestead|homer|ralf)_\d$")
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Get some service infos for the deletion
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+def instance_name = service_instance_data.getVariables().get("instance_name")
+
+// List the clearwater docker containers to remove
+def containers_id = new StringBuilder()
+def cmd = ["docker", "ps", "-a", "-q", "--filter", "name=" + instance_name]
+cmd.execute().waitForProcessOutput(containers_id, System.err)
+
+// Remove them
+cmd = ["docker", "rm", "-fv"] + containers_id.toString().split("\n").toList()
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Update the related service instance infos
+service_instance_data.setInstanceStatus("FINISHED")
+service_instance_data.getInstanceEndpoints().remove("clearwater_endpoint")
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>
 			</scriptExecutable>
 		</task>
-		<task name="end_deployment">
-			<depends>
-				<task ref="delete_docker" />
-			</depends>
-			<scriptExecutable>
-				<script>
-					<code language="python">
-						<![CDATA[
-import json
 
-instanceOutput = {}
-instanceOutput['instance_status'] = "FINISHED"
-instanceOutput['instance_endpoint'] = ""
-
-result = json.dumps(instanceOutput)
-print result
-]]>
-					</code>
-				</script>
-			</scriptExecutable>
-		</task>
 	</taskFlow>
 </job>
