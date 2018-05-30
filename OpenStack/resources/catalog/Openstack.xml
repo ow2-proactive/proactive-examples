@@ -6,8 +6,7 @@
 	<variables>
 		<variable name="infrastructure_name" value="PrivateCloud" model="PA:LIST(PrivateCloud)" />
 		<variable name="instance_name" value="instance_name" />
-		<variable name="instance_image"
-			value="5126265f-e10a-451f-b38c-eebe54b637eb" model="PA:LIST(5126265f-e10a-451f-b38c-eebe54b637eb,76355549-f36b-4052-a10d-d92addf72ee1)" />
+		<variable name="instance_image" value="5126265f-e10a-451f-b38c-eebe54b637eb" model="PA:LIST(5126265f-e10a-451f-b38c-eebe54b637eb,76355549-f36b-4052-a10d-d92addf72ee1)" />
 		<variable name="instance_flavor" value="1" />
 		<variable name="instance_key" value="activeeon" model="PA:LIST(activeeon)" />
 	</variables>
@@ -15,18 +14,13 @@
     <![CDATA[ A workflow that creates an openstack instance ]]>
   </description>
 	<genericInformation>
-	    <info name="pca.service.id" value="Openstack" />
-	    <info name="pca.action.fromState" value="VOID" />
-	    <info name="pca.action.toState" value="RUNNING" />
-	    <info name="workflow.icon"
-		  value="/automation-dashboard/styles/patterns/img/wf-icons/openstack.png" />
-	    <info name="group" value="public-objects" />
+		<info name="group" value="public-objects"/>
+		<info name="pca.service.id" value="Openstack"/>
+		<info name="pca.states" value="(VOID,RUNNING)"/>
+		<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/openstack.png"/>
 	</genericInformation>
 	<taskFlow>
 		<task name="create_instance">
-			<description>
-        <![CDATA[ The simplest task, ran by a python engine. ]]>
-      </description>
 			<scriptExecutable>
 				<script>
 					<code language="python">
@@ -118,7 +112,7 @@ if(variables.get("STATUS") == 'BUILD'){
 				</loop>
 			</controlFlow>
 		</task>
-		<task name="end_deployment">
+		<task name="get_openstack_instance_infos">
 			<depends>
 				<task ref="check_status" />
 			</depends>
@@ -131,16 +125,57 @@ import subprocess
 import sys
   
 instance =  json.loads(variables.get('INSTANCE_JSON'))
+variables.put('openstack_instance_id', instance['id'])
+variables.put('openstack_instance_status', instance['status'])
+variables.put('openstack_instance_endpoint', instance['network']['privateAddresses'][0])
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+		</task>
+		<task name="update_service_instance">
+			<depends>
+				<task ref="get_openstack_instance_infos" />
+			</depends>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
+			<scriptExecutable>
+				<script>
+					<code language="groovy">
+						<![CDATA[
+org.ow2.proactive.pca.service.client.ApiClient
+org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def openstack_instance_id = variables.get("openstack_instance_id")
+def openstack_instance_status = variables.get("openstack_instance_status")
+def openstack_instance_endpoint = variables.get("openstack_instance_endpoint")
 
-instanceOutput = {}
-instanceOutput['instance_id'] = instance['id']
-instanceOutput['instance_status'] = instance['status']
-instanceOutput['instance_endpoint'] = instance['network']['privateAddresses'][0]
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
 
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
 
-result = json.dumps(instanceOutput)
-print result
+// Update the related service infos
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("RUNNING")
+service_instance_data.getVariables().put("openstack_instance_id", openstack_instance_id)
+service_instance_data.getVariables().put("openstack_instance_status", openstack_instance_status)
+service_instance_data.getInstanceEndpoints().put("openstack_instance_endpoint", openstack_instance_endpoint)
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>
