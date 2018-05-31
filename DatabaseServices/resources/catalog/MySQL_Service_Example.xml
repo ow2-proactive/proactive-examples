@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="MySQL_Service_Example" projectName="MySQL Workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="MYSQL_DATABASE" value="" />
+    <variable name="MYSQL_INSTANCE_NAME" value="mysql-server-1" />
+    <variable name="MYSQL_USER" value="" />
+  </variables>
+  <description>
+    <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies.
+Here, any MySQLTask needs MySQL service.
+First, a bind_or_start_service task (Examples/5. Cloud Automation Task Templates), specifies the service we want to start, and an instance name, which is inherited by a job variable.
+Thus, MySQLTask can use a "endpoint" variable where service is running. Everything is handled by the previous bind_or_start_service task.
+You can share MySQL service reusing the same instance name. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="database-services"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+    <info name="group" value="admin"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_MySQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the MySQL server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="MYSQL_SERVICE_ID" value="MySQL" inherited="false" />
+        <variable name="MYSQL_INSTANCE_NAME" value="mysql-server-1" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_MySQL_Service ---")
+
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+import io.swagger.client.model.ServiceDescription
+http://localhost:8080/studio/#
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def service_id = variables.get("MYSQL_SERVICE_ID")
+def instance_name = variables.get("MYSQL_INSTANCE_NAME")
+def user = variables.get("MYSQL_USER")
+def database = variables.get("MYSQL_DATABASE")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+println("*_user: " + user)
+println("*_database: " + database)
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances) {
+	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      if (service_instance_data.getVariables().get("MYSQL_INSTANCE_NAME") == instance_name) {
+        instance_exists = true
+        instance_id = service_instance_data.getInstanceId()
+  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("*_instance_id: " + instance_id)
+        println("*_endpoint:    " + endpoint)
+        variables.put("mysql_instance_id", instance_id)
+        variables.put("mysql_endpoint", endpoint)
+        break
+      }
+  	}
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists){
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id) 
+  serviceDescription.putVariablesItem("MYSQL_INSTANCE_NAME_CL", instance_name)
+  serviceDescription.putVariablesItem("MYSQL_USER_CL", user)
+  serviceDescription.putVariablesItem("MYSQL_DATABASE_CL", database)
+  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  instance_name = service_instance_data.getVariables().get("MYSQL_INSTANCE_NAME")
+  instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("MYSQL_INSTANCE_ID", instance_id)
+  variables.put("mysql_endpoint", endpoint)
+  
+  result = '<meta http-equiv="refresh" content="1; url=' + endpoint + '" />'
+  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+  resultMetadata.put("content.type", "text/html")
+}
+
+println("--- END Start_MySQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Stop_MySQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Stop the MySQL service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_MySQL_Service"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Stop_MySQL_Service ---")
+
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+import io.swagger.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+//println("*_instance_id: " + variables.get("MYSQL_INSTANCE_ID"))
+instance_id = (int) variables.get("MYSQL_INSTANCE_ID")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Stop service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Stop_MySQL")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Stop_MySQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Finish_MySQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Finish the MySQL service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Stop_MySQL_Service"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.1.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.1.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Finish_MySQL_Service ---")
+
+import io.swagger.client.ApiClient
+import io.swagger.client.api.ServiceInstanceRestApi
+import io.swagger.client.model.ServiceInstanceData
+import io.swagger.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+instance_id = (int) variables.get("MYSQL_INSTANCE_ID")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Finish service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Finish_MySQL")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Finish_MySQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>
