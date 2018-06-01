@@ -1,36 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<job xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:proactive:jobdescriptor:3.8"
-	xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
-	name="Clearwater" projectName="Cloud Automation - Deployment" priority="normal"
-	onTaskError="continueJobExecution" maxNumberOfExecution="2">
+<job
+		xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		xmlns="urn:proactive:jobdescriptor:3.10"
+		xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+		name="Clearwater" projectName="Cloud Automation - Deployment"
+		priority="normal"
+		onTaskError="continueJobExecution"
+		maxNumberOfExecution="2"
+>
 	<variables>
-		<variable name="instance_name" value="Clearwater" />
-		<variable name="host_name" value="try.activeeon.com" />
 		<variable name="dashboard_port" value="9000" />
+		<variable name="instance_name" value="Clearwater" />
 	</variables>
 	<description>
-    <![CDATA[ A workflow that creates a Clearwater instance on Docker ]]>
-  </description>
+		<![CDATA[ A workflow that creates a Clearwater instance on Docker ]]>
+	</description>
 	<genericInformation>
-		<info name="pca.service.id" value="Clearwater" />
-		<info name="pca.action.fromState" value="VOID" />
-		<info name="pca.action.toState" value="RUNNING" />
-		<info name="workflow.icon"
-		      value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png" />
-		<info name="group" value="public-objects" />
+		<info name="bucketName" value="cloud-automation"/>
+		<info name="group" value="public-objects"/>
+		<info name="pca.service.id" value="Clearwater"/>
+		<info name="pca.states" value="(VOID,RUNNING)"/>
+		<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png"/>
 	</genericInformation>
 	<taskFlow>
+		<task name="clean_first">
+			<scriptExecutable>
+				<script>
+					<code language="bash">
+						<![CDATA[
+docker ps -a | awk '{ print $1,$2 }' | grep martinacti | awk '{print $1 }' | xargs -I {} docker rm -f {}
+]]>
+					</code>
+				</script>
+			</scriptExecutable>
+		</task>
 		<task name="ssshtask">
-			<description>
-        <![CDATA[ The simplest task, ran by a bash engine. ]]>
-      </description>
 			<depends>
-				<task ref="clean_first" />
+				<task ref="clean_first"/>
 			</depends>
 			<scriptExecutable>
 				<script>
 					<code language="bash">
-            <![CDATA[
+						<![CDATA[
 name_Containers=$variables_instance_name
 echo -e "version: '2'
 services:
@@ -88,50 +99,70 @@ services:
     ports:
       - 22
       - "$variables_dashboard_port:80""> "docker-compose.yml"
-	  
+
 docker-compose up -d
 ]]>
 					</code>
 				</script>
 			</scriptExecutable>
 			<controlFlow block="none"></controlFlow>
-			<outputFiles>
-				<files includes="docker-compose.yml" accessMode="transferToOutputSpace" />
-			</outputFiles>
-		</task>
-		<task name="end_deployment">
-			<description>
-        <![CDATA[ The simplest task, ran by a javascript engine. ]]>
-      </description>
-			<depends>
-				<task ref="ssshtask" />
-			</depends>
-			<scriptExecutable>
+			<post>
 				<script>
-					<code language="javascript">
-            <![CDATA[
-var url = results[0].value();
+					<code language="groovy">
+						<![CDATA[
+import org.objectweb.proactive.core.util.ProActiveInet
 
-var myObject = {};
-myObject.instance_id=variables.get("instance_name");
-myObject.instance_status="RUNNING";
-myObject.instance_endpoint= variables.get("host_name") + ":" + variables.get("dashboard_port");
-
-result=JSON.stringify(myObject);
+// Get the current IP address and store it
+def clearwater_UI_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
+variables.put("clearwater_UI_IP_address", clearwater_UI_IP_address)
 ]]>
 					</code>
 				</script>
-			</scriptExecutable>
+			</post>
+			<outputFiles>
+				<files  includes="docker-compose.yml" accessMode="transferToOutputSpace"/>
+			</outputFiles>
 		</task>
-		<task name="clean_first">
-			<description>
-        <![CDATA[ The simplest task, ran by a bash engine. ]]>
-      </description>
+		<task name="end_deployment">
+			<depends>
+				<task ref="ssshtask"/>
+			</depends>
+			<inputFiles>
+				<files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+			</inputFiles>
+			<forkEnvironment >
+				<additionalClasspath>
+					<pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+				</additionalClasspath>
+			</forkEnvironment>
 			<scriptExecutable>
 				<script>
-					<code language="bash">
-            <![CDATA[
-docker ps -a | awk '{ print $1,$2 }' | grep martinacti | awk '{print $1 }' | xargs -I {} docker rm -f {}
+					<code language="groovy">
+						<![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def clearwater_UI_IP_address = variables.get("clearwater_UI_IP_address")
+def dashboard_port = variables.get("dashboard_port")
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Update the related service infos
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("RUNNING")
+service_instance_data.getInstanceEndpoints().put("clearwater_endpoint", "http://" + clearwater_UI_IP_address + ":"  + dashboard_port)
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
 ]]>
 					</code>
 				</script>
