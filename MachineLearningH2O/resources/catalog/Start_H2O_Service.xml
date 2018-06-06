@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Start_H2O_Service" onTaskError="continueJobExecution" priority="normal" projectName="H2O" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+  <variables>
+    <variable name="h2o_instance_name" value="h2o-server-1"/>
+  </variables>
+  <description>
+    <![CDATA[ Start the H2O server as a service. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="h2o"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/h2o.jpg"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task name="Start_H2O_Service" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ Start the H2O server as a service. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" name="h2o_service_id" value="H2O"/>
+        <variable inherited="true" name="h2o_instance_name" value="h2o-server-1"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/h2o.jpg"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_H2O_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Check existing service instances
+def service_id = variables.get("h2o_service_id")
+def instance_name = variables.get("h2o_instance_name")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances) {
+	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name) {
+        instance_exists = true
+        instance_id = service_instance_data.getInstanceId()
+  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("*_instance_id: " + instance_id)
+        println("*_endpoint:    " + endpoint)
+        variables.put("h2o_instance_id", instance_id)
+        variables.put("h2o_endpoint", endpoint)
+        break
+      }
+  	}
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists){
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id) 
+  serviceDescription.putVariablesItem("INSTANCE_NAME", instance_name)
+  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  println("service_instance_id: " + service_instance_id)
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
+  instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("INSTANCE_NAME: " + instance_name)
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("h2o_instance_id", instance_id)
+  variables.put("h2o_endpoint", endpoint)
+  
+  result = '<meta http-equiv="refresh" content="1; url=' + endpoint + '" />'
+  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+  resultMetadata.put("content.type", "text/html")
+}
+
+println("--- END Start_H2O_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+    </task>
+  </taskFlow>
+</job>
