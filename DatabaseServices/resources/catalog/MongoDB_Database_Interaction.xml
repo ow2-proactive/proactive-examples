@@ -3,26 +3,186 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.10"
      xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="MongoDB" projectName="3. NoSQL"
+    name="MongoDB_Database_Interaction" projectName="MongoDB Workflows"
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
-    <variable name="MONGODB_DATABASE" value="" />
-    <variable name="MONGODB_HOSTNAME" value="localhost" />
-    <variable name="MONGODB_PORT" value="27018" model="PA:Integer"/>
-    <variable name="MONGODB_USER" value="" />
+    <variable name="MONGODB_DATABASE" value="activeeon" />
+    <variable name="MONGODB_INSTANCE_NAME" value="mongodb-server-1" />
+    <variable name="MONGODB_PASSWORD" value="proactive" />
+    <variable name="MONGODB_USER" value="mlos" />
   </variables>
   <description>
-    <![CDATA[ Import or export data from/to MongoDB. ]]>
+    <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies and interact with a MongoDB database. It is a complete example putting together the use of 
+1) a PCA service to create a MongoDB database and,
+2)  a mongodb connector from data-connectors bucket to interact with this database along with its tow modes: Import and Export. ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="data-connectors"/>
+    <info name="bucketName" value="database-services"/>
     <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
     <info name="group" value="public-objects"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
   </genericInformation>
   <taskFlow>
+    <task name="Parse_Endpoint">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="Start_MongoDB_Service"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def mongodb_endpoint = variables.get("mongodb_endpoint")
+def MONGODB_HOST
+def MONGODB_USER = variables.get("MONGODB_USER")
+def MONGODB_PASSWORD = variables.get("MONGODB_PASSWORD")
+def MONGODB_PORT
+def MONGODB_PASSWORD_KEY
+
+if (mongodb_endpoint != null){
+  mongodb_endpoint = mongodb_endpoint.replace("http://", "")
+  MONGODB_HOST = mongodb_endpoint.split(":")[0]
+  variables.put("MONGODB_HOSTNAME", MONGODB_HOST)
+  MONGODB_PORT = mongodb_endpoint.split(":")[1]
+  variables.put("MONGODB_PORT", MONGODB_PORT)
+  
+  // This key is used for getting the password from 3rd party credentials.
+  MONGODB_PASSWORD_KEY = "mongodb://" + MONGODB_USER + "@" + MONGODB_HOST + ":" + MONGODB_PORT
+  schedulerapi.connect()
+  schedulerapi.putThirdPartyCredential(MONGODB_PASSWORD_KEY, MONGODB_PASSWORD)
+}
+else{
+  throw new IOException("MongoDB endpoint not found")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Start_MongoDB_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the MongoDB server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="MONGODB_SERVICE_ID" value="MongoDB" inherited="false" />
+        <variable name="MONGODB_INSTANCE_NAME" value="mongodb-server-1" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_MongoDB_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+http://localhost:8080/studio/#
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def service_id = variables.get("MONGODB_SERVICE_ID")
+def instance_name = variables.get("MONGODB_INSTANCE_NAME")
+def user = variables.get("MONGODB_USER")
+def password = variables.get("MONGODB_PASSWORD")
+def database = variables.get("MONGODB_DATABASE")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+println("*_user: " + user)
+println("*_password: " + password)
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances) {
+	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      if (service_instance_data.getVariables().get("MONGODB_INSTANCE_NAME") == instance_name) {
+        instance_exists = true
+        instance_id = service_instance_data.getInstanceId()
+  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("*_instance_id: " + instance_id)
+        println("*_endpoint:    " + endpoint)
+        variables.put("MONGODB_INSTANCE_ID", instance_id)
+        variables.put("mongodb_endpoint", endpoint)
+        break
+      }
+  	}
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists){
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id) 
+  serviceDescription.putVariablesItem("MONGODB_INSTANCE_NAME_CL", instance_name)
+  serviceDescription.putVariablesItem("MONGODB_USER_CL", user)
+  serviceDescription.putVariablesItem("MONGODB_PASSWORD_CL", password)  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  def instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("MONGODB_INSTANCE_ID", instance_id)
+  variables.put("mongodb_endpoint", endpoint)
+}
+
+println("--- END Start_MongoDB_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
     <task name="Export_to_MongoDB">
       <description>
         <![CDATA[ This task allows exporting data to MongoDB.
@@ -35,44 +195,20 @@ $MONGODB_INPUT (required) A JSON Object/Array to be inserted in MongoDB. This va
  - A relative path in the data space of a JSON file. ]]>
       </description>
       <variables>
-        <variable name="MONGODB_COLLECTION" value="" inherited="false" />
-        <variable name="MONGODB_INPUT" value="" inherited="false" />
+        <variable name="MONGODB_COLLECTION" value="star_wars" inherited="false" />
+        <variable name="MONGODB_INPUT" value="star_wars_people.json" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
         <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
       </genericInformation>
+      <depends>
+        <task ref="Parse_Endpoint"/>
+      </depends>
       <inputFiles>
         <files  includes="$MONGODB_INPUT" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
-      <forkEnvironment javaHome="/usr" >
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
-#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters
-containerName = 'activeeon/dlm3'
-dockerRunCommand =  'docker run '
-dockerParameters = '--rm '
-# Prepare ProActive home volume
-paHomeHost = variables.get("PA_SCHEDULER_HOME")
-paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-# Prepare working directory (For Dataspaces and serialized task file)
-workspaceHost = localspace
-workspaceContainer = localspace
-workspaceVolume = '-v '+localspace +':'+localspace+' '
-# Prepare container working directory
-containerWorkingDirectory = '-w '+workspaceContainer+' '
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
-preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
+      <forkEnvironment javaHome="/usr" ></forkEnvironment>
       <scriptExecutable>
         <script>
           <code language="cpython">
@@ -161,7 +297,7 @@ if variables.get("MONGODB_USER"):
     USER = variables.get("MONGODB_USER")
     # This key is used for getting the password from 3rd party credentials.
     MONGODB_PASSWORD_KEY = "mongodb://" + USER + "@" + HOSTNAME + ":" + str(PORT)
-    if credentials.get(MONGODB_PASSWORD_KEY):
+    print(MONGODB_PASSWORD_KEY)
     if credentials.get(MONGODB_PASSWORD_KEY):
         PASSWORD=credentials.get(MONGODB_PASSWORD_KEY)
     else:
@@ -189,7 +325,7 @@ print("END Export Data")
     <task name="Import_from_MongoDB">
       <description>
         <![CDATA[ This task allows importing data from MongoDB.
-The task requires the following third-party credentials: MONGODB_USERNAME and MONGODB_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
+The task requires the following third-party credentials: {key: mongodb://<username>@<hostname>:<port>, value: MONGODB_PASSWORD}. Please refer to the User documentation to learn how to add third-party credentials.
 It uses the following variables:
 $MONGODB_DATABASE (required) the database to use. It is created if it does not exist
 $MONGODB_COLLECTION (required) the collection to use. It is created if it does not exist
@@ -198,9 +334,9 @@ $MONGODB_OUTPUT (optional) is a relative path in the data space used to save the
 The output of this task is saved to the local space in a JSON file (result.json) containing a JSON array of the results. It can be aquired in the depending tasks using the result[0] scheme. ]]>
       </description>
       <variables>
-        <variable name="MONGODB_COLLECTION" value="" inherited="false" />
+        <variable name="MONGODB_COLLECTION" value="star_wars" inherited="false" />
         <variable name="MONGODB_QUERY" value="" inherited="false" />
-        <variable name="MONGODB_OUTPUT" value="" inherited="false" />
+        <variable name="MONGODB_OUTPUT" value="mongodb-out.json" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
@@ -209,34 +345,7 @@ The output of this task is saved to the local space in a JSON file (result.json)
       <depends>
         <task ref="Export_to_MongoDB"/>
       </depends>
-      <forkEnvironment javaHome="/usr" >
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
-#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters
-containerName = 'activeeon/dlm3'
-dockerRunCommand =  'docker run '
-dockerParameters = '--rm '
-# Prepare ProActive home volume
-paHomeHost = variables.get("PA_SCHEDULER_HOME")
-paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-# Prepare working directory (For Dataspaces and serialized task file)
-workspaceHost = localspace
-workspaceContainer = localspace
-workspaceVolume = '-v '+localspace +':'+localspace+' '
-# Prepare container working directory
-containerWorkingDirectory = '-w '+workspaceContainer+' '
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
-preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
+      <forkEnvironment javaHome="/usr" ></forkEnvironment>
       <scriptExecutable>
         <script>
           <code language="cpython">
@@ -357,6 +466,72 @@ print("END Import Data")
       <outputFiles>
         <files  includes="$MONGODB_OUTPUT" accessMode="transferToGlobalSpace"/>
       </outputFiles>
+    </task>
+    <task name="Finish_MongoDB_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Finish the MongoDB service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Import_from_MongoDB"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Finish_MongoDB_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def instance_id = (int) variables.get("MONGODB_INSTANCE_ID")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Finish service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Finish_MongoDB")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Finish_MongoDB_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
     </task>
   </taskFlow>
 </job>
