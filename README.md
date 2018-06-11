@@ -50,7 +50,7 @@ If you need to retest the extracting and loading of proactive-examples, please r
 			{
 				"name" : "text_analysis",
 				"metadata" : {
-					"kind": "workflow",
+					"kind": "Workflow/standard",
 					"commitMessage": "First commit",
 					"contentType": "application/xml"
 				},
@@ -78,7 +78,7 @@ An example of a catalog object that represents a workflow:
 {
 				"name" : "text_analysis",
 				"metadata" : {
-					"kind": "workflow",
+					"kind": "Workflow/standard",
 					"commitMessage": "First commit",
 					"contentType": "application/xml"
 				},
