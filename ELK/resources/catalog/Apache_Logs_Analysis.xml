@@ -1,0 +1,695 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Apache_Logs_Analysis" projectName="4. ELK Stack Workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="elasticsearch_instance_name" value="elasticsearch-server-1" />
+    <variable name="kibana_instance_name" value="kibana-server-1" />
+    <variable name="logstash_instance_name" value="logstash-server-1" />
+  </variables>
+  <description>
+    <![CDATA[ Analyze apache logs using ELK Stack ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="elastic-logstash-kibana"/>
+    <info name="Documentation" value="https://www.elastic.co/elk-stack"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/apache.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Wait_For_Stop_Validation"
+    
+    
+    onTaskError="pauseJob" >
+      <description>
+        <![CDATA[ Task to pause the job and send a validation message to the notification service ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/web_validation.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Configure_Logstash"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="python">
+            <![CDATA[
+print("--- BEGIN WaitForStopValidation ---")
+
+# Please fill variables
+notification_message = 'Please, validate to stop the ELK Stack services'
+
+# Don't change code below unless you know what you are doing
+from org.ow2.proactive.addons.webhook import Webhook
+
+jobid = variables.get("PA_JOB_ID")
+userName = variables.get("PA_USER")
+schedulerURL = variables.get("PA_SCHEDULER_REST_URL")
+
+# get sessionid
+schedulerapi.connect()
+
+# pause job
+schedulerapi.pauseJob(jobid)
+
+# send web validation
+print "Sending web validation..."
+url = schedulerURL.replace("/rest", "") +'/notification-service/notifications'
+headers = '{\"Content-Type\" : \"application/json\" }'
+notification_content = '{\"description\": \"'+notification_message+'\", \"jobId\": \"'+jobid+'\" , \"validation\": \"true\", \"userName\":  \"'+userName+'\"}'
+Webhook.execute('POST', url, headers, notification_content);
+print("Web Validation sent")
+
+print("--- END WaitForStopValidation ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Start_Elasticsearch_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Elasticsearch server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="elasticsearch_service_id" value="Elasticsearch" inherited="false" />
+        <variable name="elasticsearch_instance_name" value="elasticsearch-server-1" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_Elasticsearch_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Check existing service instances
+def service_id = variables.get("elasticsearch_service_id")
+def instance_name = variables.get("elasticsearch_instance_name")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances) {
+	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name) {
+        instance_exists = true
+        instance_id = service_instance_data.getInstanceId()
+  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("*_instance_id: " + instance_id)
+        println("*_endpoint:    " + endpoint)
+        variables.put("elasticsearch_instance_id", instance_id)
+        variables.put("elasticsearch_endpoint", endpoint)
+        break
+      }
+  	}
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists){
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id) 
+  serviceDescription.putVariablesItem("INSTANCE_NAME", instance_name)
+  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  println("service_instance_id: " + service_instance_id)
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
+  instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("INSTANCE_NAME: " + instance_name)
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("elasticsearch_instance_id", instance_id)
+  variables.put("elasticsearch_endpoint", endpoint)
+  
+  result = '<meta http-equiv="refresh" content="1; url=' + variables.get("elasticsearch_endpoint") + '" />'
+  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+  resultMetadata.put("content.type", "text/html")
+}
+
+println("--- END Start_Elasticsearch_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Start_Logstash_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Logstash server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="logstash_service_id" value="Logstash" inherited="false" />
+        <variable name="logstash_instance_name" value="logstash-server-1" inherited="true" />
+        <variable name="elasticsearch_endpoint" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png"/>
+        <info name="task.documentation" value="https://www.elastic.co/guide/en/logstash/6.2/index.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Elasticsearch_Service"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_Logstash_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Check elasticsearch endpoint
+def elasticsearch_endpoint = variables.get("elasticsearch_endpoint")
+println("elasticsearch_endpoint: " + elasticsearch_endpoint)
+assert (elasticsearch_endpoint != null) : "endpoint must not be null"
+assert (elasticsearch_endpoint.trim() != '') : "endpoint must not be empty"
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Check existing service instances
+def service_id = variables.get("logstash_service_id")
+def instance_name = variables.get("logstash_instance_name")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances)
+{
+  if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING") )
+  {
+    if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name)
+    {
+      instance_exists = true
+      instance_id = service_instance_data.getInstanceId()
+      endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+      println("*_instance_id: " + instance_id)
+      println("*_endpoint:    " + endpoint)
+      variables.put("logstash_instance_id", instance_id)
+      variables.put("logstash_endpoint", endpoint)
+      break
+    }
+  }
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists)
+{
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id)
+  serviceDescription.putVariablesItem("elasticsearch_endpoint", elasticsearch_endpoint)
+  serviceDescription.putVariablesItem("INSTANCE_NAME", instance_name)
+  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  println("service_instance_id: " + service_instance_id)
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
+  instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("INSTANCE_NAME: " + instance_name)
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("logstash_instance_id", instance_id)
+  variables.put("logstash_endpoint", endpoint)
+  
+  result = '<meta http-equiv="refresh" content="1; url=' + endpoint + '" />'
+  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+  resultMetadata.put("content.type", "text/html")
+}
+
+println("--- END Start_Logstash_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Start_Kibana_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Kibana server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="kibana_service_id" value="Kibana" inherited="false" />
+        <variable name="kibana_instance_name" value="kibana-server-1" inherited="true" />
+        <variable name="elasticsearch_endpoint" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
+        <info name="task.documentation" value="https://www.elastic.co/guide/en/kibana/current/introduction.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Elasticsearch_Service"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_Kibana_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Check elasticsearch endpoint
+def elasticsearch_endpoint = variables.get("elasticsearch_endpoint")
+println("elasticsearch_endpoint: " + elasticsearch_endpoint)
+assert (elasticsearch_endpoint != null) : "endpoint must not be null"
+assert (elasticsearch_endpoint.trim() != '') : "endpoint must not be empty"
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Check existing service instances
+def service_id = variables.get("kibana_service_id")
+def instance_name = variables.get("kibana_instance_name")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances)
+{
+  if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING") )
+  {
+    if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name)
+    {
+      instance_exists = true
+      instance_id = service_instance_data.getInstanceId()
+      endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+      println("*_instance_id: " + instance_id)
+      println("*_endpoint:    " + endpoint)
+      variables.put("kibana_instance_id", instance_id)
+      variables.put("kibana_endpoint", endpoint)
+      break
+    }
+  }
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists)
+{
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id)
+  serviceDescription.putVariablesItem("elasticsearch_endpoint", elasticsearch_endpoint)
+  serviceDescription.putVariablesItem("INSTANCE_NAME", instance_name)
+  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  println("service_instance_id: " + service_instance_id)
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
+  instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("INSTANCE_NAME: " + instance_name)
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("kibana_instance_id", instance_id)
+  variables.put("kibana_endpoint", endpoint)
+  
+  result = '<meta http-equiv="refresh" content="1; url=' + endpoint + '" />'
+  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
+  resultMetadata.put("content.type", "text/html")
+}
+
+println("--- END Start_Kibana_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Finish_Kibana_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Finish the Kibana service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
+        <info name="task.documentation" value="https://www.elastic.co/guide/en/kibana/current/introduction.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Wait_For_Stop_Validation"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Finish_Kibana_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+instance_id = variables.get("kibana_instance_id")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Finish service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Finish_Kibana")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Finish_Kibana_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Finish_Logstash_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Finish the Logstash service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png"/>
+        <info name="task.documentation" value="https://www.elastic.co/guide/en/logstash/6.2/index.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Wait_For_Stop_Validation"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Finish_Logstash_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+instance_id = variables.get("logstash_instance_id")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Finish service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Finish_Logstash")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Finish_Logstash_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Finish_Elasticsearch_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Finish the Elasticsearch service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Finish_Logstash_Service"/>
+        <task ref="Finish_Kibana_Service"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Finish_Elasticsearch_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+instance_id = variables.get("elasticsearch_instance_id")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Finish service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Finish_Elasticsearch")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Finish_Elasticsearch_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Configure_Logstash">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="Start_Logstash_Service"/>
+        <task ref="Start_Kibana_Service"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "=================BEGIN_CONFIGURE_LOGSTASH=================="
+
+CONTAINER=$variables_logstash_instance_name
+
+docker exec $CONTAINER /bin/bash -c "cd usr/share/logstash/config && mkdir -p apache"
+docker exec $CONTAINER /bin/bash -c "cd usr/share/logstash/config/apache && rm -f apache_logs && wget https://s3.eu-west-2.amazonaws.com/activeeon-public/ELK/apache_logs"
+docker exec $CONTAINER /bin/bash -c "cd usr/share/logstash/config/apache && rm -f apache_template.json && wget https://s3.eu-west-2.amazonaws.com/activeeon-public/ELK/apache_template.json"
+docker exec $CONTAINER /bin/bash -c "cd usr/share/logstash/config/apache && rm -f apache_logstash.conf && wget https://s3.eu-west-2.amazonaws.com/activeeon-public/ELK/apache_logstash.conf"
+docker exec $CONTAINER /bin/bash -c "cd usr/share/logstash/config/apache && cat apache_logs | logstash -f apache_logstash.conf"
+
+echo "=================END_CONFIGURE_LOGSTASH=================="
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
