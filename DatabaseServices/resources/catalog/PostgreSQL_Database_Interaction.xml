@@ -3,26 +3,265 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.10"
      xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="PostgreSQL" projectName="2. SQL"
+    name="PostgreSQL_Database_Interaction" projectName="PostgreSQL Workflows"
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
-    <variable name="POSTGRES_DATABASE" value="" />
-    <variable name="POSTGRES_HOSTNAME" value="localhost" />
-    <variable name="POSTGRES_PORT" value="5432" />
-    <variable name="POSTGRES_USER" value="" />
+    <variable name="POSTGRES_DATABASE" value="activeeon" />
+    <variable name="POSTGRES_INSTANCE_NAME" value="postgres-server-1" />
+    <variable name="POSTGRES_PASSWORD" value="proactive" />
+    <variable name="POSTGRES_USER" value="mlos" />
   </variables>
   <description>
-    <![CDATA[ Import data from (or export data to) PostgreSQL database. ]]>
+    <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies.
+Here, any PostgreSQL Task needs PostgreSQL service.
+First, a bind_or_start_service task (Examples/5. Cloud Automation Task Templates), specifies the service we want to start, and an instance name, which is inherited by a job variable.
+Thus, any PostgreSQL Task can use a "endpoint" variable where service is running. Everything is handled by the previous bind_or_start_service task. 
+In this example, we use PostgreSQL data connector workflow to show how to export data to and import data from the database. 
+You can share PostgreSQL service reusing the same instance name. ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="data-connectors"/>
-    <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+    <info name="bucketName" value="database-services"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
     <info name="group" value="public-objects"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
   </genericInformation>
   <taskFlow>
+    <task name="Parse_Endpoint">
+      <description>
+        <![CDATA[ The simplest task, ran by a groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="Start_PostgreSQL_Service"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def postgres_endpoint = variables.get("postgres_endpoint")
+def POSTGRES_HOST
+def POSTGRES_USER = variables.get("POSTGRES_USER")
+def POSTGRES_PASSWORD = variables.get("POSTGRES_PASSWORD")
+def POSTGRES_PORT
+def POSTGRES_PASSWORD_KEY
+
+print("POSTGRES_USER="+POSTGRES_USER)
+
+if (POSTGRES_USER.isEmpty()){
+    POSTGRES_USER = "postgres"
+    variables.put("POSTGRES_USER", POSTGRES_USER)
+}
+
+if (postgres_endpoint != null){
+  postgres_endpoint = postgres_endpoint.replace("http://", "")
+  POSTGRES_HOST = postgres_endpoint.split(":")[0]
+  variables.put("POSTGRES_HOSTNAME", POSTGRES_HOST)
+  POSTGRES_PORT = postgres_endpoint.split(":")[1]
+  variables.put("POSTGRES_PORT", POSTGRES_PORT)
+  
+  // This key is used for getting the password from 3rd party credentials.
+  POSTGRES_PASSWORD_KEY = "postgres://" + POSTGRES_USER + "@" + POSTGRES_HOST + ":" + POSTGRES_PORT
+  schedulerapi.connect()
+  schedulerapi.putThirdPartyCredential(POSTGRES_PASSWORD_KEY, POSTGRES_PASSWORD)
+}
+else{
+  throw new IOException("PostgreSQL endpoint not found")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Start_PostgreSQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the PostgreSQL server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="POSTGRES_SERVICE_ID" value="PostgreSQL" inherited="false" />
+        <variable name="POSTGRES_INSTANCE_NAME" value="postgres-server-1" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_PostgreSQL_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+http://localhost:8080/studio/#
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def service_id = variables.get("POSTGRES_SERVICE_ID")
+def instance_name = variables.get("POSTGRES_INSTANCE_NAME")
+def user = variables.get("POSTGRES_USER")
+def password = variables.get("POSTGRES_PASSWORD")
+def database = variables.get("POSTGRES_DATABASE")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+println("*_user: " + user)
+println("*_password: " + password)
+println("*_database: " + database)
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances) {
+	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      if (service_instance_data.getVariables().get("POSTGRES_INSTANCE_NAME") == instance_name) {
+        instance_exists = true
+        instance_id = service_instance_data.getInstanceId()
+  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("*_instance_id: " + instance_id)
+        println("*_endpoint:    " + endpoint)
+        variables.put("POSTGRES_INSTANCE_ID", instance_id)
+        variables.put("postgres_endpoint", endpoint)
+        break
+      }
+  	}
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists){
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id) 
+  serviceDescription.putVariablesItem("POSTGRES_INSTANCE_NAME_CL", instance_name)
+  serviceDescription.putVariablesItem("POSTGRES_USER_CL", user)
+  serviceDescription.putVariablesItem("POSTGRES_PASSWORD_CL", password)
+  serviceDescription.putVariablesItem("POSTGRES_DATABASE_CL", database)
+  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  def instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("POSTGRES_INSTANCE_ID", instance_id)
+  variables.put("postgres_endpoint", endpoint)
+}
+
+println("--- END Start_PostgreSQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Finish_PostgreSQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Finish the PostgreSQL service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Import_from_PostgreSQL"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Finish_PostgreSQL_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def instance_id = (int) variables.get("POSTGRES_INSTANCE_ID")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Finish service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Finish_PostgreSQL")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Finish_PostgreSQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
     <task name="Import_from_PostgreSQL">
       <description>
         <![CDATA[ This task allows to import data from PostgreSQL database.
@@ -36,9 +275,9 @@ The imported data is exported in a JSON format using the variable $DATAFRAME_JSO
       </description>
       <variables>
         <variable name="LABEL" value="" inherited="false" />
-        <variable name="POSTGRES_QUERY" value="" inherited="false" />
+        <variable name="POSTGRES_QUERY" value="SELECT * FROM diabetes" inherited="false" />
         <variable name="RDBMS_DRIVER" value="psycopg2" inherited="false" />
-        <variable name="OUTPUT_FILE" value="" inherited="false" />
+        <variable name="OUTPUT_FILE" value="imported_data.csv" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
@@ -207,15 +446,18 @@ $INPUT_FILE (required) is the relative path in the data space of the CSV file th
 This task uses also the task variable RMDB_DRIVER as a driver to connect to the database. The specified default driver "psycopg2" is already provided for this task. To use another driver, make sure you have it properly installed before. ]]>
       </description>
       <variables>
-        <variable name="POSTGRES_TABLE" value="" inherited="false" />
+        <variable name="POSTGRES_TABLE" value="diabetes" inherited="false" />
         <variable name="RDBMS_DRIVER" value="psycopg2" inherited="false" />
         <variable name="INSERT_MODE" value="append" inherited="false" model="PA:LIST(fail, replace, append)"/>
-        <variable name="INPUT_FILE" value="" inherited="false" />
+        <variable name="INPUT_FILE" value="pima-indians-diabetes.csv" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
         <info name="task.documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
       </genericInformation>
+      <depends>
+        <task ref="Parse_Endpoint"/>
+      </depends>
       <inputFiles>
         <files  includes="$INPUT_FILE" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
@@ -224,6 +466,7 @@ This task uses also the task variable RMDB_DRIVER as a driver to connect to the 
           <script>
             <code language="python">
               <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
 #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
 # Prepare Docker parameters
 containerName = 'activeeon/dlm3'
