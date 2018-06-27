@@ -1,0 +1,635 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.10"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+        name="Inputs_optimization" projectName="MC-Optim"
+        priority="normal"
+        onTaskError="continueJobExecution"
+        maxNumberOfExecution="1"
+>
+    <variables>
+        <variable name="energy_weight" value="0.7" />
+        <variable name="json_file_path_from_dataspace" value="configure.json" />
+        <variable name="min_fitness_selection_rate" value="0.001" />
+        <variable name="mrr_weight" value="0.2" />
+        <variable name="mutation_probability" value="0.01" />
+        <variable name="nb_machpro_runs" value="5" />
+        <variable name="nb_optim_iterations" value="5" />
+        <variable name="program_file_path_from_dataspace" value="T4_KOKO_D80_1vExec.cls" />
+        <variable name="time_weight" value="0.1" />
+        <variable name="VMSCMD_file_path_from_dataspace" value="Soraluce_use_caseT1.VMSCMD" />
+    </variables>
+    <genericInformation>
+        <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mc-optim.png" />
+    </genericInformation>
+    <taskFlow>
+        <task name="Random_inputs">
+            <inputFiles>
+                <files  includes="$json_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import java.util.Random
+import java.text.SimpleDateFormat
+
+println "Random_inputs ..."
+
+
+// json file -> map
+def json_file_path_from_dataspace = variables.get("json_file_path_from_dataspace")
+def json_file_content = new File(localspace, json_file_path_from_dataspace).text
+def slurper = new groovy.json.JsonSlurper()
+def json_map = (Map) slurper.parseText(json_file_content)
+
+// Retrieve SS and FR ranges
+def INPUT_map = json_map.get("INPUT")
+def SS_map = INPUT_map.get("SS")
+def SS_min = SS_map.get("Min") as Integer
+def SS_max = SS_map.get("Max") as Integer
+def FR_map = INPUT_map.get("FR")
+def FR_min = FR_map.get("Min") as Integer
+def FR_max = FR_map.get("Max") as Integer
+println "SS_min:" + SS_min + " SS_max:" + SS_max + " FR_min:" + FR_min + " FR_max:" + FR_max
+
+// Write input variables for each task in a dedicated variable
+// (check generator period to ensure no repetition)
+def nb_machpro_runs = variables.get("nb_machpro_runs") as Integer
+def r = new Random()
+(0..(nb_machpro_runs-1)).each { task_id ->
+     def SS = r.nextInt(SS_max - SS_min) + SS_min
+ 	 def FR = r.nextInt(FR_max - FR_min) + FR_min
+ 	 variables["inputs_" + task_id] =  "SS=" + SS + ";FR=" +  FR
+     println "variables[\"inputs_" + task_id + "\"] = \"" + variables["inputs_" + task_id] + "\""
+}
+
+
+// Some useful variables that will be used by other tasks
+variables["optimization_index"] = 0
+variables["current_time"] = new SimpleDateFormat("MMddyyyy_HHmmss").format(new Date())
+variables["SS_min"] = SS_min
+variables["SS_max"] = SS_max
+variables["FR_min"] = FR_min
+variables["FR_max"] = FR_max
+
+
+println "... Random_inputs"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+        </task>
+        <task name="Expose_new_inputs">
+            <depends>
+                <task ref="Random_inputs"/>
+            </depends>
+            <inputFiles>
+                <files  includes="$last_chart_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "Expose_new_inputs ..."
+
+// Retrieve variables
+def optimization_index = variables.get("optimization_index") as Integer
+
+if (optimization_index > 0)
+{
+  def last_chart_file_path_from_dataspace = variables.get("last_chart_file_path_from_dataspace")
+  def last_chart_file = new File(localspace, last_chart_file_path_from_dataspace)
+  println last_chart_file.absolutePath + " exists? " + last_chart_file.exists()
+  result = last_chart_file.getBytes()
+  resultMetadata.put("file.name", last_chart_file_path_from_dataspace)
+  resultMetadata.put("content.type", "image/png")
+}
+
+println "... Expose_new_inputs"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="start"></controlFlow>
+        </task>
+        <task name="useless1">
+            <depends>
+                <task ref="Expose_new_inputs"/>
+            </depends>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "useless1 ..."
+println "... useless1"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow >
+                <replicate>
+                    <script>
+                        <code language="groovy">
+                            <![CDATA[
+runs=variables.get("nb_machpro_runs") as Integer
+]]>
+                        </code>
+                    </script>
+                </replicate>
+            </controlFlow>
+        </task>
+        <task name="Update_program_file">
+            <depends>
+                <task ref="useless1"/>
+            </depends>
+            <inputFiles>
+                <files  includes="commons-jexl3-3.0.jar" accessMode="transferFromUserSpace"/>
+                <files  includes="$program_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+            </inputFiles>
+            <forkEnvironment >
+                <additionalClasspath>
+                    <pathElement path="commons-jexl3-3.0.jar"/>
+                </additionalClasspath>
+            </forkEnvironment>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "Update_program_file ..."
+
+
+import java.util.regex.Pattern
+
+
+// Retrieve the first occurence of var in the program file content
+def findFirstValue (var, content)
+{
+    def keyLinePattern = Pattern.compile(var + ".*")
+    def occurences = content.findAll(keyLinePattern)
+
+    def val = "null"
+    if (occurences.isEmpty())
+    	return val
+
+    // Get the last occurence
+    def nbOccurences = occurences.size()
+	def lastOccurence = occurences.get(nbOccurences - 1)
+
+    // In the first occurence, extract val from "var,val"
+	return occurences.get(0).split(" ,")[1]
+}
+
+// Retrieve the program file content
+def program_file_path_from_dataspace = variables.get("program_file_path_from_dataspace")
+program_file = new File(localspace, program_file_path_from_dataspace)
+program_file_content = program_file.text
+
+
+// Retrieve the formulas
+def task_id = variables.get("PA_TASK_REPLICATION")
+def inputs = variables.get("inputs_" + task_id)
+
+
+// For each formula
+def pattern = null
+def replacing_expression = ""
+inputs.split(";").each { expr ->
+
+  	// Extract variable & value  from "variable=value"
+    def expr_arr = expr.split("=")
+  	def variable = expr_arr[0]
+    def value = expr_arr[1]
+
+	// Update the program file
+	if (variable == "SS")
+	{
+      	pattern = Pattern.compile("SPINDL/RPM,.*")
+        replacing_expression = "SPINDL/RPM," + value + ",CLW"
+    }
+	else if (variable == "FR")
+	{
+		pattern = Pattern.compile("FEDRAT/MMPM,.*")
+        replacing_expression = "FEDRAT/MMPM," + value
+    }
+
+	// Replace all variables in the program file
+	program_file_content = program_file_content.replaceAll(pattern, replacing_expression)
+}
+
+
+// Save the updated program file
+def optimization_index = variables.get("optimization_index")
+def current_time = variables.get("current_time")
+def current_time_dir = new File(localspace, current_time)
+def iter_dir = new File(current_time_dir, "iter_" + optimization_index)
+iter_dir.mkdirs()
+new File(iter_dir, task_id + "_" + program_file_path_from_dataspace).text = program_file_content
+
+
+println "... Update_program_file"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="start"></controlFlow>
+            <outputFiles>
+                <files  includes="$current_time/iter_$optimization_index/**" accessMode="transferToUserSpace"/>
+            </outputFiles>
+        </task>
+        <task name="MACHpro">
+            <variables>
+                <variable name="machpro_exe_file_path" value="C:/Program Files/MACHpro/MACHpro.exe" inherited="false" />
+            </variables>
+            <genericInformation>
+                <info name="REQUIRED_LICENSES" value="machpro"/>
+            </genericInformation>
+            <depends>
+                <task ref="Update_program_file"/>
+            </depends>
+            <inputFiles>
+                <files  includes="$current_time/iter_$optimization_index/$PA_TASK_REPLICATION_$program_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+                <files  includes="$VMSCMD_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+            </inputFiles>
+            <selection>
+                <script
+                        type="dynamic" >
+                    <code language="groovy">
+                        <![CDATA[
+def machpro_exe_file_path = variables.get("machpro_exe_file_path")
+selected = new File(machpro_exe_file_path).exists()
+]]>
+                    </code>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import org.apache.commons.io.FilenameUtils
+import org.apache.commons.io.FileUtils
+
+println "MACHpro ..."
+
+
+// Retrieve variables
+def VMSCMD_file_path_from_dataspace = variables.get("VMSCMD_file_path_from_dataspace")
+def program_file_path_from_dataspace = variables.get("program_file_path_from_dataspace")
+def task_id = variables.get("PA_TASK_REPLICATION")
+def optimization_index = variables.get("optimization_index")
+def current_time = variables.get("current_time")
+
+// Deduce some variables
+def current_time_dir = new File(localspace, current_time)
+def iter_dir = new File(current_time_dir, "iter_" + optimization_index)
+
+// Update the vmscmd file ...
+// VMSCMD file -> tree
+def VMSCMD_file = new File(localspace, VMSCMD_file_path_from_dataspace)
+def VMSCMD_tree = new XmlParser().parse(VMSCMD_file)
+// Modify the VMSCMD tree
+def updated_program_file_path = new File(iter_dir, task_id + "_" + program_file_path_from_dataspace).absolutePath
+VMSCMD_tree.NCPrograms.NCProgram[0].@File = updated_program_file_path
+// Modify the output file paths
+VMSCMD_tree.GetOps.ProcessSimulation.Export.@Folder = iter_dir.absolutePath
+// VMSCMD_tree.GetOps.ProcessOptimization.Export.@Folder = iter_dir.absolutePath
+// VMSCMD tree -> file
+def fw = new FileWriter(VMSCMD_file)
+def pw = new PrintWriter(fw)
+new XmlNodePrinter(pw).print(VMSCMD_tree)
+pw.close()
+fw.close()
+
+// Command execution
+def machpro_exe_file_path = "\"" + variables.get("machpro_exe_file_path") + "\""
+def VMSCMD_file_path = "\"" + VMSCMD_file.absolutePath + "\""
+def cmd = [machpro_exe_file_path, VMSCMD_file_path, "nogui"]
+println cmd + " ..."
+cmd.execute().waitForProcessOutput(System.out, System.err)
+println "... " + cmd
+
+// Create a filter for val files
+def val_file_filter = new FileFilter() {
+	boolean accept(File file) {
+		return FilenameUtils.getExtension(file.name) == "val"
+	}
+}
+
+// Wait for the output val files (must be adapted to the number of generated val files)
+while (iter_dir.listFiles(val_file_filter).length == 0) {
+    sleep(10000)
+    println "no val file"
+}
+println "val file detected"
+
+// Rename val files before gathering the replicated tasks results into the same dir
+iter_dir.listFiles(val_file_filter).each { file ->
+	FileUtils.moveFile(file, new File(iter_dir, task_id + "_" + file.name))
+}
+
+
+println "... MACHpro"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="end"></controlFlow>
+            <outputFiles>
+                <files  includes="$current_time/iter_$optimization_index/**" accessMode="transferToUserSpace"/>
+            </outputFiles>
+        </task>
+        <task name="R_Optimization">
+            <depends>
+                <task ref="MACHpro"/>
+            </depends>
+            <inputFiles>
+                <files  includes="$current_time/iter_$optimization_index/**" accessMode="transferFromUserSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="R">
+                        <![CDATA[
+# install.packages("XML")
+library("XML")
+
+
+print("R_Optimization ...")
+
+
+# FUNCTIONS ##########################
+
+# Integer to bit vector
+intToBitVect <- function(x){
+  tmp <- rev(as.integer(intToBits(x)))
+  id <- seq_len(match(1,tmp,length(tmp))-1)
+  tmp[-id]
+}
+
+# Bit vector to integer
+bitVectToInt <- function(binaryvector) {
+  sum(2^(which(rev(binaryvector)==TRUE)-1))
+}
+
+random_bit_flipping <- function(bit_vec){
+  selected_id <- sample(1:length(bit_vec),1)
+  selected_bit <- bit_vec[selected_id]
+  bit_vec[selected_id] <- (selected_bit + 1) %% 2
+  bit_vec
+}
+
+probableMutate <- function(a, mutation_probability) {
+  if (runif(n=1, min=0, max=1) < mutation_probability)
+  {
+    a_as_bit_vec <- intToBitVect(a)
+	mutated_a_as_bit_vec <- random_bit_flipping(a_as_bit_vec)
+	mutated_a <- bitVectToInt(mutated_a_as_bit_vec)
+	mutated_a
+  } else
+  {
+    a
+  }
+}
+
+# Probable mutation of a in [a_min; a_max]
+probableMutateInRange <- function(a, a_min, a_max, mutation_probability) {
+
+  # print(paste("a", a, "a_min", a_min, "a_max", a_max, "mutation_probability", mutation_probability, sep= ' '))
+
+  mutated_a <- probableMutate(a, mutation_probability)
+  if (mutated_a >= a_min && mutated_a <= a_max)
+	mutated_a
+  else
+    probableMutateInRange(a, a_min, a_max, mutation_probability)
+}
+
+
+# MAIN ##########################
+
+
+print(variables["optimization_index"])
+print(variables["time_weight"])
+print(variables["mrr_weight"])
+print(variables["energy_weight"])
+print(variables["min_fitness_selection_rate"])
+print(variables["mutation_probability"])
+print(variables["nb_machpro_runs"])
+
+
+# Retrieve variables
+optimization_index <- as.integer(variables["optimization_index"])
+time_weight <- as.double(variables["time_weight"])
+mrr_weight <- as.double(variables["mrr_weight"])
+energy_weight <- as.double(variables["energy_weight"])
+min_fitness_selection_rate <- as.double(variables["min_fitness_selection_rate"])
+nb_machpro_runs <- as.integer(variables["nb_machpro_runs"])
+current_time <- variables["current_time"]
+mutation_probability <- variables["mutation_probability"]
+SS_min <- as.integer(variables["SS_min"])
+SS_max <- as.integer(variables["SS_max"])
+FR_min <- as.integer(variables["FR_min"])
+FR_max <- as.integer(variables["FR_max"])
+
+
+# Create an empty data frame with header
+results <- data.frame(SS=integer(0),
+                      FR=integer(0),
+                      mMRROrigConverted=double(0),
+                      mTorqueMaxConverted=double(0),
+                      mTimeOrig=double(0),
+                      standardized_mMRROrigConverted=double(0),
+                      standardized_mTorqueMaxConverted=double(0),
+                      standardized_mTimeOrig=double(0))
+
+
+# Retrieve val file names
+iter_dir_path <- file.path(localspace, current_time, paste("iter_", optimization_index, sep=''))
+val_file_names <- dir(iter_dir_path, pattern =".val")
+
+# Retrieve the xml header file for data selection in each val file
+key_file_name <- dir(iter_dir_path, pattern =".key")[1]
+key_file_path = file.path(iter_dir_path, key_file_name)
+header_xml <- xmlParse(file = key_file_path)
+header_field_values <- xpathApply(header_xml, "//Field", xmlGetAttr, "Name")
+
+# For each val file name
+for(i in 1:length(val_file_names)){
+
+  # OUTPUTS ########
+
+  # Retrive each val file relative path
+  print(paste("File parsed", val_file_names[i], sep=' '))
+  val_file_path = file.path(iter_dir_path, val_file_names[i])
+
+  # val file -> dataframe with header
+  val_dataframe <- read.table(val_file_path, header=FALSE, sep="\t", stringsAsFactors=FALSE, dec=",")
+  names(val_dataframe) = header_field_values
+
+  # Append outputs columns
+  sub_results = val_dataframe[,c("mMRROrigConverted","mTorqueMaxConverted","mTimeOrig")]
+
+  # Append outputs sum and max columns
+  sub_results$sum_mMRROrigConverted <- sum(val_dataframe[,"mMRROrigConverted"])
+  sub_results$max_mTorqueMaxConverted <- max(val_dataframe[,"mTorqueMaxConverted"])
+  sub_results$max_mTimeOrig <- max(val_dataframe[,"mTimeOrig"])
+
+  # INPUTS ########
+
+  # Retrieve the corresponding inputs
+  inputs <- variables[paste(c("inputs_", i-1), collapse = "")]
+  print(paste("inputs parsed", as.character(inputs), sep=' '))
+  inputs_list <- strsplit(as.character(inputs), ";")
+  SS_val <- strsplit(as.character(inputs_list[[1]][[1]]), "=")[[1]][[2]]
+  FR_val <- strsplit(as.character(inputs_list[[1]][[2]]), "=")[[1]][[2]]
+
+  # Append inputs to sub_results
+  sub_results$SS <- as.integer(SS_val)
+  sub_results$FR <- as.integer(FR_val)
+
+
+  # RESULTS += SUB_RESULTS ########
+  results <- rbind(results, sub_results)
+}
+
+# Standardize outputs
+results$standardized_mMRROrigConverted <- (results[,"mMRROrigConverted"] - mean(unique(results[,"sum_mMRROrigConverted"]))) / sd(unique(results[,"sum_mMRROrigConverted"]))
+results$standardized_mTorqueMaxConverted <- (results[,"mTorqueMaxConverted"] - mean(unique(results[,"max_mTorqueMaxConverted"]))) / sd(unique(results[,"max_mTorqueMaxConverted"]))
+results$standardized_mTimeOrig <- (results[,"mTimeOrig"] - mean(unique(results[,"max_mTimeOrig"]))) / sd(unique(results[,"max_mTimeOrig"]))
+
+# Compute the fitness coeff
+results$fitness <- mrr_weight * results$standardized_mMRROrigConverted + energy_weight * results$standardized_mTorqueMaxConverted + time_weight * results$standardized_mTimeOrig
+
+# Sort results by asc fitness
+results <- results[order(results$fitness),]
+print(paste("nb_rows after all rbind", nrow(results), sep= ' '))
+
+
+# DEBUG
+result_file_name <- paste('results_', optimization_index, '.ext', sep= '')
+write.table(results, file=result_file_name)
+
+
+# Select the min_fitness_selection_rate*100 first % of rows
+nb_rows <- trunc (min_fitness_selection_rate * nrow(results))
+if (nb_rows < 1)
+  nb_rows <- 1
+results <- head(results, nb_rows)
+print(paste("nb_rows after selection", nb_rows, sep= ' '))
+
+
+# Crossover of SS and FR
+crossed_SS_FR <- data.frame(SS=integer(0), FR=integer(0))
+if (nb_rows > 1)
+{
+	i <- 1
+	j <- 2
+	while (i < nb_rows) {
+	  while (j <= nb_rows) {
+		crossed_SS_FR <- rbind(crossed_SS_FR, data.frame(SS=results$SS[i], FR=results$FR[j]))
+		crossed_SS_FR <- rbind(crossed_SS_FR, data.frame(SS=results$SS[j], FR=results$FR[i]))
+		j <- j+1
+	  }
+	  i <- i+1
+	  j <- i+1
+	}
+} else
+{
+  crossed_SS_FR <- data.frame(SS=results$SS[1], FR=results$FR[1])
+}
+nb_rows <- nrow(crossed_SS_FR)
+
+
+# For each row, probable mutation on SS or FR
+for (i in 1:nb_rows) {
+  if (runif(n=1, min=0, max=1) < 0.5)
+  {
+    crossed_SS_FR[i,'SS'] <- probableMutateInRange(crossed_SS_FR[i,'SS'], SS_min, SS_max, mutation_probability)
+  } else
+  {
+    crossed_SS_FR[i,'FR'] <- probableMutateInRange(crossed_SS_FR[i,'FR'], FR_min, FR_max, mutation_probability)
+  }
+}
+
+# Remove duplicated SS and FR
+if (nb_rows > 1)
+{
+  crossed_SS_FR <- crossed_SS_FR[!duplicated(crossed_SS_FR[,c('SS','FR')]),]
+  nb_rows <- nrow(crossed_SS_FR)
+  print(paste("nb_rows after removing duplicated", nb_rows, sep= ' '))
+}
+
+
+# Store SS and FR values
+for(task_id in 0:(nb_rows-1))
+{
+   variables[ paste("inputs_", task_id, sep='') ] = paste("SS=", crossed_SS_FR[task_id+1, "SS"],";FR=", crossed_SS_FR[task_id+1, "FR"],sep='')
+   print(variables[ paste("inputs_", task_id, sep='') ])
+}
+
+# Geenrate a plot
+last_chart_file_path_from_dataspace <- file.path(current_time, paste("inputs_", optimization_index, ".png", sep=''))
+last_chart_file_path <- file.path(localspace, last_chart_file_path_from_dataspace)
+png(file = last_chart_file_path)
+plot(crossed_SS_FR$SS, crossed_SS_FR$FR)
+dev.off()
+
+# Update some variables
+variables["last_chart_file_path_from_dataspace"] = last_chart_file_path_from_dataspace
+variables["optimization_index"] = as.integer(optimization_index + 1)
+variables["nb_machpro_runs"] = nb_rows
+
+
+print("... R_Optimization")
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow  block="end">
+                <loop target="Expose_new_inputs">
+                    <script>
+                        <code language="groovy">
+                            <![CDATA[
+def nb_optim_iterations = variables.get("nb_optim_iterations")  as Integer
+def nb_machpro_runs = variables.get("nb_machpro_runs")  as Integer
+
+if(nb_machpro_runs == 1 || nb_optim_iterations == 1)
+	loop = false
+else {
+	variables["nb_optim_iterations"] = nb_optim_iterations - 1
+	loop = true
+}
+]]>
+                        </code>
+                    </script>
+                </loop>
+            </controlFlow>
+            <outputFiles>
+                <files  includes="*.ext" accessMode="transferToUserSpace"/>
+                <files  includes="$last_chart_file_path_from_dataspace" accessMode="transferToUserSpace"/>
+            </outputFiles>
+        </task>
+        <task name="Expose_results">
+            <depends>
+                <task ref="R_Optimization"/>
+            </depends>
+            <inputFiles>
+                <files  includes="$last_chart_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+def last_chart_file_path_from_dataspace = variables.get("last_chart_file_path_from_dataspace")
+def last_chart_file = new File(localspace, last_chart_file_path_from_dataspace)
+println last_chart_file.absolutePath + " exists? " + last_chart_file.exists()
+result = last_chart_file.getBytes()
+resultMetadata.put("file.name", last_chart_file_path_from_dataspace)
+resultMetadata.put("content.type", "image/png")
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+        </task>
+    </taskFlow>
+</job>
