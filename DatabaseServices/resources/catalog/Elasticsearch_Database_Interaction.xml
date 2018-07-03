@@ -8,31 +8,65 @@
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
+    <variable name="ACTION" value="Finish_Elasticsearch" model="PA:LIST(Stop_Elasticsearch, Resume_Elasticsearch, Finish_Elasticsearch)"/>
     <variable name="ELASTICSEARCH_INSTANCE_NAME" value="elasticsearch-server-1" />
   </variables>
   <description>
-    <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies and interact with a MongoDB database. It is a complete example putting together the use of
+    <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies and interact with an elasticsearch database. It is a complete example putting together the use of
 1) a PCA service to create an elasticsearch database and,
 2)  an elasticsearch connector from data-connectors bucket to interact with this database along with its tow modes: Import and Export. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="database-services"/>
-    <info name="Documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
     <info name="group" value="public-objects"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
   </genericInformation>
   <taskFlow>
-    <task name="Start_Elasticsearch_Service" onTaskError="cancelJob" >
+    <task name="Parse_Endpoint">
+      <description>
+        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOSTNAME and a PORT number to use them as an input in the data connector tasks.]]>
+      </description>
+      <depends>
+        <task ref="Start_Elasticsearch"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def elasticsearchEndpoint = variables.get("ENDPOINT")
+def elasticsearchHost
+def elasticsearchPort
+
+if (elasticsearchEndpoint != null){
+  elasticsearchEndpoint = elasticsearchEndpoint.replace("http://", "")
+  elasticsearchHost = elasticsearchEndpoint.split(":")[0]
+  variables.put("ELASTICSEARCH_HOSTNAME", elasticsearchHost)
+  elasticsearchPort = elasticsearchEndpoint.split(":")[1]
+  variables.put("ELASTICSEARCH_PORT", elasticsearchPort)
+
+}
+else{
+  throw new IOException("[ERROR] Elasticsearch endpoint not found")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Start_Elasticsearch"
+    
+    
+    onTaskError="cancelJob" >
       <description>
         <![CDATA[ Start the Elasticsearch server as a service. ]]>
       </description>
       <variables>
-        <variable name="ELASTICSEARCH_SERVICE_ID" value="Elasticsearch" inherited="false" />
-        <variable name="ELASTICSEARCH_INSTANCE_NAME" value="elasticsearch-server-1" inherited="true" />
+        <variable name="SERVICE_ID" value="Elasticsearch" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
       <inputFiles>
         <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
@@ -42,201 +76,112 @@
           <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
         </additionalClasspath>
       </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT MAPS THE SERVICE SPECIFIC VARIABLES WITH GENERIC VARIABLE NAMES *
+* THIS AVOIDS YOU FROM CHANGING THE WHOLE PCA WORKFLOWS IMPLEMENTATIONS          *
+*********************************************************************************/
+
+variables.put("INSTANCE_NAME", variables.get("ELASTICSEARCH_INSTANCE_NAME"))
+]]>
+          </code>
+        </script>
+      </pre>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN Start_Elasticsearch_Service ---")
-
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 import org.ow2.proactive.pca.service.client.model.ServiceDescription
 
+println("--- BEGIN " + variables.get("PA_TASK_NAME") + " ---")
+
 // Get schedulerapi access
 schedulerapi.connect()
 
 // Acquire session id
-def session_id = schedulerapi.getSession()
+def sessionId = schedulerapi.getSession()
 
 // Define PCA URL
 def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+def pcaUrl = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
 
 // Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def serviceId = variables.get("SERVICE_ID")
+def instanceName = variables.get("INSTANCE_NAME")
+println("SERVICE_ID:    " + serviceId)
+println("INSTANCE_NAME: " + instanceName)
+
 
 // Check existing service instances
-def service_id = variables.get("ELASTICSEARCH_SERVICE_ID")
-def instance_name = variables.get("ELASTICSEARCH_INSTANCE_NAME")
-println("*_service_id:    " + service_id)
-println("*_instance_name: " + instance_name)
-
 boolean instance_exists = false
-List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
 
-for (ServiceInstanceData service_instance_data : service_instances) {
-	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
-      if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name) {
+for (ServiceInstanceData serviceInstanceData : service_instances) {
+	if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
+      if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
         instance_exists = true
-        instance_id = service_instance_data.getInstanceId()
-  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
-        println("*_instance_id: " + instance_id)
-        println("*_endpoint:    " + endpoint)
-        variables.put("elasticsearch_instance_id", instance_id)
-        variables.put("elasticsearch_endpoint", endpoint)
+        def instanceId = serviceInstanceData.getInstanceId()
+  		endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("INSTANCE_ID: " + instanceId)
+        println("ENDPOINT:    " + endpoint)
+        variables.put("INSTANCE_ID", instanceId)
+        variables.put("ENDPOINT", endpoint)
         break
       }
   	}
 }
 
-println("instance_exists: " + instance_exists)
+println("INSTANCE_EXISTS ? " + instance_exists)
 
 if (!instance_exists){
   // Prepare service description
   ServiceDescription serviceDescription = new ServiceDescription()
   serviceDescription.setBucketName("cloud-automation")
-  serviceDescription.setWorkflowName(service_id)
-  serviceDescription.putVariablesItem("ELASTICSEARCH_INSTANCE_NAME_CL", instance_name)
-
+  serviceDescription.setWorkflowName(serviceId)
+  serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
   // Run service
-  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription)
 
   // Acquire service Instance ID
-  def service_instance_id = service_instance_data.getInstanceId()
-  println("service_instance_id: " + service_instance_id)
+  def serviceInstanceId = serviceInstanceData.getInstanceId()
 
   // Create synchro channel
-  channel = "Service_Instance_" + service_instance_id
-  println("channel: " + channel)
+  def channel = "Service_Instance_" + serviceInstanceId
+  println("CHANNEL: " + channel)
   synchronizationapi.createChannelIfAbsent(channel, false)
   synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
 
   // Acquire service endpoint
-  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
-  instance_id = service_instance_data.getInstanceId()
-  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
+  def instanceId = serviceInstanceData.getInstanceId()
+  endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
 
-  println("*_instance_name: " + instance_name)
-  println("*_instance_id: " + instance_id)
-  println("*_endpoint: " + endpoint)
+  println("INSTANCE_ID: " + instanceId)
+  println("ENDPOINT: " + endpoint)
 
-  variables.put("elasticsearch_instance_id", instance_id)
-  variables.put("elasticsearch_endpoint", endpoint)
-
-  result = '<meta http-equiv="refresh" content="1; url=' + variables.get("elasticsearch_endpoint") + '" />'
-  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
-  resultMetadata.put("content.type", "text/html")
+  variables.put("INSTANCE_ID", instanceId)
+  variables.put("ENDPOINT", endpoint)
 }
 
-println("--- END Start_Elasticsearch_Service ---")
+println("--- END " + variables.get("PA_TASK_NAME") + " ---")
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
     </task>
-    <task name="Parse_Endpoint">
-      <description>
-        <![CDATA[ This task parse the service endpoint to retrieve the hostname and the port. ]]>
-      </description>
-      <depends>
-        <task ref="Start_Elasticsearch_Service"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-def elasticsearch_endpoint = variables.get("elasticsearch_endpoint")
-def ELASTICSEARCH_HOST
-def ELASTICSEARCH_PORT
-
-if (elasticsearch_endpoint != null){
-  elasticsearch_endpoint = elasticsearch_endpoint.replace("http://", "")
-  ELASTICSEARCH_HOST = elasticsearch_endpoint.split(":")[0]
-  variables.put("ELASTICSEARCH_HOSTNAME", ELASTICSEARCH_HOST)
-  ELASTICSEARCH_PORT = elasticsearch_endpoint.split(":")[1]
-  variables.put("ELASTICSEARCH_PORT", ELASTICSEARCH_PORT)
-}
-else{
-  throw new IOException("Elasticsearch endpoint not found")
-}
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="Finish_Elasticsearch_Service"
-
-
-          onTaskError="cancelJob" >
-      <description>
-        <![CDATA[ Finish the Elasticsearch service. ]]>
-      </description>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
-      </genericInformation>
-      <depends>
-        <task ref="Import_from_ElasticSearch"/>
-      </depends>
-      <inputFiles>
-        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
-      </inputFiles>
-      <forkEnvironment >
-        <additionalClasspath>
-          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
-        </additionalClasspath>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN Finish_Elasticsearch_Service ---")
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def session_id = schedulerapi.getSession()
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-instance_id = variables.get("elasticsearch_instance_id")
-println("*_instance_id: " + instance_id)
-assert instance_id != null
-
-// Finish service
-ServiceDescription service = new ServiceDescription()
-service.setBucketName("cloud-automation")
-service.setWorkflowName("Finish_Elasticsearch")
-service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
-
-println("--- END Finish_Elasticsearch_Service ---")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-    </task>
-    <task name="Import_from_ElasticSearch">
+    <task name="Import_from_Elasticsearch">
       <description>
         <![CDATA[ Load data from Elasticsearch.
 If your server requires authentification, then use the $ELASTICSEARCH_USER variable then add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT>
@@ -245,14 +190,14 @@ The imported data is exported in a JSON format. ]]>
       </description>
       <variables>
         <variable name="ELASTICSEARCH_QUERY" value="{&quot;query&quot;: { &quot;match&quot;: {&quot;mass&quot;: &quot;77&quot;} }}" inherited="false" />
-        <variable name="ELASTICSEARCH_INDEX" value="star_wars" inherited="false" />
+        <variable name="ELASTICSEARCH_INDEX" value="activeeon" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
         <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
       </genericInformation>
       <depends>
-        <task ref="Export_to_ElasticSearch"/>
+        <task ref="Export_to_Elasticsearch"/>
       </depends>
       <forkEnvironment javaHome="/usr" >
         <envScript>
@@ -371,7 +316,7 @@ print("END Import Data from Elasticsearch")
         </script>
       </scriptExecutable>
     </task>
-    <task name="Export_to_ElasticSearch">
+    <task name="Export_to_Elasticsearch">
       <description>
         <![CDATA[ This task allows exporting data to ElasticSearch.
 It uses the following variables:
@@ -383,8 +328,8 @@ $ELASTICSEARCH_INPUT (required) A JSON Object/Array to be indexed in ElasticSear
  - A relative path in the data space of a JSON file. ]]>
       </description>
       <variables>
-        <variable name="ELASTICSEARCH_INDEX" value="star_wars" inherited="false" />
-        <variable name="ELASTICSEARCH_DOC_TYPE" value="people" inherited="false" />
+        <variable name="ELASTICSEARCH_INDEX" value="activeeon" inherited="false" />
+        <variable name="ELASTICSEARCH_DOC_TYPE" value="star_wars" inherited="false" />
         <variable name="ELASTICSEARCH_INPUT" value="star_wars_people.json" inherited="false" />
       </variables>
       <genericInformation>
@@ -516,19 +461,85 @@ if USER:
         print("[ERROR] The ELASTICSEARCH_USER is used in junction with a password. Please add the corresponding password to 3rd-party credentials in the scheduler-portal under the key :\"" + ELASTICSEARCH_URL_KEY + "\"")
         sys.exit(1)
 
-print('BEGIN Export Data to ElasticSearch')
+print('BEGIN Export Data to Elasticsearch')
 print('ELASTICSEARCH_HOSTNAME=', HOSTNAME)
 print('ELASTICSEARCH_PORT=', PORT)
 print('ELASTICSEARCH_USER=', USER)
 print('ELASTICSEARCH_INDEX=', INDEX)
 
-# Insert INPUT in ElasticSearch
+# Insert INPUT in Elasticsearch
 write_elasticsearch(INDEX, INPUT, DOC_TYPE, HOSTNAME,  PORT,  USER,  PASSWORD)
-print("END Export Data")
+print("END Export Data to Elasticsearch")
 ]]>
           </code>
         </script>
       </scriptExecutable>
+    </task>
+    <task name="Elasticsearch_Service_Action"
+    
+    
+    onTaskError="cancelJob" >
+      <variables>
+        <variable name="INSTANCE_ID" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Import_from_Elasticsearch"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN " + variables.get("PA_TASK_NAME") + " ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def sessionId = schedulerapi.getSession()
+
+// Define PCA URL
+def schedulerRestUrl = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = schedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def instanceId = variables.get("INSTANCE_ID") as int
+println("INSTANCE_ID: " + instanceId)
+assert instanceId != null
+
+// Stop service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation")
+service.setWorkflowName(variables.get("ACTION"))
+serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId, service)
+
+println("--- END " + variables.get("PA_TASK_NAME") + " ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
     </task>
   </taskFlow>
 </job>
