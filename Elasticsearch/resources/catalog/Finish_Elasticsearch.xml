@@ -7,77 +7,26 @@
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
-  <variables>
-    <variable name="ELASTICSEARCH_INSTANCE_NAME" value="elasticsearch-server-1" />
-  </variables>
   <description>
     <![CDATA[ Delete Elasticsearch instance. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
     <info name="group" value="public-objects"/>
     <info name="pca.service.id" value="Elasticsearch"/>
     <info name="pca.states" value="(RUNNING,FINISHED)(STOPPED,FINISHED)(ERROR,FINISHED)"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
   </genericInformation>
   <taskFlow>
-    <task name="Remove_Elasticsearch">
+    <task name="Finish_Elasticsearch">
       <description>
-        <![CDATA[ Remove Elasticsearch instance ]]>
+        <![CDATA[ Finish Elasticsearch instance and remove its docker container ]]>
       </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
-      <pre>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN PRE-SCRIPT Remove_Elasticsearch ---")
-
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id (PCA_INSTANCE_ID): " + service_instance_id)
-
-// Construct synchro channel name
-channel = "Service_Instance_" + service_instance_id  
-println("channel: " + channel)
-
-//Acquire docker container to delete from synchro channel
-def instance_name = synchronizationapi.get(channel, "INSTANCE_NAME")
-variables.put("elasticsearch_instance_name", instance_name)
-println("*_instance_name: " + instance_name)
-
-// Inform the Activation workflow that the delete is triggered
-synchronizationapi.put(channel, "DELETE_LAUNCHED", true) 
-println("DELETE_LAUNCHED = true")
-
-println("--- END PRE-SCRIPT Remove_Elasticsearch ---")
-]]>
-          </code>
-        </script>
-      </pre>
-      <scriptExecutable>
-        <script>
-          <code language="bash">
-            <![CDATA[
-echo "--- BEGIN Remove_Elasticsearch ---"
-
-echo "*_instance name: $variables_ELASTICSEARCH_INSTANCE_NAME"
-docker rm -f $variables_ELASTICSEARCH_INSTANCE_NAME
-
-echo "--- END Remove_Elasticsearch ---"
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="End_Deployment">
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
-      </genericInformation>
-      <depends>
-        <task ref="Remove_Elasticsearch"/>
-      </depends>
       <inputFiles>
         <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
@@ -86,51 +35,78 @@ echo "--- END Remove_Elasticsearch ---"
           <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
         </additionalClasspath>
       </forkEnvironment>
-      <scriptExecutable>
+      <pre>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN End_Deployment ---")
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING FINISHED             *
+*********************************************************************************/
+
+// Acquire service instance id and instance name from synchro channel
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def channel = "Service_Instance_" + instanceId
+def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
+variables.put("INSTANCE_NAME", instanceName)
+
+// Inform other platforms that service is being finished through Synchronization API
+synchronizationapi.put(channel, "DELETE_LAUNCHED", true)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo --- BEGIN  "$variables_PA_TASK_NAME"  ---
+
+echo "Instance name: $variables_INSTANCE_NAME"
+docker rm -f $variables_INSTANCE_NAME
+
+echo --- END "$variables_PA_TASK_NAME"  ---
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS POSTSCRIPT INFORMS PLATFORM THAT PCA SERVICE IS DELETED                   *
+*********************************************************************************/
 
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
-// PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service");
+println("BEGIN " + variables.get("PA_TASK_NAME"))
 
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
 
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id (PCA_INSTANCE_ID): " + service_instance_id)
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
-// Update service instance status
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-service_instance_data.setInstanceStatus("FINISHED")
-service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
-
-// Create synchro channel
-channel = "Service_Instance_" + service_instance_id
-println("channel: " + channel)
-synchronizationapi.waitUntil(channel, "DELETE_INSTANCE", "{k,x -> x == true}")
-
-// Delete service instance
-//service_instance_data = service_instance_rest_api.deleteServiceInstancesFromDatabaseUsingDELETE(service_instance_id)
+// Update service instance data : (status)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+serviceInstanceData.setInstanceStatus("FINISHED")
+serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
 
 // Delete synchro channel
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.waitUntil(channel, "DELETE_INSTANCE", "{k,x -> x == true}")
 synchronizationapi.deleteChannel(channel)
 
-println("--- END End_Deployment ---")
+println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
-      </scriptExecutable>
+      </post>
     </task>
   </taskFlow>
 </job>

@@ -7,19 +7,16 @@
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
-  <variables>
-    <variable name="ELASTICSEARCH_INSTANCE_NAME" value="elasticsearch-server-1" />
-  </variables>
   <description>
     <![CDATA[ Resume Elasticsearch instance. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
-    <info name="Documentation" value="https://www.elastic.co/"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
     <info name="group" value="public-objects"/>
     <info name="pca.service.id" value="Elasticsearch"/>
-    <info name="pca.states" value="(STOPPED,RUNNING)"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
+    <info name="pca.states" value="(STOPPED,RUNNIG)"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
   </genericInformation>
   <taskFlow>
     <task name="Resume_Elasticsearch">
@@ -27,35 +24,32 @@
         <![CDATA[ Resume Elasticsearch instance ]]>
       </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
       <pre>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN PRE-SCRIPT Resume_Elasticsearch ---")
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING RESUMED              *
+*********************************************************************************/
 
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id (PCA_INSTANCE_ID): " + service_instance_id)
+// Acquire service instance id and instance name from synchro channel
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def channel = "Service_Instance_" + instanceId
 
-// Construct synchro channel name
-channel = "Service_Instance_" + service_instance_id  
-println("channel: " + channel)
-
-//Acquire docker container to resume from synchro channel
-def instance_name = synchronizationapi.get(channel, "INSTANCE_NAME")
-variables.put("elasticsearch_instance_name", instance_name)
-println("*_instance_name: " + instance_name)
-
-// Inform the Activation workflow that the resume is triggered
-channel = "Service_Instance_" + service_instance_id  
-println("channel: " + channel)
-synchronizationapi.createChannelIfAbsent(channel, false)
+// Inform other platforms that service is running through Synchronization API
 synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instance_name)
-
-println("--- END PRE-SCRIPT Resume_Elasticsearch ---")
+synchronizationapi.put(channel, "STOP_LAUNCHED", false)
 ]]>
           </code>
         </script>
@@ -64,32 +58,61 @@ println("--- END PRE-SCRIPT Resume_Elasticsearch ---")
         <script>
           <code language="bash">
             <![CDATA[
-echo "--- BEGIN Resume_Elasticsearch ---"
+echo BEGIN  "$variables_PA_TASK_NAME"
 
-CONTAINER=$variables_ELASTICSEARCH_INSTANCE_NAME
+INSTANCE_NAME=$variables_INSTANCE_NAME
 
-echo "*_instance name: $CONTAINER"
-
-if [ "$(docker ps -a | grep $CONTAINER)" ]; then
- RUNNING=$(docker inspect --format="{{ .State.Running }}" $CONTAINER 2> /dev/null)
- STOPPED=$(docker inspect --format="{{ .State.Status }}" $CONTAINER 2> /dev/null)  
-
-	if [ "$RUNNING" == "true" ]; then 
-   		echo "$CONTAINER container is running"
-	elif [ "$STOPPED" == "exited" ]; then 
-		echo "Starting $CONTAINER container"
-   		docker start $CONTAINER
+if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
+ RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+ STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
+	if [ "$RUNNING" == "true" ]; then
+   		echo "$INSTANCE_NAME container is running"
+	elif [ "$STOPPED" == "exited" ]; then
+		echo "Starting $INSTANCE_NAME container"
+   		docker start $INSTANCE_NAME
 	fi
 fi
-echo "--- END Resume_Elasticsearch ---"
+echo END "$variables_PA_TASK_NAME"
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS RESUMED                   *
+*********************************************************************************/
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+// Acquire service instance id
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+// Update service instance data : (status, endpoint)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+serviceInstanceData.setInstanceStatus("RUNNING")
+serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+]]>
+          </code>
+        </script>
+      </post>
     </task>
-    <task name="Update_Deployment_Status">
+    <task name="Loop_Over_Instance_Status">
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
       <depends>
         <task ref="Resume_Elasticsearch"/>
@@ -106,117 +129,55 @@ echo "--- END Resume_Elasticsearch ---"
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN Update_Deployment_Status ---")
-
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
-// PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service");
+println("BEGIN " + variables.get("PA_TASK_NAME"))
 
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceName = variables.get("INSTANCE_NAME")
 
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id (PCA_INSTANCE_ID): " + service_instance_id)
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
-// Update service instance status
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-service_instance_data.setInstanceStatus("RUNNING")
-service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
-
-println("--- END Update_Deployment_Status ---")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="Loop_Over_Instance_Status">
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
-      </genericInformation>
-      <depends>
-        <task ref="Update_Deployment_Status"/>
-      </depends>
-      <inputFiles>
-        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
-      </inputFiles>
-      <forkEnvironment >
-        <additionalClasspath>
-          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
-        </additionalClasspath>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN Loop_Over_Instance_Status ---")
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id (PCA_INSTANCE_ID): " + service_instance_id)
-
-// Construct synchro channel
-channel = "Service_Instance_" + service_instance_id
-println("channel: " + channel)
-//synchronizationapi.createChannelIfAbsent(channel, false)
-
-// Delete service instance from database is set to false
-synchronizationapi.put(channel, "DELETE_LAUNCHED", false) 
-synchronizationapi.put(channel, "DELETE_INSTANCE", false) 
+// Inform other platforms that other actions are canceled through Synchronization API
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.put(channel, "DELETE_LAUNCHED", false)
+synchronizationapi.put(channel, "DELETE_INSTANCE", false)
 
 // Loop over service instance status
-def current_status = "RUNNING"
-def container = variables.get("ELASTICSEARCH_INSTANCE_NAME")
-println("container (*_instance_name): " + container)
+def currentStatus = "RUNNING"
 
-while(current_status=="RUNNING") {
-  sleep(30000);
-  
-  // Check docker container status 
-  def ByteArrayOutputStream sout = new ByteArrayOutputStream();
-  def ByteArrayOutputStream serr = new ByteArrayOutputStream();
-  def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${container}"].execute().waitForProcessOutput(sout, serr)
-  def container_running = new String(sout.toByteArray()).trim()
-  
-  if ((container_running != "true") && (synchronizationapi.get(channel, "DELETE_LAUNCHED") == false)){
-          current_status = 'ERROR'
-          // Update docker container is not running
-          def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-          service_instance_data.setInstanceStatus(current_status)
-          service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
-          break    
-  }
-  
-  // Check service instance status
-  current_status = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id).getInstanceStatus() 
-  println("current_status: " + current_status)
+while(currentStatus=="RUNNING") {
+    sleep(10000);
+    // Check docker container status
+    def ByteArrayOutputStream sout = new ByteArrayOutputStream();
+    def ByteArrayOutputStream serr = new ByteArrayOutputStream();
+    def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().waitForProcessOutput(sout, serr)
+    def isContainerRunning = new String(sout.toByteArray()).trim().toBoolean()
+
+    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "DELETE_LAUNCHED")) && (!synchronizationapi.get(channel, "STOP_LAUNCHED"))){
+        currentStatus = 'ERROR'
+        // Update docker container is not running
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+        serviceInstanceData.setInstanceStatus(currentStatus)
+        serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+        break
+    }
+    // Check service instance status
+    currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
+    println("Current Status: " + currentStatus)
 }
 
 // Allow the Delete workflow to be fulfilled
 synchronizationapi.put(channel, "DELETE_INSTANCE", true)
 
-println("--- BEGIN Loop_Over_Instance_Status ---")
+println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
