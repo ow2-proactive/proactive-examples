@@ -1,0 +1,621 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Data_Anomaly_Detection" projectName="4. Data Analytics"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
+    <variable name="FILE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/lcl/fusion_10p.csv" />
+    <variable name="MAX_USERS" value="5" model="PA:Integer"/>
+    <variable name="OUTPUT_FILE" value="HTML" />
+  </variables>
+  <description>
+    <![CDATA[ Detect anomalies on energy consumption by customers ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="machine-learning-workflows"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_data"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/data_analytics.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Import_Data">
+      <description>
+        <![CDATA[ Load data from external sources. ]]>
+      </description>
+      <variables>
+        <variable name="FILE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/lcl/fusion.csv" inherited="true" />
+        <variable name="FILE_DELIMITER" value="," inherited="false" />
+        <variable name="IS_LABELED_DATA" value="False" inherited="false" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_data"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+import pandas as pd
+import numpy as np
+
+from sklearn.preprocessing import LabelEncoder
+
+FILE_URL = variables.get("FILE_URL")
+FILE_DELIMITER = variables.get("FILE_DELIMITER")
+IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
+RENAME_COLUMNS = variables.get("RENAME_COLUMNS")
+FILTER_COLUMNS = variables.get("FILTER_COLUMNS")
+ENCODE_COLUMNS = variables.get("ENCODE_COLUMNS")
+
+assert FILE_URL is not None
+assert FILE_DELIMITER is not None
+
+dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
+#dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER, chunksize=1000)
+
+if RENAME_COLUMNS is not None:
+  RENAME_COLUMNS = [x.strip() for x in RENAME_COLUMNS.split(',')]
+  dataframe.columns = RENAME_COLUMNS
+
+if FILTER_COLUMNS is not None:
+  FILTER_COLUMNS = [x.strip() for x in FILTER_COLUMNS.split(',')]
+  dataframe = dataframe.filter(items=FILTER_COLUMNS)
+
+if ENCODE_COLUMNS is not None:
+  ENCODE_COLUMNS = [x.strip() for x in ENCODE_COLUMNS.split(',')]
+  map_struct = {}
+  for col in ENCODE_COLUMNS:
+    unique_vector = dataframe[col].unique()
+    LE = LabelEncoder()
+    LE.fit(unique_vector)
+    enc_values = LE.transform(unique_vector)
+    enc_map = dict(zip(unique_vector, enc_values))
+    dataframe[col] = dataframe[col].map(enc_map)
+    map_struct[col] = enc_map
+  print(map_struct)
+
+print(dataframe.head(3))
+print(dataframe.dtypes)
+print(dataframe.shape)
+
+columns_name = dataframe.columns
+columns_number = len(columns_name)
+
+if IS_LABELED_DATA == 'True':
+  data  = dataframe.values[:,0:columns_number-1]
+  label = dataframe.values[:,columns_number-1]
+  
+  data_df = pd.DataFrame(data=data, columns=columns_name[0:columns_number-1])
+  label_df = pd.DataFrame(data=label, columns=[columns_name[columns_number-1]])
+  
+  LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
+  LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
+  
+  variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
+  variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
+
+else:
+  data = dataframe.values
+  data_df = pd.DataFrame(data=data, columns=columns_name)
+
+DATAFRAME_JSON = dataframe.to_json(orient='split')
+COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
+DATA_TEST_DF_JSON = data_df.to_json(orient='split')
+
+variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
+variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
+variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
+variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False)
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8" />
+                <style>{0}</style>
+              </head>
+              <body>{1}</body></html>
+""".format(css_style, result)
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
+]]>
+            </code>
+          </script>
+        </scriptExecutable>
+        <controlFlow block="none"></controlFlow>
+        <post>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+variables.put("PREVIOUS_PA_TASK_NAME", variables.get("PA_TASK_NAME"))
+]]>
+            </code>
+          </script>
+        </post>
+      </task>
+      <task name="Split">
+        <description>
+          <![CDATA[ This task defines some input, here strings to be processed. ]]>
+        </description>
+        <variables>
+          <variable name="MAX_USERS" value="5" inherited="true" model="PA:Integer"/>
+        </variables>
+        <genericInformation>
+          <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        </genericInformation>
+        <depends>
+          <task ref="Import_Data"/>
+        </depends>
+        <scriptExecutable>
+          <script>
+            <code language="cpython">
+              <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+import pandas as pd
+import numpy as np
+
+MAX_USERS = variables.get("MAX_USERS")
+DATAFRAME_JSON = variables.get("DATAFRAME_JSON")
+
+assert DATAFRAME_JSON is not None
+assert MAX_USERS is not None
+
+MAX_USERS = int(MAX_USERS)
+dataframe = pd.read_json(DATAFRAME_JSON, orient='split')
+
+dataframe['DateTime'] = dataframe['DateTime'].astype('datetime64[ns]')
+dataframe['Date'] = [datetime.date() for datetime in dataframe['DateTime']]
+
+users = dataframe['LCLid'].unique()
+dataframe = dataframe.drop(['DateTime'], axis=1)
+ts = dataframe.groupby(['LCLid','Date'])['KWH_hh'].mean()
+
+print(dataframe.dtypes)
+print(dataframe.head(3))
+print(dataframe.shape)
+print(ts.head(3))
+print(ts.shape)
+
+result = {}
+for idx, user in enumerate(users):
+    ts_user = ts[user]
+    result[idx] = ts_user.to_json()
+    if idx == MAX_USERS:
+        break
+
+RUNS = len(result)
+variables.put("RUNS", RUNS)
+
+print("END " + __file__)
+]]>
+            </code>
+          </script>
+        </scriptExecutable>
+        <controlFlow >
+          <replicate>
+            <script>
+              <code language="cpython">
+                <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+runs = variables.get("RUNS")
+print("runs: ", runs)
+
+print("END " + __file__)
+]]>
+              </code>
+            </script>
+          </replicate>
+        </controlFlow>
+      </task>
+      <task name="Process">
+        <description>
+          <![CDATA[ This task will be replicated according to the 'runs' value specified in
+				the replication script.
+				The replication index is used in each task's instance to select the
+				input. ]]>
+        </description>
+        <genericInformation>
+          <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        </genericInformation>
+        <depends>
+          <task ref="Split"/>
+        </depends>
+        <scriptExecutable>
+          <script>
+            <code language="cpython">
+              <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+#from __future__ import division
+from itertools import count
+import matplotlib as mpl
+mpl.use('Agg')
+import matplotlib.pyplot as plt
+from numpy import linspace, loadtxt, ones, convolve
+import numpy as np
+import pandas as pd
+import collections
+from random import randint
+from matplotlib import style
+import base64
+import os.path
+from pandas.io.json import json_normalize
+from PIL import Image
+from io import BytesIO
+
+def get_thumbnail(path):
+  i = Image.open(path)
+  i.thumbnail((1200, 600), Image.LANCZOS)
+  return i
+
+def image_base64(im):
+  if isinstance(im, str):
+    im = get_thumbnail(im)
+  with BytesIO() as buffer:
+    im.save(buffer, 'jpeg')
+    return base64.b64encode(buffer.getvalue()).decode()
+
+def image_formatter(im):
+  return f'<img src="data:image/jpeg;base64,{image_base64(im)}" height="600" width="1200">'
+
+def image_formatter_url(im_url):
+  return """<img src="{0}" height="600" width="1200"/>""".format(im_url)
+
+#style.use('fivethirtyeight')
+#%matplotlib inline
+try:
+    # Python 2
+    from itertools import izip
+except ImportError:
+    # Python 3
+    #import zip
+    izip = zip
+
+def moving_average(data, window_size):
+    """ Computes moving average using discrete linear convolution of two one dimensional sequences.
+    Args:
+    -----
+            data (pandas.Series): independent variable
+            window_size (int): rolling window size
+
+    Returns:
+    --------
+            ndarray of linear convolution
+
+    References:
+    ------------
+    [1] Wikipedia, "Convolution", http://en.wikipedia.org/wiki/Convolution.
+    [2] API Reference: https://docs.scipy.org/doc/numpy/reference/generated/numpy.convolve.html
+
+    """
+    window = np.ones(int(window_size))/float(window_size)
+    return np.convolve(data, window, 'same')
+
+
+def explain_anomalies(y, window_size, sigma=1.0):
+    """ Helps in exploring the anamolies using stationary standard deviation
+    Args:
+    -----
+        y (pandas.Series): independent variable
+        window_size (int): rolling window size
+        sigma (int): value for standard deviation
+
+    Returns:
+    --------
+        a dict (dict of 'standard_deviation': int, 'anomalies_dict': (index: value))
+        containing information about the points indentified as anomalies
+
+    """
+    avg = moving_average(y, window_size).tolist()
+    residual = y - avg
+    # Calculate the variation in the distribution of the residual
+    std = np.std(residual)
+    return {'standard_deviation': round(std, 3),
+            'anomalies_dict': collections.OrderedDict([(index, y_i) for
+                                                       index, y_i, avg_i in izip(count(), y, avg)
+              if (y_i > avg_i + (sigma*std)) | (y_i < avg_i - (sigma*std))])}
+
+
+def explain_anomalies_rolling_std(y, window_size, sigma=1.0):
+    """ Helps in exploring the anamolies using rolling standard deviation
+    Args:
+    -----
+        y (pandas.Series): independent variable
+        window_size (int): rolling window size
+        sigma (int): value for standard deviation
+
+    Returns:
+    --------
+        a dict (dict of 'standard_deviation': int, 'anomalies_dict': (index: value))
+        containing information about the points indentified as anomalies
+    """
+    avg = moving_average(y, window_size)
+    avg_list = avg.tolist()
+    residual = y - avg
+    # Calculate the variation in the distribution of the residual
+    testing_std = pd.rolling_std(residual, window_size)
+    testing_std_as_df = pd.DataFrame(testing_std)
+    rolling_std = testing_std_as_df.replace(np.nan,
+                                  testing_std_as_df.ix[window_size - 1]).round(3).iloc[:,0].tolist()
+    std = np.std(residual)
+    return {'stationary standard_deviation': round(std, 3),
+            'anomalies_dict': collections.OrderedDict([(index, y_i)
+                                                       for index, y_i, avg_i, rs_i in izip(count(),
+                                                                                           y, avg_list, rolling_std)
+              if (y_i > avg_i + (sigma * rs_i)) | (y_i < avg_i - (sigma * rs_i))])}
+
+
+# This function is repsonsible for displaying how the function performs on the given dataset.
+def plot_results(x, y, window_size, sigma_value=1,
+                 text_xlabel="X Axis", text_ylabel="Y Axis", applying_rolling_std=False):
+    """ Helps in generating the plot and flagging the anamolies.
+        Supports both moving and stationary standard deviation. Use the 'applying_rolling_std' to switch
+        between the two.
+    Args:
+    -----
+        x (pandas.Series): dependent variable
+        y (pandas.Series): independent variable
+        window_size (int): rolling window size
+        sigma_value (int): value for standard deviation
+        text_xlabel (str): label for annotating the X Axis
+        text_ylabel (str): label for annotatin the Y Axis
+        applying_rolling_std (boolean): True/False for using rolling vs stationary standard deviation
+    """
+    #fig = plt.figure(figsize=(15, 8))
+    fig = plt.figure(figsize=(12, 6))
+    plt.plot(x, y, "k-", color='gray')
+    y_av = moving_average(y, window_size)
+    plt.plot(x, y_av, color='green')
+    #plt.xlim(0, 1000)
+    plt.xlabel(text_xlabel)
+    plt.ylabel(text_ylabel)
+
+    # Query for the anomalies and plot the same
+    events = {}
+    if applying_rolling_std:
+        events = explain_anomalies_rolling_std(y, window_size=window_size, sigma=sigma_value)
+    else:
+        events = explain_anomalies(y, window_size=window_size, sigma=sigma_value)
+
+    x_anomaly = np.fromiter(events['anomalies_dict'].keys(), dtype=int, count=len(events['anomalies_dict']))
+    y_anomaly = np.fromiter(events['anomalies_dict'].values(), dtype=float,
+                                            count=len(events['anomalies_dict']))
+    plt.plot(x_anomaly, y_anomaly, "r*", markersize=12)
+    
+    # add grid and lines and enable the plot
+    plt.grid(True)
+    #plt.show()
+    fig.savefig('output.jpg')
+
+
+replication = variables.get('PA_TASK_REPLICATION')
+print("replication: ", replication)
+
+input = results[0].value()[replication]
+ts_user = pd.read_json(input, typ='series', orient='records')
+
+#fig = plt.figure(figsize=(12, 6))
+#ts_user.plot()
+#plt.xlabel('Date')
+#plt.ylabel('KWH_hh')
+#plt.show()
+#fig.savefig('output.jpg')
+
+data_as_frame = ts_user.to_frame()
+data_as_frame.columns = ['KWH_hh']
+#data_as_frame.columns = ['Date', 'KWH_hh']
+data_as_frame['Ordinal'] = [x for x in range(0, ts_user.shape[0])]
+print(data_as_frame.head(3))
+x = data_as_frame['Ordinal'].values
+Y = data_as_frame['KWH_hh'].values
+plot_results(x, y=Y, window_size=10, text_xlabel="Day", sigma_value=3, text_ylabel="KWH")
+
+result = ''
+user = replication
+data = {'ID': [user], 'Image': "output.jpg"}
+df = pd.DataFrame(data=data) 
+with pd.option_context('display.max_colwidth', -1):
+  result = df.to_html(index=False, escape=False, formatters=dict(Image=image_formatter))
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              <!DOCTYPE html>
+              <html>
+                <head>
+                  <meta charset="UTF-8">
+                    <style>{0}</style>
+                  </head>
+                  <body>{1}</body></html>
+""".format(css_style, result)
+
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "result.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+          </task>
+          <task name="Merge">
+            <description>
+              <![CDATA[ As a merge operation, we simply print the results from previous tasks. ]]>
+            </description>
+            <genericInformation>
+              <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+            </genericInformation>
+            <depends>
+              <task ref="Process"/>
+            </depends>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+from bs4 import BeautifulSoup
+import copy
+
+merged_html = BeautifulSoup(str(results[0].value().decode("utf-8")))
+print("len(results): ", len(results))
+i = 0
+for html in results:
+    if i == 0:
+        i = i + 1
+        continue
+    i = i + 1
+    soup = BeautifulSoup(html.value())
+    for element in soup.body:
+        merged_html.body.append(copy.copy(element))
+
+result = str(merged_html).encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "result.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+          </task>
+        </taskFlow>
+      </job>

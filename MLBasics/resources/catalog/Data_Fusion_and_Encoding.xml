@@ -1,0 +1,736 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Data_Fusion_and_Encoding" projectName="4. Data Analytics"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
+  </variables>
+  <description>
+    <![CDATA[ Fuse different data structures ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="machine-learning-workflows"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_data"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/data_analytics.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Import_LCL">
+      <description>
+        <![CDATA[ Load data from external sources. ]]>
+      </description>
+      <variables>
+        <variable name="FILE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/lcl/MAC000002-3.csv" inherited="false" />
+        <variable name="FILE_DELIMITER" value="," inherited="false" />
+        <variable name="IS_LABELED_DATA" value="False" inherited="false" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="RENAME_COLUMNS" value="LCLid, stdorToU, DateTime, KWH_hh, Acorn, Acorn_grouped" inherited="false" />
+        <variable name="ENCODE_COLUMNS" value="LCLid, stdorToU, Acorn, Acorn_grouped" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_data"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN " + __file__)
+
+import pandas as pd
+import numpy as np
+
+from sklearn.preprocessing import LabelEncoder
+
+FILE_URL = variables.get("FILE_URL")
+FILE_DELIMITER = variables.get("FILE_DELIMITER")
+RENAME_COLUMNS = variables.get("RENAME_COLUMNS")
+FILTER_COLUMNS = variables.get("FILTER_COLUMNS")
+ENCODE_COLUMNS = variables.get("ENCODE_COLUMNS")
+
+assert FILE_URL is not None
+assert FILE_DELIMITER is not None
+
+dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
+
+if RENAME_COLUMNS is not None:
+  RENAME_COLUMNS = [x.strip() for x in RENAME_COLUMNS.split(',')]
+  dataframe.columns = RENAME_COLUMNS
+
+if FILTER_COLUMNS is not None:
+  FILTER_COLUMNS = [x.strip() for x in FILTER_COLUMNS.split(',')]
+  dataframe = dataframe.filter(items=FILTER_COLUMNS)
+
+if ENCODE_COLUMNS is not None:
+  ENCODE_COLUMNS = [x.strip() for x in ENCODE_COLUMNS.split(',')]
+  map_struct = {}
+  for col in ENCODE_COLUMNS:
+    unique_vector = dataframe[col].unique()
+    LE = LabelEncoder()
+    LE.fit(unique_vector)
+    enc_values = LE.transform(unique_vector)
+    enc_map = dict(zip(unique_vector, enc_values))
+    dataframe[col] = dataframe[col].map(enc_map)
+    map_struct[col] = enc_map
+  print(map_struct)
+
+# Format columns
+dataframe['KWH_hh'] = dataframe['KWH_hh'].replace('Null', 0)
+dataframe['KWH_hh'] = dataframe.KWH_hh.astype(float)
+#dataframe['DateTime'] = dataframe['DateTime'].astype('datetime64[ns]')
+
+print(dataframe.dtypes)
+print(dataframe.head(3))
+print(dataframe.shape)
+
+columns_name = dataframe.columns
+COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+variables.put("COLUMNS_NAME_LCL__JSON", COLUMNS_NAME_JSON)
+
+DATAFRAME_JSON = dataframe.to_json(orient='split')
+variables.put("DATAFRAME_LCL_JSON", DATAFRAME_JSON)
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False)
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8" />
+                <style>{0}</style>
+              </head>
+              <body>{1}</body></html>
+""".format(css_style, result)
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
+]]>
+            </code>
+          </script>
+        </scriptExecutable>
+        <controlFlow block="none"></controlFlow>
+      </task>
+      <task name="Import_Holidays">
+        <description>
+          <![CDATA[ Load data from external sources. ]]>
+        </description>
+        <variables>
+          <variable name="FILE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/lcl/holidays.csv" inherited="false" />
+          <variable name="FILE_DELIMITER" value="," inherited="false" />
+          <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+          <variable name="RENAME_COLUMNS" value="Date, Description" inherited="false" />
+          <variable name="FILTER_COLUMNS" value="Date" inherited="false" />
+        </variables>
+        <genericInformation>
+          <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png"/>
+          <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_data"/>
+        </genericInformation>
+        <forkEnvironment javaHome="/usr" >
+          <envScript>
+            <script>
+              <code language="python">
+                <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+              </code>
+            </script>
+          </envScript>
+        </forkEnvironment>
+        <scriptExecutable>
+          <script>
+            <code language="cpython">
+              <![CDATA[
+print("BEGIN " + __file__)
+
+import pandas as pd
+import numpy as np
+
+from sklearn.preprocessing import LabelEncoder
+
+FILE_URL = variables.get("FILE_URL")
+FILE_DELIMITER = variables.get("FILE_DELIMITER")
+RENAME_COLUMNS = variables.get("RENAME_COLUMNS")
+FILTER_COLUMNS = variables.get("FILTER_COLUMNS")
+ENCODE_COLUMNS = variables.get("ENCODE_COLUMNS")
+
+assert FILE_URL is not None
+assert FILE_DELIMITER is not None
+
+dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
+
+if RENAME_COLUMNS is not None:
+  RENAME_COLUMNS = [x.strip() for x in RENAME_COLUMNS.split(',')]
+  dataframe.columns = RENAME_COLUMNS
+
+if FILTER_COLUMNS is not None:
+  FILTER_COLUMNS = [x.strip() for x in FILTER_COLUMNS.split(',')]
+  dataframe = dataframe.filter(items=FILTER_COLUMNS)
+
+if ENCODE_COLUMNS is not None:
+  ENCODE_COLUMNS = [x.strip() for x in ENCODE_COLUMNS.split(',')]
+  map_struct = {}
+  for col in ENCODE_COLUMNS:
+    unique_vector = dataframe[col].unique()
+    LE = LabelEncoder()
+    LE.fit(unique_vector)
+    enc_values = LE.transform(unique_vector)
+    enc_map = dict(zip(unique_vector, enc_values))
+    dataframe[col] = dataframe[col].map(enc_map)
+    map_struct[col] = enc_map
+  print(map_struct)
+
+# Format columns
+dataframe['Date'] = dataframe['Date'].astype('datetime64[ns]')
+dataframe.set_index('Date', inplace=True)
+
+print(dataframe.dtypes)
+print(dataframe.head(3))
+print(dataframe.shape)
+
+columns_name = dataframe.columns
+COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+DATAFRAME_JSON = dataframe.to_json(orient='split')
+
+variables.put("COLUMNS_NAME_HOLIDAY_JSON", COLUMNS_NAME_JSON)
+variables.put("DATAFRAME_HOLIDAY_JSON", DATAFRAME_JSON)
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False)
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              <!DOCTYPE html>
+              <html>
+                <head>
+                  <meta charset="UTF-8" />
+                  <style>{0}</style>
+                </head>
+                <body>{1}</body></html>
+""".format(css_style, result)
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
+]]>
+              </code>
+            </script>
+          </scriptExecutable>
+          <controlFlow block="none"></controlFlow>
+        </task>
+        <task name="Import_Tariffs">
+          <description>
+            <![CDATA[ Load data from external sources. ]]>
+          </description>
+          <variables>
+            <variable name="FILE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/lcl/tariffs.csv" inherited="false" />
+            <variable name="FILE_DELIMITER" value="," inherited="false" />
+            <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+            <variable name="RENAME_COLUMNS" value="DateTime, Tariff" inherited="false" />
+            <variable name="ENCODE_COLUMNS" value="Tariff" inherited="false" />
+          </variables>
+          <genericInformation>
+            <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png"/>
+            <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_data"/>
+          </genericInformation>
+          <forkEnvironment javaHome="/usr" >
+            <envScript>
+              <script>
+                <code language="python">
+                  <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                </code>
+              </script>
+            </envScript>
+          </forkEnvironment>
+          <scriptExecutable>
+            <script>
+              <code language="cpython">
+                <![CDATA[
+print("BEGIN " + __file__)
+
+import pandas as pd
+import numpy as np
+
+from sklearn.preprocessing import LabelEncoder
+
+FILE_URL = variables.get("FILE_URL")
+FILE_DELIMITER = variables.get("FILE_DELIMITER")
+RENAME_COLUMNS = variables.get("RENAME_COLUMNS")
+FILTER_COLUMNS = variables.get("FILTER_COLUMNS")
+ENCODE_COLUMNS = variables.get("ENCODE_COLUMNS")
+
+assert FILE_URL is not None
+assert FILE_DELIMITER is not None
+
+dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
+
+if RENAME_COLUMNS is not None:
+  RENAME_COLUMNS = [x.strip() for x in RENAME_COLUMNS.split(',')]
+  dataframe.columns = RENAME_COLUMNS
+
+if FILTER_COLUMNS is not None:
+  FILTER_COLUMNS = [x.strip() for x in FILTER_COLUMNS.split(',')]
+  dataframe = dataframe.filter(items=FILTER_COLUMNS)
+
+if ENCODE_COLUMNS is not None:
+  ENCODE_COLUMNS = [x.strip() for x in ENCODE_COLUMNS.split(',')]
+  map_struct = {}
+  for col in ENCODE_COLUMNS:
+    unique_vector = dataframe[col].unique()
+    LE = LabelEncoder()
+    LE.fit(unique_vector)
+    enc_values = LE.transform(unique_vector)
+    enc_map = dict(zip(unique_vector, enc_values))
+    dataframe[col] = dataframe[col].map(enc_map)
+    map_struct[col] = enc_map
+  print(map_struct)
+
+# Format columns
+dataframe['DateTime'] = pd.to_datetime(dataframe['DateTime'], format='%m/%d/%y %H:%M')
+dataframe['DateTime'] = dataframe['DateTime'].astype('datetime64[ns]')
+dataframe.set_index('DateTime', inplace=True)
+
+print(dataframe.dtypes)
+print(dataframe.head(3))
+print(dataframe.shape)
+
+columns_name = dataframe.columns
+COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+variables.put("COLUMNS_NAME_TARIFFS_JSON", COLUMNS_NAME_JSON)
+
+DATAFRAME_JSON = dataframe.to_json(orient='split')
+variables.put("DATAFRAME_TARIFFS_JSON", DATAFRAME_JSON)
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False)
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                <!DOCTYPE html>
+                <html>
+                  <head>
+                    <meta charset="UTF-8" />
+                    <style>{0}</style>
+                  </head>
+                  <body>{1}</body></html>
+""".format(css_style, result)
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
+]]>
+                </code>
+              </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+          </task>
+          <task name="Data_Fusion">
+            <description>
+              <![CDATA[ Performs data fusion. ]]>
+            </description>
+            <variables>
+              <variable name="OUTPUT_FORMAT" value="HTML" inherited="false" />
+              <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+              <variable name="IS_LABELED_DATA" value="False" inherited="false" model="PA:Boolean"/>
+            </variables>
+            <genericInformation>
+              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/filled_filter.png"/>
+              <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_filter_data"/>
+            </genericInformation>
+            <depends>
+              <task ref="Import_LCL"/>
+              <task ref="Import_Holidays"/>
+              <task ref="Import_Tariffs"/>
+            </depends>
+            <forkEnvironment javaHome="/usr" >
+              <envScript>
+                <script>
+                  <code language="python">
+                    <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                  </code>
+                </script>
+              </envScript>
+            </forkEnvironment>
+            <scriptExecutable>
+              <script>
+                <code language="cpython">
+                  <![CDATA[
+print("BEGIN " + __file__)
+
+import pandas as pd
+import numpy as np
+
+DATAFRAME_LCL_JSON     = variables.get("DATAFRAME_LCL_JSON")
+DATAFRAME_HOLIDAY_JSON = variables.get("DATAFRAME_HOLIDAY_JSON")
+DATAFRAME_TARIFFS_JSON = variables.get("DATAFRAME_TARIFFS_JSON")
+IS_LABELED_DATA        = variables.get("IS_LABELED_DATA")
+OUTPUT_FORMAT          = variables.get("OUTPUT_FORMAT")
+
+assert DATAFRAME_LCL_JSON is not None
+assert DATAFRAME_HOLIDAY_JSON is not None
+assert DATAFRAME_TARIFFS_JSON is not None
+assert OUTPUT_FORMAT is not None
+
+dataframe = pd.read_json(DATAFRAME_LCL_JSON, orient='split')
+dataframe_holiday = pd.read_json(DATAFRAME_HOLIDAY_JSON, orient='split')
+dataframe_tariffs = pd.read_json(DATAFRAME_TARIFFS_JSON, orient='split')
+
+# Fuse holidays
+dataframe['Holiday'] = 0
+for holiday_date in dataframe_holiday.index:
+    dataframe.loc[dataframe['DateTime'].dt.strftime('%d/%m/%y') == holiday_date.strftime('%d/%m/%y'), 'Holiday'] = 1
+
+# Fuse tariffs
+dataframe['Tariff'] = np.nan
+for tariff_datetime in dataframe_tariffs.index:
+    tariff_value = dataframe_tariffs.loc[tariff_datetime, 'Tariff']
+    dataframe.loc[dataframe['DateTime'] == tariff_datetime, 'Tariff'] = tariff_value
+
+# Remove NaN rows (Tariff == NaN)
+dataframe.dropna(inplace=True)
+dataframe['Tariff'] = dataframe['Tariff'].astype(int)
+dataframe.reset_index(drop=True)
+
+print(dataframe.dtypes)
+print(dataframe.head(3))
+print(dataframe.shape)
+
+columns_name = dataframe.columns
+columns_number = len(columns_name)
+
+if IS_LABELED_DATA == 'True':
+  data  = dataframe.values[:,0:columns_number-1]
+  label = dataframe.values[:,columns_number-1]
+  
+  data_df = pd.DataFrame(data=data, columns=columns_name[0:columns_number-1])
+  label_df = pd.DataFrame(data=label, columns=[columns_name[columns_number-1]])
+  
+  LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
+  LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
+  
+  variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
+  variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
+
+else:
+  data = dataframe.values
+  data_df = pd.DataFrame(data=data, columns=columns_name)
+
+DATAFRAME_JSON = dataframe.to_json(orient='split')
+COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
+DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
+DATA_TEST_DF_JSON = data_df.to_json(orient='split')
+
+variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
+variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
+variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
+variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False, index=False)
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;
+  border-bottom: 1px solid #0B6FA4;
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;
+}
+"""
+result = """
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  
+                  <!DOCTYPE html>
+                  <html>
+                    <head>
+                      <meta charset="UTF-8" />
+                      <style>{0}</style>
+                    </head>
+                    <body>{1}</body></html>
+""".format(css_style, result)
+
+OUTPUT_FORMAT = OUTPUT_FORMAT.upper()
+
+if OUTPUT_FORMAT == 'HTML':
+  result = result.encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "result.html")
+  resultMetadata.put("content.type", "text/html")
+elif OUTPUT_FORMAT == 'CSV':
+  #result = dataframe.to_csv(encoding='utf-8', index=False)
+  result = dataframe.to_csv(index=False)
+  resultMetadata.put("file.extension", ".csv")
+  resultMetadata.put("file.name", "result.csv")
+  resultMetadata.put("content.type", "text/csv")
+
+print("END " + __file__)
+]]>
+                  </code>
+                </script>
+              </scriptExecutable>
+              <controlFlow block="none"></controlFlow>
+            </task>
+          </taskFlow>
+        </job>
