@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Resume_MySQL" projectName="Cloud Automation - Lifecycle"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <description>
+    <![CDATA[ Resume MySQL instance. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="cloud-automation"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="group" value="public-objects"/>
+    <info name="pca.service.id" value="MySQL"/>
+    <info name="pca.states" value="(STOPPED,RUNNING)"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Resume_MySQL">
+      <description>
+        <![CDATA[ Resume MySQL instance ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING RESUMED              *
+*********************************************************************************/
+
+// Acquire service instance id and instance name from synchro channel
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def channel = "Service_Instance_" + instanceId
+
+// Inform other platforms that service is running through Synchronization API
+synchronizationapi.put(channel, "RUNNING", true)
+synchronizationapi.put(channel, "STOP_LAUNCHED", false)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN  "$variables_PA_TASK_NAME"
+
+INSTANCE_NAME=$variables_INSTANCE_NAME
+
+if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
+ RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+ STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
+	if [ "$RUNNING" == "true" ]; then
+   		echo "$INSTANCE_NAME container is running"
+	elif [ "$STOPPED" == "exited" ]; then
+		echo "Starting $INSTANCE_NAME container"
+   		docker start $INSTANCE_NAME
+	fi
+fi
+echo END "$variables_PA_TASK_NAME"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS RESUMED                   *
+*********************************************************************************/
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+// Acquire service instance id
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+// Update service instance data : (status, endpoint)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+serviceInstanceData.setInstanceStatus("RUNNING")
+serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+]]>
+          </code>
+        </script>
+      </post>
+    </task>
+    <task name="Loop_Over_Instance_Status">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Resume_MySQL"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceName = variables.get("INSTANCE_NAME")
+
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+// Inform other platforms that other actions are canceled through Synchronization API
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.put(channel, "DELETE_LAUNCHED", false)
+synchronizationapi.put(channel, "DELETE_INSTANCE", false)
+
+// Loop over service instance status
+def currentStatus = "RUNNING"
+
+while(currentStatus=="RUNNING") {
+    sleep(10000);
+    // Check docker container status
+    def ByteArrayOutputStream sout = new ByteArrayOutputStream();
+    def ByteArrayOutputStream serr = new ByteArrayOutputStream();
+    def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().waitForProcessOutput(sout, serr)
+    def isContainerRunning = new String(sout.toByteArray()).trim().toBoolean()
+
+    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "DELETE_LAUNCHED")) && (!synchronizationapi.get(channel, "STOP_LAUNCHED"))){
+        currentStatus = 'ERROR'
+        // Update docker container is not running
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+        serviceInstanceData.setInstanceStatus(currentStatus)
+        serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+        break
+    }
+    // Check service instance status
+    currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
+    println("Current Status: " + currentStatus)
+}
+
+// Allow the Delete workflow to be fulfilled
+synchronizationapi.put(channel, "DELETE_INSTANCE", true)
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>

@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.10"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="ElasticSearch" projectName="3. NoSQL"
-    priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.10"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+        name="Elasticsearch" projectName="3. NoSQL"
+        priority="normal"
+        onTaskError="continueJobExecution"
+        maxNumberOfExecution="2">
   <variables>
     <variable name="ELASTICSEARCH_HOSTNAME" value="localhost" model=""/>
     <variable name="ELASTICSEARCH_PORT" value="9200" model="PA:Integer"/>
+    <variable name="ELASTICSEARCH_USER" value="" model=""/>
   </variables>
   <description>
-    <![CDATA[ Load data from Elasticsearch. ]]>
+    <![CDATA[ Load data from Elasticsearch.
+ELASTICSEARCH_USER is optional, but if your server requires authentification, then please add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT> ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="data-connectors"/>
@@ -21,24 +23,23 @@
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
   </genericInformation>
   <taskFlow>
-    <task name="Import_from_ElasticSearch">
+    <task name="Import_from_Elasticsearch">
       <description>
         <![CDATA[ Load data from Elasticsearch.
-The task requires the following third-party credentials : ELASTICSEARCH_USERNAME and ELASTICSEARCH_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
-It also requires a $QUERY and an $INDEX to fetch data. By default, it will fetch all documents from the specified index. $ELASTICSEARCH_SIZE is the maximum amount of hits to be returned.
+If your server requires authentification, then use the $ELASTICSEARCH_USER variable then add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT>
+It also requires a $QUERY and an $INDEX to fetch data.
 The imported data is exported in a JSON format. ]]>
       </description>
       <variables>
         <variable name="ELASTICSEARCH_QUERY" value="" inherited="false" />
         <variable name="ELASTICSEARCH_INDEX" value="" inherited="false" />
-        <variable name="ELASTICSEARCH_SIZE" value="10" inherited="false" model="PA:Integer"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
-        <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
       </genericInformation>
       <depends>
-        <task ref="Export_to_ElasticSearch"/>
+        <task ref="Export_to_Elasticsearch"/>
       </depends>
       <forkEnvironment javaHome="/usr" >
         <envScript>
@@ -47,21 +48,21 @@ The imported data is exported in a JSON format. ]]>
               <![CDATA[
 # In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
 #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters 
-containerName = 'activeeon/dlm3' 
-dockerRunCommand =  'docker run ' 
-dockerParameters = '--rm ' 
-# Prepare ProActive home volume 
-paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-# Prepare working directory (For Dataspaces and serialized task file) 
-workspaceHost = localspace 
-workspaceContainer = localspace 
-workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-# Prepare container working directory 
-containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+# Prepare Docker parameters
+containerName = 'activeeon/dlm3'
+dockerRunCommand =  'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
 preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 ]]>
             </code>
@@ -76,100 +77,92 @@ import pandas as pd
 import json
 from elasticsearch import Elasticsearch
 
-print("BEGIN Import Data FROM elasticsearch")
+print("BEGIN Import Data from Elasticsearch")
 
-SEARCH_SIZE = 10
-PORT = 9200
+HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
+PORT = int(variables.get("ELASTICSEARCH_PORT"))
+INDEX = variables.get("ELASTICSEARCH_INDEX")
+USER = variables.get("ELASTICSEARCH_USER")
+PASSWORD = None
 
-if variables.get("ELASTICSEARCH_HOSTNAME"):
-    HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
-else:
-    print("ELASTICSEARCH_HOSTNAME not defined by the user.")
+if not HOSTNAME:
+    print("[ERROR] ELASTICSEARCH_HOSTNAME not defined by the user.")
     sys.exit(1)
-if variables.get("ELASTICSEARCH_PORT"):
-    PORT = int(variables.get("ELASTICSEARCH_PORT"))
-else:    
-    print("ELASTICSEARCH_PORT not defined by the user. Using the default value: " + PORT)
-if variables.get("ELASTICSEARCH_INDEX"):
-    INDEX = variables.get("ELASTICSEARCH_INDEX")
-else:
-    print("ELASTICSEARCH_INDEX not defined by the user. Searching in all indices.")
+if not PORT:
+    PORT = 9200
+    print("[WARNING] ELASTICSEARCH_PORT not defined by the user. Using the default value: " + PORT)
+if not INDEX:
     INDEX = ""
-if variables.get("ELASTICSEARCH_SIZE"):
-    SEARCH_SIZE = int(variables.get("ELASTICSEARCH_SIZE"))
-if credentials.get("ELASTICSEARCH_USERNAME") is not None and credentials.get("ELASTICSEARCH_PASSWORD") is not None:
-    ELASTICSEARCH_USERNAME = credentials.get("ELASTICSEARCH_USERNAME")
-    ELASTICSEARCH_PASSWORD=credentials.get("ELASTICSEARCH_PASSWORD")
-else:
-    print("You first need to add third-party credentials (ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD) for the database in the scheduler-portal.")
-    sys.exit(1)
+    print("[WARNING] ELASTICSEARCH_INDEX not defined by the user. Searching in all indices.")
+if USER:
+    # This key is used for getting the password from 3rd party credentials.
+    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOSTNAME + ":" + str(PORT)
+    PASSWORD = credentials.get(ELASTICSEARCH_PASSWORD_KEY)
+    if not PASSWORD:
+        print("[ERROR] The ELASTICSEARCH_USER is used in junction with a password. Please add the corresponding password to 3rd-party credentials in the scheduler-portal under the key :\"" + ELASTICSEARCH_URL_KEY + "\"")
+        sys.exit(1)
 if variables.get("ELASTICSEARCH_QUERY"):
     # This is a workaround to force the variable string value into json
     exec("QUERY=json.loads(variables.get('ELASTICSEARCH_QUERY'))")
 else:
     #print("ELASTICSEARCH_QUERY not defined by the user.")
     #sys.exit(1)
-    print("ELASTICSEARCH_QUERY not defined by the user. Fetching all documents.")
+    print("[WARNING] ELASTICSEARCH_QUERY not defined by the user. Fetching all documents.")
     QUERY = { "query": { "match_all": {} } }
-
-
 
 def connect(host, port, username, password):
     """ A util for making a connection to elasticsearch """
 
-    # Connect to cluster over SSL using auth for best security:
+    # Connect to cluster over HTTP:
     es_header = [{
         'host': host,
-        'port': port,
-        'use_ssl': True,
-        'http_auth': (username,password)
-    }]
-
+        'port': port}]
+    # If a username is provided, then connect through SSL
+    if username:
+        es_header[0]['use_ssl'] = True
+        es_header[0]['http_auth'] = (username,password)
     # Instantiate the new Elasticsearch connection:
     es = Elasticsearch(es_header)
-
     return es
 
-
-def read_elasticsearch(index, query, search_size, host, port, username, password):
+def read_elasticsearch(index, query, host, port, username, password):
 
     # Connect to elasticsearch
     es = connect(host=host, port=port, username=username, password=password)
-    
-    
+
+
     # Make a query to the specific DB and Collection
-    res = es.search(index=index, size=search_size, body=query)
+    res = es.search(index=index, body=query)
     print("%d documents found" % res['hits']['total'])
 
     return res
 
 print("EXECUTING QUERY...")
-print('ELASTICSEARCH_HOSTNAME='+HOSTNAME)
+print('ELASTICSEARCH_HOSTNAME=', HOSTNAME)
 print('ELASTICSEARCH_PORT=', PORT)
-print('ELASTICSEARCH_INDEX='+INDEX)
-print('ELASTICSEARCH_QUERY='+json.dumps(QUERY))
-print('ELASTICSEARCH_SIZE=', SEARCH_SIZE)
+print('ELASTICSEARCH_USER=', USER)
+print('ELASTICSEARCH_INDEX=', INDEX)
+print('ELASTICSEARCH_QUERY=', json.dumps(QUERY))
 
+query_results= read_elasticsearch(INDEX, QUERY, HOSTNAME,  PORT,  USER,  PASSWORD)
 
-query_results= read_elasticsearch(INDEX, QUERY, SEARCH_SIZE, HOSTNAME,  PORT,  ELASTICSEARCH_USERNAME,  ELASTICSEARCH_PASSWORD)
-    
 #**************Preview Data*********************
 result = json.dumps(query_results).encode('utf-8')
 resultMetadata.put("file.extension", ".json")
 resultMetadata.put("file.name", "result.json")
 resultMetadata.put("content.type", "application/json")
 #***********************************************
-print("END Import_Data")
+print("END Import Data from Elasticsearch")
 ]]>
           </code>
         </script>
       </scriptExecutable>
     </task>
-    <task name="Export_to_ElasticSearch">
+    <task name="Export_to_Elasticsearch">
       <description>
         <![CDATA[ This task allows exporting data to ElasticSearch.
-The task requires the following third-party credentials : ELASTICSEARCH_USERNAME and ELASTICSEARCH_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
 It uses the following variables:
+$ELASTICSEARCH_USER (optional) If your server requires authentification, then please add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT>
 $ELASTICSEARCH_INDEX (required) the index to use. It is created if it does not exist
 $ELASTICSEARCH_DOC_TYPE (required) the documents type.
 $ELASTICSEARCH_INPUT (required) A JSON Object/Array to be indexed in ElasticSearch. This variable can:
@@ -183,7 +176,7 @@ $ELASTICSEARCH_INPUT (required) A JSON Object/Array to be indexed in ElasticSear
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.svg"/>
-        <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
       </genericInformation>
       <inputFiles>
         <files  includes="$ELASTICSEARCH_INPUT" accessMode="transferFromGlobalSpace"/>
@@ -195,21 +188,21 @@ $ELASTICSEARCH_INPUT (required) A JSON Object/Array to be indexed in ElasticSear
               <![CDATA[
 # In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
 #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters 
-containerName = 'activeeon/dlm3' 
-dockerRunCommand =  'docker run ' 
-dockerParameters = '--rm ' 
-# Prepare ProActive home volume 
-paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-# Prepare working directory (For Dataspaces and serialized task file) 
-workspaceHost = localspace 
-workspaceContainer = localspace 
-workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-# Prepare container working directory 
-containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+# Prepare Docker parameters
+containerName = 'activeeon/dlm3'
+dockerRunCommand =  'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
 preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 ]]>
             </code>
@@ -224,8 +217,7 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 from bson.json_util import dumps, loads
 
-# DEFAULTS
-PORT = 9200
+ELASTICSEARCH_URL_KEY = "elasticsearch://<username>@<hostname>:<port>"
 
 def get_input_json(input):
     """
@@ -242,28 +234,27 @@ def get_input_json(input):
 def connect(host, port, username, password):
     """ A util for making a connection to elasticsearch """
 
-    # Connect to cluster over SSL using auth for best security:
+    # Connect to cluster over HTTP:
     es_header = [{
         'host': host,
-        'port': port,
-        'use_ssl': True,
-        'http_auth': (username,password)
-    }]
-
+        'port': port}]
+    # If a username is provided, then connect through SSL
+    if username:
+        es_header[0]['use_ssl'] = True
+        es_header[0]['http_auth'] = (username,password)
     # Instantiate the new Elasticsearch connection:
     es = Elasticsearch(es_header)
-
     return es
 
 def write_elasticsearch(index, inputs, doc_type, host, port, username, password):
 
     # Connect to elasticsearch
     es = connect(host=host, port=port, username=username, password=password)
-    
+
     # Create an index if it does not exist
     if not es.indices.exists(index=index):
         es.indices.create(index=index,body={})
-        
+
     if isinstance(inputs, list):
         res = bulk(es, inputs, index=index,doc_type=doc_type, raise_on_error=True)
         if res[0] == len(inputs):
@@ -281,42 +272,43 @@ def write_elasticsearch(index, inputs, doc_type, host, port, username, password)
             print("Failed to insert document.")
             return 'False'
 
-if variables.get("ELASTICSEARCH_HOSTNAME"):
-    HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
-else:
-    print("ELASTICSEARCH_HOSTNAME not defined by the user.")
+HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
+PORT = int(variables.get("ELASTICSEARCH_PORT"))
+INDEX = variables.get("ELASTICSEARCH_INDEX")
+DOC_TYPE = variables.get("ELASTICSEARCH_DOC_TYPE")
+INPUT = get_input_json(variables.get("ELASTICSEARCH_INPUT"))
+USER = variables.get("ELASTICSEARCH_USER")
+PASSWORD= None
+
+if not HOSTNAME:
+    print("[ERROR] ELASTICSEARCH_HOSTNAME not defined by the user.")
     sys.exit(1)
-if variables.get("ELASTICSEARCH_PORT"):
-    PORT = int(variables.get("ELASTICSEARCH_PORT"))
-else:    
-    print("ELASTICSEARCH_PORT not defined by the user. Using the default value: " + PORT)
-if variables.get("ELASTICSEARCH_INDEX"):
-    INDEX = variables.get("ELASTICSEARCH_INDEX")
-else:
+if not PORT:
+    PORT = 9200
+    print("[WARNING] ELASTICSEARCH_PORT not defined by the user. Using the default value: " + PORT)
+if not INDEX:
     print("[ERROR] ELASTICSEARCH_INDEX not defined by the user.")
     sys.exit(1)
-if variables.get("ELASTICSEARCH_DOC_TYPE"):
-    DOC_TYPE = variables.get("ELASTICSEARCH_DOC_TYPE")
-else:
+if not DOC_TYPE:
     print("[ERROR] ELASTICSEARCH_DOC_TYPE not defined by the user.")
     sys.exit(1)
-if variables.get("ELASTICSEARCH_INPUT"):
-    INPUT = get_input_json(variables.get("ELASTICSEARCH_INPUT"))
-if credentials.get("ELASTICSEARCH_USERNAME") is not None and credentials.get("ELASTICSEARCH_PASSWORD") is not None:
-    ELASTICSEARCH_USERNAME = credentials.get("ELASTICSEARCH_USERNAME")
-    ELASTICSEARCH_PASSWORD = credentials.get("ELASTICSEARCH_PASSWORD")
-else:
-    print("You first need to add third-party credentials (ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD) for the database in the scheduler-portal.")
-    sys.exit(1)
+if USER:
+    # This key is used for getting the password from 3rd party credentials.
+    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOSTNAME + ":" + str(PORT)
+    PASSWORD = credentials.get(ELASTICSEARCH_PASSWORD_KEY)
+    if not PASSWORD:
+        print("[ERROR] The ELASTICSEARCH_USER is used in junction with a password. Please add the corresponding password to 3rd-party credentials in the scheduler-portal under the key :\"" + ELASTICSEARCH_URL_KEY + "\"")
+        sys.exit(1)
 
-print('BEGIN Export Data to ElasticSearch')
-print('ELASTICSEARCH_HOSTNAME='+HOSTNAME)
+print('BEGIN Export Data to Elasticsearch')
+print('ELASTICSEARCH_HOSTNAME=', HOSTNAME)
 print('ELASTICSEARCH_PORT=', PORT)
-print('ELASTICSEARCH_INDEX='+INDEX)
-    
-# Insert INPUT in mongoDB
-write_elasticsearch(INDEX, INPUT, DOC_TYPE, HOSTNAME,  PORT,  ELASTICSEARCH_USERNAME,  ELASTICSEARCH_PASSWORD)
-print("END Export Data")
+print('ELASTICSEARCH_USER=', USER)
+print('ELASTICSEARCH_INDEX=', INDEX)
+
+# Insert INPUT in Elasticsearch
+write_elasticsearch(INDEX, INPUT, DOC_TYPE, HOSTNAME,  PORT,  USER,  PASSWORD)
+print("END Export Data to Elasticsearch")
 ]]>
           </code>
         </script>

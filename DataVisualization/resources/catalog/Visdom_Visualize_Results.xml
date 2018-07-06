@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Visdom_Visualize_Results" onTaskError="continueJobExecution" priority="normal" projectName="Visdom" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Visdom_Visualize_Results" onTaskError="continueJobExecution" priority="normal" projectName="1. Visdom" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
   <variables>
-    <variable name="instance_name" value="visdom-server-1"/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
     <![CDATA[ Plot the different results obtained by a predictive model using Visdom ]]>
@@ -19,6 +19,7 @@
       </description>
       <variables>
         <variable inherited="false" name="TARGETED_CLASS" value=""/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
@@ -29,23 +30,26 @@
           <script>
             <code language="python">
               <![CDATA[
-#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters 
-containerName = 'activeeon/dlm3' 
-dockerRunCommand =  'docker run ' 
-dockerParameters = '--rm ' 
-# Prepare ProActive home volume 
-paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-# Prepare working directory (For Dataspaces and serialized task file) 
-workspaceHost = localspace 
-workspaceContainer = localspace 
-workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-# Prepare container working directory 
-containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
 ]]>
             </code>
           </script>
@@ -55,7 +59,7 @@ preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + wor
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN DATA VISUALIZATION")
+print("--- BEGIN Visdom_Visualize_Results ---")
 
 import pandas as pd
 import numpy as np
@@ -68,10 +72,15 @@ DATA_TEST_DF_JSON = variables.get("DATA_TEST_DF_JSON")
 PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
 IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
 TARGETED_CLASS = str(variables.get("TARGETED_CLASS"))
-VISDOM_HOST,VISDOM_PORT = variables.get("endpoint").split(":")
-print("Connecting to %s" % VISDOM_PORT)
+
+visdom_endpoint = variables.get("visdom_endpoint")
+if visdom_endpoint is not None:
+  visdom_endpoint = visdom_endpoint.replace("http://", "")
+(VISDOM_HOST, VISDOM_PORT) = visdom_endpoint.split(":")
+print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
 vis = Visdom(server="http://"+VISDOM_HOST,port=int(VISDOM_PORT))
 assert vis.check_connection()
+
 data_test  = pd.read_json(DATA_TEST_DF_JSON, orient='split')   
 predict_data_df  = pd.read_json(PREDICT_DATA, orient='split')  
 idx_test_df = data_test.index.values
@@ -85,7 +94,7 @@ predict_data = [str(predict_df[x]) for x in range(PREDICTION_LIMIT)]
 try:
   is_classification_algorithm = variables.get("CLASSIFICATION_MEASURE")
 except NameError:
-    is_classification_algorithm = 'False'
+  is_classification_algorithm = 'False'
 
 if is_classification_algorithm == 'True':
   LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
@@ -98,12 +107,11 @@ classes = [str(df_classes[x]) for x in range(0,len(df_classes))]
 classes.sort()
 classes_stats = [0]*len(classes)
 
-  
 # REGRESSION PLOTS
 try:
   is_regression_algorithm = variables.get("REGRESSION_MEASURE")
 except NameError:
-    is_regression_algorithm = 'False'
+  is_regression_algorithm = 'False'
 
 if is_regression_algorithm == 'True':
   list_detected_simples_text = vis.text("List of detected samples in class "+TARGETED_CLASS+" :\n", opts = dict(title = 'List of indexes'))
@@ -145,7 +153,7 @@ else:
 try:
   is_clustering_algorithm = variables.get("CLUSTERING_MEASURE")
 except NameError:
-    is_clustering_algorithm = 'False' 
+  is_clustering_algorithm = 'False' 
   
 if IS_LABELED_DATA == 'True' and not(is_clustering_algorithm == 'True'):
   LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
@@ -164,7 +172,7 @@ if IS_LABELED_DATA == 'True' and not(is_clustering_algorithm == 'True'):
       vis.text("ACCURACY SCORE:", win=score_text, append=True)
       vis.text(str(accuracy_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
       vis.text("PRECISION SCORE:", win=score_text, append=True)
-      vis.text(str(precision_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
+      vis.text(str(precision_score(label_test_df.values.ravel(), predict_data_df, average='micro')), win=score_text, append=True)
       vis.text("CONFUSION MATRIX:", win=score_text, append=True)
       vis.text(str(confusion_matrix(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
   except NameError:
@@ -183,8 +191,8 @@ if IS_LABELED_DATA == 'True' and not(is_clustering_algorithm == 'True'):
       vis.text(str(r2_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
   except NameError:        
     is_regression_algorithm = None
-   
-print("END DATA VISUALIZATION")
+
+print("--- END Visdom_Visualize_Results ---")
 ]]>
           </code>
         </script>

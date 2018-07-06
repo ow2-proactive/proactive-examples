@@ -1,0 +1,283 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="PostgreSQL_Service_Example" projectName="PostgreSQL Workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="POSTGRES_DATABASE" value="activeeon" />
+    <variable name="POSTGRES_INSTANCE_NAME" value="postgres-server-1" />
+    <variable name="POSTGRES_PASSWORD" value="proactive" />
+    <variable name="POSTGRES_USER" value="mlos" />
+  </variables>
+  <description>
+    <![CDATA[ This workflow shows how to deploy, stop and finish a PCA PostgreSQL service.
+It demonstrates how to perform actions (START, STOP and FINISH) on the service from inside groovy tasks using the PCA client API. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="database-services"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_PostgreSQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the PostgreSQL server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="POSTGRES_SERVICE_ID" value="PostgreSQL" inherited="false" />
+        <variable name="POSTGRES_INSTANCE_NAME" value="postgres-server-1" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Start_PostgreSQL_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+http://localhost:8080/studio/#
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def service_id = variables.get("POSTGRES_SERVICE_ID")
+def instance_name = variables.get("POSTGRES_INSTANCE_NAME")
+def user = variables.get("POSTGRES_USER")
+def password = variables.get("POSTGRES_PASSWORD")
+def database = variables.get("POSTGRES_DATABASE")
+println("*_service_id:    " + service_id)
+println("*_instance_name: " + instance_name)
+println("*_user: " + user)
+println("*_password: " + password)
+println("*_database: " + database)
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData service_instance_data : service_instances) {
+	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
+      if (service_instance_data.getVariables().get("POSTGRES_INSTANCE_NAME") == instance_name) {
+        instance_exists = true
+        instance_id = service_instance_data.getInstanceId()
+  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("*_instance_id: " + instance_id)
+        println("*_endpoint:    " + endpoint)
+        variables.put("POSTGRES_INSTANCE_ID", instance_id)
+        variables.put("postgres_endpoint", endpoint)
+        break
+      }
+  	}
+}
+
+println("instance_exists: " + instance_exists)
+
+if (!instance_exists){
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(service_id) 
+  serviceDescription.putVariablesItem("POSTGRES_INSTANCE_NAME_CL", instance_name)
+  serviceDescription.putVariablesItem("POSTGRES_USER_CL", user)
+  serviceDescription.putVariablesItem("POSTGRES_PASSWORD_CL", password)
+  serviceDescription.putVariablesItem("POSTGRES_DATABASE_CL", database)
+  
+  // Run service
+  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
+  
+  // Acquire service Instance ID
+  def service_instance_id = service_instance_data.getInstanceId()
+  
+  // Create synchro channel
+  channel = "Service_Instance_" + service_instance_id
+  println("channel: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+  
+  // Acquire service endpoint
+  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+  def instance_id = service_instance_data.getInstanceId()
+  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
+  
+  println("*_instance_id: " + instance_id)
+  println("*_endpoint: " + endpoint)
+  
+  variables.put("POSTGRES_INSTANCE_ID", instance_id)
+  variables.put("postgres_endpoint", endpoint)
+}
+
+println("--- END Start_PostgreSQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Stop_PostgreSQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Stop the PostgreSQL service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_PostgreSQL_Service"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Stop_PostgreSQL_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def instance_id = (int) variables.get("POSTGRES_INSTANCE_ID")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Stop service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Stop_PostgreSQL")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Stop_PostgreSQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Finish_PostgreSQL_Service"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Finish the PostgreSQL service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Stop_PostgreSQL_Service"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN Finish_PostgreSQL_Service ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def session_id = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+//api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+def instance_id = (int) variables.get("POSTGRES_INSTANCE_ID")
+println("*_instance_id: " + instance_id)
+assert instance_id != null
+
+// Finish service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation") 
+service.setWorkflowName("Finish_PostgreSQL")
+service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
+
+println("--- END Finish_PostgreSQL_Service ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>

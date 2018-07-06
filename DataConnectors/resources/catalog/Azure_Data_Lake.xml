@@ -5,15 +5,14 @@
      xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
     name="Azure_Data_Lake" projectName="4. Cloud"
     priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
+    onTaskError="cancelJob">
   <variables>
     <variable name="AZ_CRON_MONITOR" value="* * * * *" />
     <variable name="AZ_DLA_ACCOUNT" value=""/>
     <variable name="AZ_DLA_JOB" value=""/>
     <variable name="AZ_DLA_OUTPUT" value=""/>
     <variable name="AZ_DLA_SCRIPT" value=""/>
-    <variable name="AZ_DLS_ACCOUNT" value=""/>
+    <variable name="AZ_SUBSCRIPTION" value=""/>
   </variables>
   <description>
     <![CDATA[ This workflow allows to submit a U-SQL job to Azure Data Analytics and retrieve the result file. ]]>
@@ -21,7 +20,8 @@
   <genericInformation>
     <info name="bucketName" value="data-connectors"/>
     <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_dla.png"/>
   </genericInformation>
   <taskFlow>
     <task name="Submit_job">
@@ -29,8 +29,8 @@
         <![CDATA[ Connect and submit a job to Azure Data Lake ]]>
       </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
-        <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_dla.png"/>
+        <info name="task.documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
       </genericInformation>
       <inputFiles>
         <files  includes="$AZ_DLA_SCRIPT" accessMode="transferFromGlobalSpace"/>
@@ -71,7 +71,7 @@ echo "Azure CLI is installed"
 if (!credentials.get("AZ_U") || !credentials.get("AZ_P")) {
   println("Credentials AZ_U and/or AZ_P are not set, please add them.")
   System.exit(1)
-} else if (!variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLS_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
+} else if (!variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
   println("All the workflow variables are required, please fill them accordingly.")
   System.exit(1)  
 }
@@ -82,17 +82,64 @@ if (credentials.get("AZ_T") == null) {
 } else {
   connection_string = "az login --service-principal -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P") + " -t " + credentials.get("AZ_T")
 }
-println(connection_string.execute().text)
+def conn_exec = connection_string.execute()
+conn_exec.waitFor()
+if (conn_exec.exitValue() != 0)
+{
+  println conn_exec.err.text
+  System.exit(1)
+}
+println("Successful connection:")
+println conn_exec.in.text
+//Set subscription if needed
+if (variables.get("AZ_SUBSCRIPTION")) {
+  def subscription_string = "az account set --subscription " + variables.get("AZ_SUBSCRIPTION")
+  def subscription_exec = subscription_string.execute()
+  subscription_exec.waitFor()
+  if (subscription_exec.exitValue() != 0)
+  {
+    println subscription_exec.err.text
+    System.exit(1)
+  }
+}
+//Validate accounts
+def account_string = "az dla account list"
+def account_exec = account_string.execute()
+account_exec.waitFor()
+if (account_exec.exitValue() != 0)
+{
+  println account_exec.err.text
+  System.exit(1)
+}
+def dla_list = new groovy.json.JsonSlurper().parseText(account_exec.in.text)
+if (!dla_list.name.contains(variables.get("AZ_DLA_ACCOUNT"))) {
+  println("'" + variables.get("AZ_DLA_ACCOUNT") + "' account was not found in your Data Lake Analytics repository.")
+  System.exit(1)
+}
+//Obtain default Data Lake Store account
+def dls_string = "az dla account show -n " + variables.get("AZ_DLA_ACCOUNT")
+def dls_exec = dls_string.execute()
+dls_exec.waitFor()
+if (dls_exec.exitValue() != 0)
+{
+  println account_exec.err.text
+  System.exit(1)
+}
+variables.put("AZ_DLS_ACCOUNT", (new groovy.json.JsonSlurper().parseText(dls_exec.in.text)).defaultDataLakeStoreAccount)
 //Define output file name in usql script (works in Linux and OSX)
 def i = ("sed --version".execute().text.contains("GNU")) ? '--' : '""'
 def sed_string =  "sed -i " + i + " s/OUTPUT_FILE/" + variables.get("AZ_DLA_OUTPUT") + "/ " + variables.get("AZ_DLA_SCRIPT")
 sed_string.execute()
-//Upload script
-def upload_string = "az dls fs upload --account " + variables.get("AZ_DLS_ACCOUNT") + " --source-path " + variables.get("AZ_DLA_SCRIPT") + " --destination-path / --overwrite"
-println(upload_string.execute().text)
 //Submit job and save ID
 def submit_string = "az dla job submit --account " + variables.get("AZ_DLA_ACCOUNT") + " --job-name " + variables.get("AZ_DLA_JOB") + " --script @" + variables.get("AZ_DLA_SCRIPT")
-def job = new groovy.json.JsonSlurper().parseText(submit_string.execute().text)
+def submit_exec = submit_string.execute()
+submit_exec.waitFor()
+if (submit_exec.exitValue() != 0)
+{
+  println submit_exec.err.text
+  System.exit(1)
+}
+def job = new groovy.json.JsonSlurper().parseText(submit_exec.in.text)
 println("Submitted job id " + job.jobId)
 variables.put("AZ_DLA_JOB_ID", job.jobId)
 variables.put("IS_FINISHED","false")
@@ -106,8 +153,8 @@ variables.put("IS_FINISHED","false")
         <![CDATA[ Periodically monitor the status of the submitted job, waiting for it to be finished ]]>
       </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
-        <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_dla.png"/>
+        <info name="task.documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
       </genericInformation>
       <depends>
         <task ref="Submit_job"/>
@@ -143,7 +190,7 @@ fi
           <code language="groovy">
             <![CDATA[
 //Check all credentials and variables are set
-if (!credentials.get("AZ_U") || !credentials.get("AZ_P") || !variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLS_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
+if (!credentials.get("AZ_U") || !credentials.get("AZ_P") || !variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
   println("Missing credentials and/or variables, please make sure to set them all.")
   System.exit(1)
 }
@@ -154,13 +201,46 @@ if (credentials.get("AZ_T") == null) {
 } else {
   connection_string = "az login --service-principal -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P") + " -t " + credentials.get("AZ_T")
 }
-connection_string.execute()
+def conn_exec = connection_string.execute()
+conn_exec.waitFor()
+if (conn_exec.exitValue() != 0)
+{
+  println conn_exec.err.text
+  System.exit(1)
+}
+//Set subscription if needed
+if (variables.get("AZ_SUBSCRIPTION")) {
+  def subscription_string = "az account set --subscription " + variables.get("AZ_SUBSCRIPTION")
+  def subscription_exec = subscription_string.execute()
+  subscription_exec.waitFor()
+  if (subscription_exec.exitValue() != 0)
+  {
+    println subscription_exec.err.text
+    System.exit(1)
+  }
+}
 //Get Job Status
 def search_string = "az dla job show --account " + variables.get("AZ_DLA_ACCOUNT") + " --job-identity " + variables.get("AZ_DLA_JOB_ID")
-def job = new groovy.json.JsonSlurper().parseText(search_string.execute().text)
+def search_exec = search_string.execute()
+search_exec.waitFor()
+if (search_exec.exitValue() != 0)
+{
+  println search_exec.err.text
+  System.exit(1)
+}
+def job = new groovy.json.JsonSlurper().parseText(search_exec.in.text)
 //Wait for the job to finish
 if (job.endTime != null) {
   variables.put("IS_FINISHED","true")
+  if (job.result == "Succeeded") {
+    println("Job " + variables.get("AZ_DLA_JOB_ID") + " finished successfully.")
+  } else {
+    println("Job " + variables.get("AZ_DLA_JOB_ID") + " finished with errors:")
+    println job.errorMessage
+    System.exit(1)
+  }
+} else {
+  println("Waiting for job to finish...")
 }
 ]]>
           </code>
@@ -187,12 +267,20 @@ if(variables.get("IS_FINISHED") ==  "false"){
         <![CDATA[ Display the result file ]]>
       </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
-        <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_dla.png"/>
+        <info name="task.documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_data_lake"/>
       </genericInformation>
       <depends>
         <task ref="Wait_for_job"/>
       </depends>
+      <inputFiles>
+        <files  includes="opencsv-4.1.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="opencsv-4.1.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
       <pre>
         <script>
           <code language="bash">
@@ -223,8 +311,10 @@ fi
         <script>
           <code language="groovy">
             <![CDATA[
+import com.opencsv.CSVReader
+
 //Check all credentials and variables are set
-if (!credentials.get("AZ_U") || !credentials.get("AZ_P") || !variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLS_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
+if (!credentials.get("AZ_U") || !credentials.get("AZ_P") || !variables.get("AZ_DLA_ACCOUNT") || !variables.get("AZ_DLA_SCRIPT") || !variables.get("AZ_DLA_JOB") || !variables.get("AZ_DLA_OUTPUT")) {
   println("Missing credentials and/or variables, please make sure to set them all.")
   System.exit(1)
 }
@@ -235,13 +325,85 @@ if (credentials.get("AZ_T") == null) {
 } else {
   connection_string = "az login --service-principal -u " + credentials.get("AZ_U") + " -p " + credentials.get("AZ_P") + " -t " + credentials.get("AZ_T")
 }
-connection_string.execute()
+def conn_exec =  connection_string.execute()
+conn_exec.waitFor()
+if (conn_exec.exitValue() != 0)
+{
+  println conn_exec.err.text
+  System.exit(1)
+}
+//Set subscription if needed
+if (variables.get("AZ_SUBSCRIPTION")) {
+  def subscription_string = "az account set --subscription " + variables.get("AZ_SUBSCRIPTION")
+  def subscription_exec = subscription_string.execute()
+  subscription_exec.waitFor()
+  if (subscription_exec.exitValue() != 0)
+  {
+    println subscription_exec.err.text
+    System.exit(1)
+  }
+}
 //Download output file
 def download_string = "az dls fs download --account " + variables.get("AZ_DLS_ACCOUNT") + " --source-path /" + variables.get("AZ_DLA_OUTPUT") + " --destination-path " + variables.get("AZ_DLA_OUTPUT")
-println(download_string.execute().text)
+def download_exec = download_string.execute()
+download_exec.waitFor()
+if (download_exec.exitValue() != 0)
+{
+  println download_exec.err.text
+  System.exit(1)
+}
+println download_exec.in.text
 //Display file
-println("Output file " + variables.get("AZ_DLA_OUTPUT") + ":")
-println(["cat", variables.get("AZ_DLA_OUTPUT")].execute().text)
+println("Raw output file: " + variables.get("AZ_DLA_OUTPUT"))
+println("You can visualize the formatted output in the Preview tab")
+
+def reader = new CSVReader(new FileReader(new File(variables.get("AZ_DLA_OUTPUT"))))
+def writer = new StringWriter()
+def builder = new groovy.xml.MarkupBuilder(writer)
+def nextRecord
+
+builder.html{
+  head{
+    style(type:"text/css", '''
+    table {
+      border: 1px solid #999999;
+      text-align: center;
+      border-collapse: collapse;
+      width: 100%;
+    }
+    td {
+      border: 1px solid #999999;
+      padding: 3px 2px;
+      font-size: 13px;
+      border-bottom: 1px solid #999999;
+    }
+    th {
+      font-size: 17px;
+      font-weight: bold;
+      color: #FFFFFF;
+      text-align: center;
+      background: #0B6FA4;
+      border-left: 2px solid #999999;
+    }
+    ''')
+  }
+  body{
+    table {
+	  while ((nextRecord = reader.readNext()) != null) {
+        tr {
+          nextRecord.each {
+            td("${it}")
+          }
+        }
+      }
+    }
+  }
+}
+
+result = writer.toString().getBytes("UTF-8");
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "result.html")
+resultMetadata.put("content.type", "text/html")
 ]]>
           </code>
         </script>

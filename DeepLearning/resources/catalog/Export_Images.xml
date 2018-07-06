@@ -1,45 +1,37 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.10"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="Export_Images" projectName="1. Input and Output"
-    priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2"
->
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Export_Images" onTaskError="continueJobExecution" priority="normal" projectName="1. Input and Output" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
   <variables>
-    <variable name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
-    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
+    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
     <![CDATA[ Download a zip file of your results ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="deep-learning"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
-    <info name="Documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_images"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+<info name="bucketName" value="deep-learning-dev"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
+<info name="Documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_images"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
     <task name="Export_Images">
       <description>
         <![CDATA[ Download a zip file of your results ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
         <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_images"/>
       </genericInformation>
       <inputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$OUTPUT_FOLDER/**"/>
       </inputFiles>
       <selection>
-        <script
-         type="static" >
+        <script type="static">
           <code language="python">
             <![CDATA[
 import os
@@ -64,7 +56,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -100,114 +92,277 @@ else:
             <![CDATA[
 print("BEGIN Export_Images")
 
-import pandas as pd
-import zipfile
-import shutil
-import torch
-import json
-import uuid
 import os
+import cv2
+import json
+import glob
+import uuid  
+import torch 
+import numpy
+import torch
+import random
+import shutil 
+import zipfile
+import pandas as pd
+
+
+from PIL import Image
+from os.path import join, exists
+from os import remove, listdir, makedirs
+
+import torch
+import torch.nn as nn
+import torch.nn.init as init
+import torch.nn.functional as F
+from torch.utils.data import Dataset 
+
+from torch.utils import model_zoo
+from torchvision import models
 
 from os.path import join
+from os import remove, listdir, makedirs
+from ast import literal_eval as make_tuple
+from os.path import basename, splitext, exists, join, isfile
+
+from argparse import ArgumentParser
+from torch.optim import SGD, Adam
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
+from torchvision.transforms import ToTensor, ToPILImage, Normalize, Scale
+from torchvision.transforms import Compose
 from torchvision import datasets, models, transforms
 
-from os import remove, listdir, makedirs
-from os.path import basename, splitext, exists, join, isfile
+NUM_EPOCHS  = 1
+BATCH_SIZE  = 1
+NUM_WORKERS = 1
+SHUFFLE     = True
+NUM_CLASSES = 5
 
 if 'variables' in locals():
   DATASET_PATH   = variables.get("DATASET_PATH")
+  NET_TRANSFORM  = variables.get("NET_TRANSFORM")
   CNN_TRANSFORM  = variables.get("CNN_TRANSFORM")
   PREDICT_DATA   = variables.get("PREDICT_DATA_JSON")
-  BATCH_SIZE   = variables.get("BATCH_SIZE")   
-  NUM_WORKERS   = variables.get("NUM_WORKERS")  
-  SHUFFLE   = variables.get("SHUFFLE")  
- 
+  BATCH_SIZE   = variables.get("BATCH_SIZE") 
+  NUM_WORKERS   = variables.get("NUM_WORKERS") 
+  SHUFFLE   = variables.get("SHUFFLE") 
+  DATASET_TYPE = variables.get("DATASET_TYPE")   
+
+
 assert DATASET_PATH is not None
-assert CNN_TRANSFORM is not None
 
-# Load CNN transform
-# data_transforms
-exec(CNN_TRANSFORM)
+#CLASSIFICATION
+if DATASET_TYPE == 'CLASSIFICATION':
+	# Load CNN transform
+	# data_transforms
+	if CNN_TRANSFORM != None:
+		assert CNN_TRANSFORM is not None
+		exec(CNN_TRANSFORM)   
 
-# Load dataset
-image_dataset = {x: 
-  datasets.ImageFolder(join(DATASET_PATH, x), data_transforms[x]) 
-  for x in ['test']}
+        
+	# Load dataset
+	image_dataset = {x: 
+		datasets.ImageFolder(join(DATASET_PATH, x), data_transforms[x]) 
+  		for x in ['test']}
 
-data_loader = {x: 
-  DataLoader(image_dataset[x], batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS) 
-  for x in ['test']}
+	data_loader = {x: 
+		DataLoader(image_dataset[x], batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS) 
+		for x in ['test']}        
+        
+	# Get an unique ID
+	ID = str(uuid.uuid4())
 
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Define localspace
-LOCALSPACE = join('results', ID)
-if exists(LOCALSPACE):
-  shutil.rmtree(LOCALSPACE)
-makedirs(LOCALSPACE)
-
-
-if PREDICT_DATA != None: 
-  prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
-  df = pd.DataFrame(prediction_result)
-  preds = df['Prediction']
-
-  for index, elem in enumerate(preds):
-    #create a new folder
-    foldoutcheck = os.path.exists(LOCALSPACE + '/' + preds[index])
+	# Define localspace
+	LOCALSPACE = join('results', ID)
+	if exists(LOCALSPACE):
+  		shutil.rmtree(LOCALSPACE)
+	makedirs(LOCALSPACE)
     
-    if foldoutcheck == False:
-      teste = os.makedirs(LOCALSPACE + '/' + preds[index])
-    
-    foldcheck = os.path.exists(LOCALSPACE + '/' + preds[index])  
-    print(foldcheck)
-    
-    if foldcheck == True:
-       shutil.copy2(data_loader['test'].dataset.imgs[index][0], LOCALSPACE + '/' + preds[index])
-    else:
-      os.makedirs(LOCALSPACE + '/' + preds[index])
-      shutil.copy2(data_loader['test'].dataset.imgs[index][0], LOCALSPACE + '/' + preds[index])
+	if PREDICT_DATA != None: 
+		prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
+		df = pd.DataFrame(prediction_result)
+		preds = df['Prediction']
+        
+		for index, elem in enumerate(preds):
+			#create a new folder
+			foldoutcheck = os.path.exists(LOCALSPACE + '/' + preds[index])
 
+			if foldoutcheck == False:
+				os.makedirs(LOCALSPACE + '/' + preds[index])
+    
+			foldcheck = os.path.exists(LOCALSPACE + '/' + preds[index])  
+			print(foldcheck)
+    
+			if foldcheck == True:
+				shutil.copy2(data_loader['test'].dataset.imgs[index][0], LOCALSPACE + '/' + preds[index])
+			else:
+				os.makedirs(LOCALSPACE + '/' + preds[index])
+				shutil.copy2(data_loader['test'].dataset.imgs[index][0], LOCALSPACE + '/' + preds[index])
+      
 
-  FILE_NAME = '.zip'  
-  FILE_PATH = join(LOCALSPACE, FILE_NAME)
-  print("FILE_PATH: " + FILE_PATH)
+		FILE_NAME = '.zip'  
+		FILE_PATH = join(LOCALSPACE, FILE_NAME)
+		print("FILE_PATH: " + FILE_PATH)  
+             
+		def zipdir(_path, _ziph):
+			# ziph is zipfile handle
+			for root, dirs, files in os.walk(_path):
+				for file in files:
+					_ziph.write(join(root, file))   
+            
+
+		zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
+		zipdir(LOCALSPACE, zipf)
+		zipf.close()
   
-  def zipdir(_path, _ziph):
-    # ziph is zipfile handle
-    for root, dirs, files in os.walk(_path):
-      for file in files:
-        _ziph.write(join(root, file))
+		assert isfile(FILE_PATH) == True   
+        
+		# Read the whole file at once
+		FILE_BIN = None
+		with open(FILE_PATH, "rb") as binary_file:
+			FILE_BIN = binary_file.read()
+		assert FILE_BIN is not None  
+        
+        
+		if 'variables' in locals():
+			result = FILE_BIN
+			resultMetadata.put("file.extension", ".zip")
+			resultMetadata.put("file.name", "result.zip")
+			resultMetadata.put("content.type", "application/octet-stream") 
+			print("END Export_Images")
+	else:
+		print("It is not possible to export the images")   
+        
+        
+#SEGMENTATION
+elif DATASET_TYPE == 'SEGMENTATION':
+	IMG_SIZE   = variables.get("IMG_SIZE") 
+	IMG_SIZE = make_tuple(IMG_SIZE)
+	IMG_SIZE = tuple(IMG_SIZE)
+	# Load NET transform
+	# data_transforms
+	if NET_TRANSFORM != None:
+		assert NET_TRANSFORM is not None
+		exec(NET_TRANSFORM)
+           
+	# VOC12 DATASET    
+	EXTENSIONS = ['.jpg', '.png']    
+    
+	def load_image(file):
+            return Image.open(file)    
 
-  zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
-  zipdir(LOCALSPACE, zipf)
-  zipf.close()
+	def load_image(file):
+            return Image.open(file)
+
+	def is_image(filename):
+            return any(filename.endswith(ext) for ext in EXTENSIONS)
+
+	def image_path(root, basename, extension):
+            return os.path.join(root, f'{basename}{extension}')
+
+	def image_basename(filename):
+            return os.path.basename(os.path.splitext(filename)[0])
+
+	class VOC12(Dataset):
+
+            def __init__(self, root, input_transform=None, target_transform=None):
+                self.images_root = os.path.join(root, 'images')
+                self.labels_root = os.path.join(root, 'classes')
+
+                self.filenames = [image_basename(f)
+                    for f in os.listdir(self.labels_root) if is_image(f)]
+                self.filenames.sort()
+
+                self.input_transform = input_transform
+                self.target_transform = target_transform
+
+            def __getitem__(self, index):
+                filename = self.filenames[index]
+
+                with open(image_path(self.images_root, filename, '.jpg'), 'rb') as f:
+                    image = load_image(f).convert('RGB')
+                    file_name_image = image_path(self.images_root, filename, '.jpg')
+                with open(image_path(self.labels_root, filename, '.png'), 'rb') as f:
+                    label = load_image(f).convert('P')
+                    image_size = image.size            
+
+                if self.input_transform is not None:
+                    image = self.input_transform(image)
+                if self.target_transform is not None:
+                    label = self.target_transform(label)
+
+                return image, label, image_size, file_name_image
+
+            def __len__(self):
+                return len(self.filenames)
+        
+        
+	# Load dataset
+	DATASET_TEST_PATH = join(DATASET_PATH, 'test')
+	loader = DataLoader(VOC12(DATASET_TEST_PATH, input_transform, target_transform), 
+                        num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True) 
+	
+
+	# Get an unique ID
+	ID = str(uuid.uuid4())
+
+	# Define localspace
+	LOCALSPACE = join('results', ID)
+	if exists(LOCALSPACE):
+  		shutil.rmtree(LOCALSPACE)
+	makedirs(LOCALSPACE)
+    
+
+	if PREDICT_DATA != None: 
+		prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
+		df = pd.DataFrame(prediction_result)
+		os.makedirs(LOCALSPACE + '/' + 'images')
+		os.makedirs(LOCALSPACE + '/' + 'segmentation')
+		foldoutcheck = os.path.exists(LOCALSPACE + '/' + 'images')
+		foldsegcheck = os.path.exists(LOCALSPACE + '/' + 'segmentation')
+		imgs = df['Image Name']
+		preds = df['Segmentation']
+		for index, elem in enumerate(preds): 
+			shutil.copy2(imgs[index], LOCALSPACE + '/' + 'images') 
+			shutil.copy2(elem, LOCALSPACE + '/' + 'segmentation') 
+            
+		FILE_NAME = '.zip'  
+		FILE_PATH = join(LOCALSPACE, FILE_NAME)
+		print("FILE_PATH: " + FILE_PATH)  
+             
+		def zipdir(_path, _ziph):
+			# ziph is zipfile handle
+			for root, dirs, files in os.walk(_path):
+				for file in files:
+					_ziph.write(join(root, file))   
+            
+
+		zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
+		zipdir(LOCALSPACE, zipf)
+		zipf.close()
   
-  assert isfile(FILE_PATH) == True
-
-  # Read the whole file at once
-  FILE_BIN = None
-  with open(FILE_PATH, "rb") as binary_file:
-    FILE_BIN = binary_file.read()
-  assert FILE_BIN is not None
-
-  if 'variables' in locals():
-    result = FILE_BIN
-    resultMetadata.put("file.extension", ".zip")
-    resultMetadata.put("file.name", "result.zip")
-    resultMetadata.put("content.type", "application/octet-stream")
-
-    print("END Export_Images")
-else:
-    print("It is not possible to export the images")
+		assert isfile(FILE_PATH) == True   
+        
+		# Read the whole file at once
+		FILE_BIN = None
+		with open(FILE_PATH, "rb") as binary_file:
+			FILE_BIN = binary_file.read()
+		assert FILE_BIN is not None  
+        
+        
+		if 'variables' in locals():
+			result = FILE_BIN
+			resultMetadata.put("file.extension", ".zip")
+			resultMetadata.put("file.name", "result.zip")
+			resultMetadata.put("content.type", "application/octet-stream") 
+			print("END Export_Images")
+	else:
+		print("It is not possible to export the images")
 ]]>
           </code>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
     </task>
   </taskFlow>
 </job>
