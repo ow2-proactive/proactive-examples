@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Finish_Docker" projectName="Cloud Automation - Lifecycle"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <description>
+    <![CDATA[ Delete Docker instance. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="cloud-automation"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="group" value="public-objects"/>
+    <info name="pca.service.id" value="Docker"/>
+    <info name="pca.states" value="(RUNNING,FINISHED)(STOPPED,FINISHED)(ERROR,FINISHED)"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/docker.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Finish_Docker">
+      <description>
+        <![CDATA[ Finish Docker service instance and remove its docker container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/docker.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING FINISHED             *
+*********************************************************************************/
+
+// Acquire service instance id and instance name from synchro channel
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def channel = "Service_Instance_" + instanceId
+def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
+variables.put("INSTANCE_NAME", instanceName)
+
+// Inform other platforms that service is being finished through Synchronization API
+synchronizationapi.put(channel, "DELETE_LAUNCHED", true)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo --- BEGIN  "$variables_PA_TASK_NAME"  ---
+
+echo Removing docker container: "$variables_INSTANCE_NAME"
+INSTANCE_NAME=$(docker rm -f $variables_INSTANCE_NAME 2>&1)
+echo $INSTANCE_NAME > $variables_INSTANCE_NAME"_status"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS POSTSCRIPT INFORMS PLATFORM THAT PCA SERVICE IS DELETED                   *
+*********************************************************************************/
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceName = variables.get("INSTANCE_NAME")
+    
+def ALREADY_REMOVED_MESSAGE = "Error: No such container: " + instanceName
+
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+// Update service instance data : (status, endpoint)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+def status = new File(instanceName+"_status").text.trim()
+currentStatus = (!status.equals(ALREADY_REMOVED_MESSAGE) && !status.equals(instanceName)) ? "ERROR" : "FINISHED"
+serviceInstanceData.setInstanceStatus(currentStatus)
+serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+
+// Delete synchro channel
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.waitUntil(channel, "DELETE_INSTANCE", "{k,x -> x == true}")
+synchronizationapi.deleteChannel(channel)
+
+// Print warning or error messages and force job to exit with error if there are any.
+if (status.equals(ALREADY_REMOVED_MESSAGE)){
+    println("[WARNING] docker container: " + instanceName + " is already removed.")
+} else if (!status.equals(instanceName)){
+    println("[ERROR] Could not remove docker container: " + instanceName + ". Docker output: " + status)
+    System.exit(1)
+}
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
+    </task>
+  </taskFlow>
+</job>
