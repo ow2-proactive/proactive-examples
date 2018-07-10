@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.5"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.5 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.5/schedulerjob.xsd"
+    name="Generate_multiple_ini" 
+    projectName="CLIMB posttraitement"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="1">
+  <variables>
+    <variable name="mapping_file_path_from_dataspace" value="mapping_logs_ini_templates.txt"/>
+  </variables>
+  <genericInformation>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/multiple_ini.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="init">
+      <inputFiles>
+        <files  includes="$mapping_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the mapping file
+def mapping_file_path_from_dataspace = variables.get("mapping_file_path_from_dataspace")
+
+// Retrieve the content file
+def file_content = new File(mapping_file_path_from_dataspace).text
+
+// Number of tasks 
+def lines_array = file_content.split("\n")
+def nb_lines = lines_array.length 
+
+// Store it + all inputs for each task
+variables["nb_tasks"] = nb_lines
+
+(0..nb_lines-1).each {
+     def mapping = lines_array[it].split(",")
+     variables["ini_template_file_${it}"] = mapping[0]
+     variables["log_file_${it}"] = mapping[1]
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_tasks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="generate_ini_files">
+      <depends>
+        <task ref="init"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$ini_template_file_$PA_TASK_REPLICATION" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$log_file_$PA_TASK_REPLICATION" accessMode="transferFromGlobalSpace"/>
+        <files  includes="commons-jexl3-3.0.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="commons-jexl3-3.0.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.apache.commons.jexl3.JexlBuilder
+import org.apache.commons.jexl3.JexlContext
+import org.apache.commons.jexl3.MapContext
+import java.util.regex.Pattern
+
+def isDouble (string)
+{
+	try {
+		Double.parseDouble(string)
+		return true
+	} catch (e) {
+		return false
+	}
+}
+
+def isVariable (string)
+{
+	return string.matches("[a-zA-Z]+")
+}
+
+def findValue (key, logContent)
+{
+    def keyLinePattern = Pattern.compile(key + ".*")
+    def occurences = logContent.findAll(keyLinePattern)
+
+    def val = "null"
+    if (occurences.isEmpty())
+    	return val
+    
+    // Get the last occurence
+    def nbOccurences = occurences.size()
+	def lastOccurence = occurences.get(nbOccurences - 1)
+    
+    // Only retrieve val if detecting "xxx key = val xxx"
+	def words = lastOccurence.split()
+	def nbWords = words.size()
+	for (i = 0; i < nbWords-2; i++)
+	{
+		if (words[i] == key && words[i+1] == "=")
+		val = words[i+2]
+	}
+    return val
+}
+
+// Retrieve the replicated task	id
+def task_id = variables.get("PA_TASK_REPLICATION")
+
+// Retrieve the ini template file
+def ini_template_file_name = variables.get("ini_template_file_" + task_id)
+def ini_template_file = new File(ini_template_file_name)
+
+// Retrieve the log file
+def log_file_name = variables.get("log_file_" + task_id)
+def log_file = new File(log_file_name)
+def log_file_content = log_file.text
+
+def ini_template_props = new Properties()
+def ini_template_dis = ini_template_file.newDataInputStream()
+ini_template_props.load(ini_template_dis)
+def ini_template_props_names = ini_template_props.propertyNames()
+
+while (ini_template_props_names.hasMoreElements()) 
+{
+	// Parse the property (key/val)
+	def key = ini_template_props_names.nextElement()
+	def val = ini_template_props.getProperty(key)
+          
+	// If the val is empty
+	if (val.isEmpty())
+	{
+		def valFromLog = findValue(key, log_file_content)
+		ini_template_props.setProperty(key, valFromLog)
+	}
+	
+	// If it is an expression
+	else if (!isDouble(val) && !isVariable(val))
+	{
+      		def engine = new JexlBuilder().create()
+        	def expression = engine.createExpression(val)
+        	def variables = expression.getVariables()
+        
+        	// Retrieve all variables from the expression, look into the log their values, and update paramsMap
+        	def paramsMap = new MapContext()
+		variables.each { variable ->
+            
+    			// ... retrieve the value from the log ...
+	        	println("variable " + variable)
+			// (by default, variable like aa.bb.cc will be retrieved into [[aa][bb][cc]], so merge)        	        
+			variableJoin = String.join(".", variable);
+        	        println("variableJoin " + variableJoin)
+        	        def valFromLog = findValue(variableJoin, log_file_content)
+        	        println("valFromLog " + valFromLog)
+        	       
+			 // ... and add it to the paramsMap
+			if (valFromLog != "null")
+        	        	paramsMap.set(variableJoin, Double.parseDouble(valFromLog));
+			else
+				paramsMap.set(variableJoin, valFromLog);
+		};
+      
+        	// Evaluate the expression with the parameters
+	        def result = expression.evaluate(paramsMap)
+	        println("result " + result)
+
+	        // Set the result in the properties file
+	        ini_template_props.setProperty(key, result + "")
+	}
+}
+
+// Save
+def instanciated_ini_props_file_name = task_id + "_" + ini_template_file_name
+def instanciated_ini_props_file = new File(instanciated_ini_props_file_name)
+ini_template_props.store(instanciated_ini_props_file.newWriter(), null)
+
+// For the output file transfer
+variables["instanciated_ini_props_file_name"] = instanciated_ini_props_file_name
+
+println instanciated_ini_props_file_name+" will be transferred!"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="$instanciated_ini_props_file_name" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+
+ <task name="end">
+      <depends>
+        <task ref="generate_ini_files"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var myObject={};
+myObject.id="multiPropfiles";
+myObject.status="TERMINATED";
+myObject.endpoint=""
+result = JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+
+   
+  </taskFlow>
+</job>

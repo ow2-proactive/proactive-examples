@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.3"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.3 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.3/schedulerjob.xsd"
+    name="Solve_multiple_labs_PBS" 
+    projectName="CLIMB traitement"
+    priority="normal"
+    cancelJobOnError="false">
+  <variables>
+    <variable name="qsub_commands_file_path_from_dataspace" value="qsub_commands.txt"/>
+    <variable name="waiting_finished_jobs_timeout_in_sec" value="30"/>
+   </variables>
+<genericInformation>
+   <info name="group" value="public-objects"/>
+   <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/multiple_labssolver_pbs.png"/>
+  </genericInformation>
+ 
+  <taskFlow>
+    <task name="exec_qsub_commands">
+      <inputFiles>
+        <files  includes="$qsub_commands_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+        <files  includes="*.run" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "exec_qsub_commands ..."
+
+// Retrieve the qsub command file
+def qsub_commands_file_path_from_dataspace = variables.get("qsub_commands_file_path_from_dataspace")
+
+// 1 line = 1 qsub command
+def file_content = new File(qsub_commands_file_path_from_dataspace).text
+def lines_array = file_content.split("\n")
+
+// Retrieve nb_qsub_commands
+def nb_qsub_commands = lines_array.length
+def job_ids = ""
+
+(0..nb_qsub_commands-1).each {
+
+	 // Build the qsub command
+	 def qsub_command = lines_array[it]
+	 println "command: " + qsub_command
+	 qsub_command_arr = qsub_command.split()
+	 
+	 // execute qsub and save the job id
+	 def job_id = new StringBuilder()
+	 qsub_command_arr.execute().waitForProcessOutput(job_id, System.err)
+	 
+	 // store all submitted job ids
+	 job_ids += (job_id+"").split("\\.")[0] + " "
+}
+
+variables.put("submitted_job_ids", job_ids)
+println "job_ids: " + job_ids	 
+
+println "... exec_qsub_commands"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+     </task>
+    
+	
+	<task name="wait_jobs_executions">
+      <depends>
+        <task ref="exec_qsub_commands"/>
+      </depends>
+      <inputFiles>
+        <files  includes="*.run" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[	
+import groovy.time.TimeCategory 
+			
+println "wait_jobs_executions ..."
+			
+// Retrieve the timeout
+def timeout_in_sec = variables["waiting_finished_jobs_timeout_in_sec"].toInteger()
+
+// Retrieve the submitted job ids
+def submitted_job_ids = variables["submitted_job_ids"]
+def nb_submitted_job_ids = submitted_job_ids.split().length
+
+// Build the qstat command to retrive the zombies/finished jobs among the submitted ones
+def qstat_command = "qstat " + submitted_job_ids
+qstat_command_arr = qstat_command.split()
+
+def timeStart = new Date()
+while(true)
+{
+	// execute the qstat command
+	def qstat_res = new StringBuilder()
+	qstat_command_arr.execute().waitForProcessOutput(qstat_res, System.err)
+	println "qstat_res: " + qstat_res	
+
+	def all_completed = qstat_res.toString().isEmpty()
+	println "all_completed: " + all_completed		
+
+	// Break if all submitted jobs no more appear in the qstat command result or the timeout is reached
+	if (all_completed || (TimeCategory.minus(new Date(), timeStart).seconds > timeout_in_sec))
+		break
+	
+	// every 2s
+	sleep(2000)
+} 
+
+println "... wait_jobs_executions"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
+
+

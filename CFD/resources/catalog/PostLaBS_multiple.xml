@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="PostLaBS_multiple" projectName="CLIMB posttraitement"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="1"
+>
+  <variables>
+    <variable name="nb_split" value="2" />
+    <variable name="postlabs_dir_path" value="/home/gantha/Public/Tests/tests_JM/PostLaBS-3" model=""/>
+    <variable name="postlabs_input_file_path_from_dataspace" value="params_demo1.params" model=""/>
+    <variable name="paraview_dir_path" value="/home/gantha/ParaView/ParaView-4.3.1-Linux-64bit/" />
+    <variable name="paraview_plugin_dir_path" value="/home/gantha/ParaView/ParaView-4.3.1-Linux-64bit/lib/paraview-4.3" />
+    <!-- <variable name="python_path" value="/usr/lib/python2.7/lib-dynload/:/usr/local/lib/python2.7/dist-packages/:/home/michael/TEST"/> -->
+  </variables>
+  <genericInformation>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/multiple_postlabs.png"/>
+  </genericInformation>
+  <taskFlow>
+
+
+  <task name="process_params">
+ <inputFiles>
+        <files  includes="$postlabs_input_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+ <selection>
+        <script
+         type="dynamic" >
+          <code language="groovy">
+            <![CDATA[
+def postlabs_dir_path = variables.get("postlabs_dir_path")
+def paraview_dir_path = variables.get("paraview_dir_path")
+def paraview_plugin_dir_path = variables.get("paraview_plugin_dir_path")
+
+if (new File(postlabs_dir_path).exists() && new File(paraview_dir_path).exists() && new File(paraview_plugin_dir_path).exists()) {
+	
+    selected = true;
+} else {
+	selected = false;
+}
+]]>
+          </code>
+        </script>
+      </selection>
+     <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "process_params ..."
+
+
+// Retrieve variables
+def nb_split = variables.get("nb_split")
+def postlabs_dir_path = variables.get("postlabs_dir_path")
+def postlabs_input_file_path_from_dataspace = variables.get("postlabs_input_file_path_from_dataspace")
+def paraview_dir_path = variables.get("paraview_dir_path")
+def paraview_plugin_dir_path = variables.get("paraview_plugin_dir_path")
+
+// Define cmd
+def pvbatch_file_path = new File(paraview_dir_path, "bin/pvbatch").absolutePath
+def postlabs_parallel_dir_path = new File (postlabs_dir_path, "Parallel").absolutePath
+def postlabs_python_file_path = new File (postlabs_parallel_dir_path, "Functions/main_process_params.py").absolutePath
+def cmd = [pvbatch_file_path, "--use-offscreen-rendering", postlabs_python_file_path, nb_split, postlabs_parallel_dir_path, postlabs_input_file_path_from_dataspace, postlabs_dir_path]
+
+// Execute command
+def envVars = []
+cmd.execute(envVars, null).waitForProcessOutput(System.out, System.out)
+
+// Store GEOMETRY_PATH and DATA_PATH into variables for the node selection of the next task
+def average_params_file = new File (localspace, "temp/average/average.txt")
+def average_params_file_content = average_params_file.text
+def average_params_file_props = new Properties()
+def average_params_file_dis = average_params_file.newDataInputStream()
+
+average_params_file_props.load(average_params_file_dis)
+
+// Store variables
+variables["average_geometry_file_path"] = average_params_file_props.getProperty("GEOMETRY_PATH")
+variables["average_data_path"] = average_params_file_props.getProperty("DATA_PATH")
+
+  
+println "... process_params"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+<outputFiles>
+        <files  includes="temp/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+
+
+    <task name="distrib_postlabs_inputs_and_first_postlabs">
+      <depends>
+        <task ref="process_params"/>
+      </depends>
+      <inputFiles>
+        <files  includes="temp/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+   <selection>
+        <script
+         type="dynamic" >
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def postlabs_dir_path = variables.get("postlabs_dir_path")
+def paraview_dir_path = variables.get("paraview_dir_path")
+def paraview_plugin_dir_path = variables.get("paraview_plugin_dir_path")
+def average_geometry_file_path = variables.get("average_geometry_file_path")
+def average_data_path = variables.get("average_data_path")
+ 
+// Conditional node selection
+if (new File(postlabs_dir_path).exists() && new File(paraview_dir_path).exists() && new File(paraview_plugin_dir_path).exists() && new File(average_geometry_file_path).exists() && new File(average_data_path).exists()) {
+	selected = true;
+} else {
+	selected = false;
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.io.FileType
+
+
+println "distrib_postlabs_inputs_and_first_postlabs ..."
+
+
+// Retrieve variables
+def nb_split = variables.get("nb_split") as Integer
+def average_params_file_path = new File (localspace, "temp/average/average.txt").absolutePath
+def postlabs_dir_path = variables.get("postlabs_dir_path")
+def paraview_dir_path = variables.get("paraview_dir_path")
+def paraview_plugin_dir_path = variables.get("paraview_plugin_dir_path")
+def python_path = variables.get("python_path")
+
+
+// For each postlabs input file, store its name, its related geometry and data file names, into dedicated variables
+(0..nb_split-1).each{ split_id ->
+
+	// Parse the param file
+	def params_file_path_from_dataspace = "temp/" + split_id + "/process_" + split_id + ".txt"
+	def params_file = new File (localspace, params_file_path_from_dataspace)
+	def params_file_content = params_file.text
+	def params_file_props = new Properties()
+	def params_file_dis = params_file.newDataInputStream()
+
+	params_file_props.load(params_file_dis)
+
+	// Store variables
+	variables["params_file_path_from_dataspace_" + split_id] = params_file_path_from_dataspace
+        variables["geometry_path_" + split_id] = params_file_props.getProperty("GEOMETRY_PATH")
+	variables["data_path_" + split_id] = params_file_props.getProperty("DATA_PATH")
+}
+
+// First postlabs to generate the average parameter file
+// Define envVars
+def envVars = ["MACROPARAM="+average_params_file_path, "MACRODIR="+postlabs_dir_path, "PARAVIEWDIR="+paraview_dir_path, "PARAVIEWPLUGINDIR="+paraview_plugin_dir_path, "PYTHONPATH="+python_path]
+
+// Define cmd
+def pvbatch_file_path = new File(paraview_dir_path, "bin/pvbatch").absolutePath
+def postlabs_python_file_path = new File (postlabs_dir_path, "PostLaBS.py").absolutePath
+def cmd = [pvbatch_file_path, "--use-offscreen-rendering", postlabs_python_file_path]
+
+// Execute command
+cmd.execute(envVars, null).waitForProcessOutput(System.out, System.out)
+    
+    
+println "... distrib_postlabs_inputs_and_first_postlabs"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+// Dynamic replication
+runs=variables.get("nb_split")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <outputFiles>
+        <files  includes="temp/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+
+
+    <task name="postlabs">
+      <depends>
+        <task ref="distrib_postlabs_inputs_and_first_postlabs"/>
+      </depends>
+      <inputFiles>
+        <files  includes="temp/$PA_TASK_REPLICATION/process_$PA_TASK_REPLICATION.txt" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script
+         type="dynamic" >
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def postlabs_dir_path = variables.get("postlabs_dir_path")
+def paraview_dir_path = variables.get("paraview_dir_path")
+def paraview_plugin_dir_path = variables.get("paraview_plugin_dir_path")
+def task_id = variables.get('PA_TASK_REPLICATION')
+def geometry_path = variables.get('geometry_path_' + task_id)
+def data_path = variables.get('data_path_' + task_id);
+ 
+// Conditional node selection
+if (new File(postlabs_dir_path).exists() && new File(paraview_dir_path).exists() && new File(paraview_plugin_dir_path).exists() && new File(geometry_path).exists() && new File(data_path).exists()) {
+	selected = true;
+} else {
+	selected = false;
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "postlabs ..."
+
+
+// Retrieve some variables
+def task_id = variables.get("PA_TASK_REPLICATION")
+def params_file_path_from_dataspace = variables.get("params_file_path_from_dataspace_" + task_id)
+def postlabs_dir_path = variables.get("postlabs_dir_path")
+def paraview_dir_path = variables.get("paraview_dir_path")
+def paraview_plugin_dir_path = variables.get("paraview_plugin_dir_path")
+def python_path = variables.get("python_path")
+
+// Define envVars
+def params_file_path = new File(localspace, params_file_path_from_dataspace).absolutePath
+def envVars = ["MACROPARAM="+params_file_path, "MACRODIR="+postlabs_dir_path, "PARAVIEWDIR="+paraview_dir_path, "PARAVIEWPLUGINDIR="+paraview_plugin_dir_path, "PYTHONPATH="+python_path]
+
+// Define cmd
+def pvbatch_file_path = new File(paraview_dir_path, "bin/pvbatch").absolutePath
+def postlabs_python_file_path = new File (postlabs_dir_path, "PostLaBS.py").absolutePath
+def cmd = [pvbatch_file_path, "--use-offscreen-rendering", postlabs_python_file_path]
+
+// Execute command
+cmd.execute(envVars, null).waitForProcessOutput(System.out, System.out)
+
+
+println "... postlabs"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="temp/$PA_TASK_REPLICATION/*.log" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+
+
+    <task name="end">
+      <depends>
+        <task ref="postlabs"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+print("end ...");
+
+
+// For the cloud automation portal integration
+var myObject={};
+myObject.id="multiPostLaBS";
+myObject.status="TERMINATED";
+myObject.endpoint="";
+result = JSON.stringify(myObject);
+
+
+print("... end");
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  
+
+  </taskFlow>
+</job>
+

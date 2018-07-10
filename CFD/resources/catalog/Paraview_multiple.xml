@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.7"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.7 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.7/schedulerjob.xsd"
+    name="Paraview_multiple" 
+    projectName="CLIMB posttraitement"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2"
+>
+  <variables>
+    <variable name="paraview_inputs_file_path_from_dataspace" value="Paraview_inputs.txt"/>
+    <variable name="paraview_dir_path" value="/home/michael/TEST/ParaView-5.2.0-Qt4-OpenGL2-MPI-Linux-64bit"/>
+    <variable name="pythonpath" value="/usr/lib/python2.7/lib-dynload/:/usr/local/lib/python2.7/dist-packages/:/home/michael/TEST"/>
+  </variables>
+  <genericInformation>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/multiple_paraview.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="init_paraview_inputs">
+      <inputFiles>
+        <files  includes="$paraview_inputs_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the paraview inputs file path
+def paraview_inputs_file_path_from_dataspace = variables.get("paraview_inputs_file_path_from_dataspace")
+
+// Retrieve the content file
+def file_content = new File(paraview_inputs_file_path_from_dataspace).text
+
+// Number of paraview tasks 
+def lines_array = file_content.split("\n")
+def nb_lines = lines_array.length 
+
+// Store it + all inputs for each task
+variables["nb_paraview_tasks"] = nb_lines
+
+(0..nb_lines-1).each {
+     def inputs = lines_array[it].split(",")
+     variables["solver_output_dir_${it}"] = inputs[0]
+     variables["filter_${it}"] = inputs[1]
+     variables["image_${it}"] = inputs[2]
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_paraview_tasks") as Integer
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+
+
+    <task name="paraview_task">
+      <depends>
+        <task ref="init_paraview_inputs"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$solver_output_dir_$PA_TASK_REPLICATION/**" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$filter_$PA_TASK_REPLICATION" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script
+         type="dynamic" >
+          <code language="groovy">
+            <![CDATA[
+def paraview_dir_path = variables.get("paraview_dir_path")
+selected = (new File(paraview_dir_path).exists())
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+export PYTHONPATH=$variables_pythonpath
+
+solver_output_dir_variable_name=solver_output_dir"_"$variables_PA_TASK_REPLICATION
+filter_variable_name=filter"_"$variables_PA_TASK_REPLICATION
+
+solver_output_dir=variables_$solver_output_dir_variable_name
+filter=variables_$filter_variable_name
+
+chmod 777 -R $variables_paraview_dir_path
+chmod 777 $filter
+chmod 777 -R $solver_output_dir
+
+$variables_paraview_dir_path/bin/pvbatch ${!filter} ${!solver_output_dir}/output/NewVolumeRecording.xmf
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="$image_$PA_TASK_REPLICATION" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+
+
+
+ 
+
+    <task name="empty">
+      <depends>
+        <task ref="paraview_task"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "empty"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_paraview_tasks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+
+
+
+    <task name="expose_image">
+      <depends>
+        <task ref="empty"/>
+      </depends>
+ <inputFiles>
+        <files  includes="$image_$PA_TASK_REPLICATION" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>    
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def task_id = variables.get("PA_TASK_REPLICATION")
+def image_name = variables.get("image_" + task_id)
+
+println "image_name " + image_name
+
+def image_file = new File(image_name)
+
+println "exists? " + image_file.exists()
+
+result = image_file.getBytes()
+resultMetadata.put("file.name", image_name)
+resultMetadata.put("content.type", "image/png")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+
+
+
+    <task name="end_deployment">
+      <depends>
+        <task ref="expose_image"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var myObject={};
+myObject.id="multiPv";
+myObject.status="TERMINATED";
+myObject.endpoint=""
+result = JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>

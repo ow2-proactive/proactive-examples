@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.10"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+        name="Optimize mesh size" projectName="CLIMB traitement"
+        priority="normal"
+        onTaskError="continueJobExecution"
+        maxNumberOfExecution="1"
+>
+  <variables>
+    <variable name="duration_limit_in_sec" value="30" />
+    <variable name="Flexnet_host_IP_address" value="10.211.28.108" />
+    <variable name="labs_file_path_from_dataspace" value="CMF1_HVAC_newMesh_fine_WallLaw_A.labs" />
+    <variable name="LABS_HOME" value="/soft/LaBS/2.3.2/" />
+    <variable name="LaBS_solver_dir_path" value="/soft/LaBS/2.3.2/bin" />
+    <variable name="LD_LIBRARY_PATH" value="/soft/openmpi-1.4.5/lib" />
+    <variable name="LM_LICENSE_FILE" value="7266@10.111.72.20" />
+    <variable name="mesh_size_delta" value="0.002" />
+    <variable name="mesh_size_max" value="0.016" />
+    <variable name="mesh_size_min" value="0.008" />
+    <variable name="module_to_load" value="mpi/openmpi-1.4.5" />
+    <variable name="mpi_host" value="10.211.28.108,10.211.28.108" />
+    <variable name="mpi_m" value="32000" />
+    <variable name="mpi_np" value="1" />
+    <variable name="MPI_ROOT" value="/soft/openmpi-1.4.5" />
+    <variable name="nb_parallel_searches" value="4" model="PA:INTEGER[2,10]"/>
+    <variable name="LABS_PATH" value="/soft/openmpi-1.4.5/bin:/soft/LaBS/2.3.2" />
+    <variable name="pbd_file_path" value="/panfs/vec-lvr-pas8/BG_CFD/cvincen1/Projets/HVAC_CMF1/21-Scripts/PBD/v232/custom_LaBSv232.pbd" />
+    <variable name="schemes_dir_path" value="/panfs/vec-lvr-pas8/BG_CFD/cvincen1/Projets/HVAC_CMF1/21-Scripts/v232/" />
+  </variables>
+  <genericInformation>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/optim_mesh_size.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="useless">
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "useless ..."
+println "... useless"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"></controlFlow>
+    </task>
+    <task name="compute_mesh_sizes_to_explore">
+      <depends>
+        <task ref="useless"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "compute_mesh_sizes_to_explore ..."
+
+// Retrieve variables
+def mesh_size_min = (variables.get("mesh_size_min") as Double).round(3)
+def mesh_size_max = (variables.get("mesh_size_max") as Double).round(3)
+def nb_parallel_searches = variables.get("nb_parallel_searches") as Integer
+
+// Deduce the mesh size step and store it
+def mesh_size_step = ((mesh_size_max - mesh_size_min) / (nb_parallel_searches - 1)).round(3)
+variables["mesh_size_step"] = mesh_size_step
+
+// Compute mesh sizes and store them
+def mesh_sizes = [mesh_size_min]
+for (i = 1; i < nb_parallel_searches-1; i++)
+{
+     mesh_sizes += (mesh_size_min + i * mesh_size_step).round(3)
+}
+mesh_sizes += mesh_size_max
+println mesh_sizes
+variables["mesh_sizes"] = mesh_sizes
+
+println "... compute_mesh_sizes_to_explore"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def nb_parallel_searches = variables.get("nb_parallel_searches") as Integer
+runs = nb_parallel_searches
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="set_mesh_sizes">
+      <depends>
+        <task ref="compute_mesh_sizes_to_explore"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$labs_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+        <files  includes="commons-jexl3-3.0.jar" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="commons-jexl3-3.0.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "set_mesh_sizes ..."
+
+import org.apache.commons.io.FilenameUtils
+import java.util.regex.Pattern
+import static groovy.io.FileType.FILES
+
+// Retrieve variables
+def iteration_id = variables.get("PA_TASK_ITERATION")
+def task_id = variables.get("PA_TASK_REPLICATION")
+def labs_file_path_from_dataspace = variables.get("labs_file_path_from_dataspace")
+def mesh_size = variables["mesh_sizes"].toList().get(task_id)
+
+// Extract the labs file (as a zip file)
+def cmd = ["tar", "-xzf", labs_file_path_from_dataspace]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.out)
+
+// Retrieve the pbu file (included in the zip file) content
+def pbu_file_filter = new FileFilter() {
+	boolean accept(File file) {
+		return file.name.endsWith('.pbu')
+        }
+}
+
+def labs_extracted_dir_name = FilenameUtils.removeExtension(labs_file_path_from_dataspace)
+def pbu_file = new File(labs_extracted_dir_name).listFiles(pbu_file_filter)[0]
+def pbu_file_content = pbu_file.text
+
+// Replace all variables in the stl file
+// Pattern 1
+def pattern_1 = Pattern.compile("def_mesh_size\\s+=.*")
+pbu_file_content = pbu_file_content.replaceAll(pattern_1, "def_mesh_size = " + mesh_size + ";")
+// Pattern 2
+def pattern_2 = Pattern.compile("mesh_size\\s+=\\s+def_mesh_size\\s+\\[.*")
+pbu_file_content = pbu_file_content.replaceAll(pattern_2, "mesh_size = def_mesh_size[" + mesh_size + "];")
+// Update the pbu file content
+pbu_file.text = pbu_file_content
+
+// Recreate the labs file with a new name
+cmd = ["tar", "-zcvf", "iter_" + iteration_id + "_task_" + task_id + "_" + labs_file_path_from_dataspace, labs_extracted_dir_name]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.out)
+
+println "... set_mesh_sizes"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"></controlFlow>
+      <outputFiles>
+        <files  includes="iter_$PA_TASK_ITERATION_task_$PA_TASK_REPLICATION_$labs_file_path_from_dataspace" accessMode="transferToUserSpace"/>
+      </outputFiles>
+    </task>
+    <task name="LaBS_solver">
+      <genericInformation>
+        <info name="NS" value="pbs_nodes"/>
+        <info name="#BATCH" value="-l select=7:ncpus=16:mpiprocs=16 -N Workflow_test -l walltime=00:10:00 -P AEROACOUSTIC-FINANCED_PROJECT"/>
+      </genericInformation>
+      <depends>
+        <task ref="set_mesh_sizes"/>
+      </depends>
+      <inputFiles>
+        <files  includes="iter_$PA_TASK_ITERATION_task_$PA_TASK_REPLICATION_$labs_file_path_from_dataspace" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "LaBS_solver ..."
+
+export MPI_ROOT=$variables_MPI_ROOT
+export PATH=$PATH:$variables_LABS_PATH
+export LD_LIBRARY_PATH=$variables_LD_LIBRARY_PATH
+export LABS_HOME=$variables_LABS_HOME
+export LM_LICENSE_FILE=$variables_LM_LICENSE_FILE
+
+
+# Retrieve variables
+iteration_id=$variables_PA_TASK_ITERATION
+task_id=$variables_PA_TASK_REPLICATION
+LaBS_solver_dir_path=$variables_LaBS_solver_dir_path
+pbd_file_path=$variables_pbd_file_path
+schemes_dir_path=$variables_schemes_dir_path
+mpi_host=$variables_mpi_host
+mpi_np=$variables_mpi_np
+mpi_m=$variables_mpi_m
+labs_file_path_from_dataspace=$variables_labs_file_path_from_dataspace
+module_to_load=$variables_module_to_load
+
+# Deduce some variables
+labs_exe_path=$LaBS_solver_dir_path/LaBS.exe
+labs_file_path=$localspace"/iter_"$iteration_id"_task_"$task_id"_"$labs_file_path_from_dataspace
+duration_file_name="iter_"$iteration_id"_task_"$task_id"_duration"
+
+. /usr/share/modules/init/ksh
+module load $module_to_load
+
+# Timer start
+start=`date +%s`
+
+# command
+echo "mpirun --allow-run-as-root --host "$mpi_host" "$labs_exe_path" -np "$mpi_np" -m "$mpi_m" -p "$labs_file_path" -pbd "$pbd_file_path" -interaction 0 -s "$schemes_dir_path
+mpirun --allow-run-as-root --host $mpi_host $labs_exe_path -np $mpi_np -m $mpi_m -p $labs_file_path -pbd $pbd_file_path -interaction 0 -s $schemes_dir_path
+
+# Timer end + store duration
+end=`date +%s`
+duration_in_sec=$((end-start))
+echo $duration_in_sec > $duration_file_name
+
+
+echo "... LaBS_solver"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"></controlFlow>
+      <outputFiles>
+        <files  includes="*_duration" accessMode="transferToUserSpace"/>
+      </outputFiles>
+    </task>
+    <task name="dichotomy_update">
+      <depends>
+        <task ref="LaBS_solver"/>
+      </depends>
+      <inputFiles>
+        <files  includes="*_duration" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "dichotomy_update ..."
+
+
+// Retrieve variables
+def iteration_id = variables.get("PA_TASK_ITERATION")
+def task_id = variables.get("PA_TASK_REPLICATION")
+def nb_parallel_searches = variables.get("nb_parallel_searches") as Integer
+def mesh_sizes = variables.get("mesh_sizes").toList()
+def duration_limit_in_sec = variables.get("duration_limit_in_sec") as Double
+
+// Update mesh size min and max
+def mesh_size_min_saved = -1
+def mesh_size_max_saved = -1
+for (i = 0; i < nb_parallel_searches; i++)
+{
+    def mesh_size = mesh_sizes.get(i)
+
+	// Find the min and max mesh sizes which are closest to duration_limit_in_sec
+	def duration_file_name = "iter_" + iteration_id + "_task_" + task_id + "_duration"
+	def duration = new File(localspace, duration_file_name).text as Double
+
+    println duration_file_name + " -> " + duration + "s"
+
+	if (duration < duration_limit_in_sec)
+		mesh_size_min_saved = mesh_size
+	else {
+		mesh_size_max_saved = mesh_size
+		break
+	}
+}
+
+// Update mesh_size_min and mesh_size_max
+variables["mesh_size_min"] = mesh_size_min_saved
+variables["mesh_size_max"] = mesh_size_max_saved
+println "NEW MESH SIZE RANGE [" + mesh_size_min_saved + ", " + mesh_size_max_saved + "] !"
+
+
+println "... dichotomy_update"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow  block="end">
+        <loop target="useless">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+// Retrieve variables
+def mesh_size_min = variables.get("mesh_size_min") as Double
+def mesh_size_max = variables.get("mesh_size_max") as Double
+def mesh_size_delta = variables.get("mesh_size_delta") as Double
+
+if ((mesh_size_min == -1) || (mesh_size_max == -1) || (mesh_size_max - mesh_size_min) <= mesh_size_delta)
+	loop = false;
+else
+	loop = true;
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+    </task>
+    <task name="end_deployment">
+      <depends>
+        <task ref="dichotomy_update"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var mesh_size_min = variables["mesh_size_min"];
+var mesh_size_max = variables["mesh_size_max"];
+print ("mesh_size_min " + mesh_size_min + " mesh_size_max " + mesh_size_max);
+
+var myObject={};
+myObject.id="OptimizeLabsParams";
+myObject.status="TERMINATED";
+myObject.endpoint=""
+result = JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>
