@@ -12,11 +12,11 @@
   </description>
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
-    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
-    <info name="group" value="public-objects"/>
-    <info name="pca.service.id" value="Elasticsearch"/>
-    <info name="pca.states" value="(STOPPED,RUNNING)(RUNNING,RUNNING)"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+    <info name="pca.states" value="(STOPPED,RUNNING)(RUNNING,RUNNING)"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="pca.service.id" value="Elasticsearch"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
     <task name="Resume_Elasticsearch">
@@ -66,13 +66,16 @@ if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
  RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
  STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
 	if [ "$RUNNING" == "true" ]; then
-   		echo "$INSTANCE_NAME container is running"
+   		echo docker container: "$INSTANCE_NAME" is running
+        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
 	elif [ "$STOPPED" == "exited" ]; then
-		echo "Starting $INSTANCE_NAME container"
-   		docker start $INSTANCE_NAME
+		echo Starting docker container: "$INSTANCE_NAME"
+        INSTANCE_STATUS=$(docker start $INSTANCE_NAME 2>&1)
+        echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
 	fi
+else 
+    echo Error: No such container: "$INSTANCE_NAME" > $INSTANCE_NAME"_status"
 fi
-echo END "$variables_PA_TASK_NAME"
 ]]>
           </code>
         </script>
@@ -91,7 +94,8 @@ import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
 // Acquire service instance id
 def instanceId = variables.get("PCA_INSTANCE_ID") as int
-
+def instanceName = variables.get("INSTANCE_NAME")
+    
 def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
 def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
 
@@ -102,8 +106,18 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
 // Update service instance data : (status, endpoint)
 def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
-serviceInstanceData.setInstanceStatus("RUNNING")
+def status = new File(instanceName+"_status").text.trim()
+def currentStatus = (!status.equals(instanceName)) ? "ERROR" : "RUNNING"
+serviceInstanceData.setInstanceStatus(currentStatus)
 serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+
+// Print warning or error messages and force job to exit with error if there are any.
+if (!status.equals(instanceName)){
+    println("[ERROR] Could not resume docker container: " + instanceName + ". Docker output: " + status)
+    System.exit(1)
+}
+
+println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
@@ -163,6 +177,7 @@ while(currentStatus=="RUNNING") {
 
     if ((!isContainerRunning) && (!synchronizationapi.get(channel, "DELETE_LAUNCHED")) && (!synchronizationapi.get(channel, "STOP_LAUNCHED"))){
         currentStatus = 'ERROR'
+        println("[ERROR] An internal error occured in docker container: " + instanceName)
         // Update docker container is not running
         def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
         serviceInstanceData.setInstanceStatus(currentStatus)
@@ -171,7 +186,6 @@ while(currentStatus=="RUNNING") {
     }
     // Check service instance status
     currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
-    println("Current Status: " + currentStatus)
 }
 
 // Allow the Delete workflow to be fulfilled

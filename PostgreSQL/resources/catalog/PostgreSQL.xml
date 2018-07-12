@@ -5,223 +5,35 @@
      xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
     name="PostgreSQL" projectName="Cloud Automation - Deployment"
     priority="normal"
-    onTaskError="pauseJob"
+    onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
-    <variable name="POSTGRES_DATABASE" value="" />
-    <variable name="POSTGRES_INSTANCE_NAME" value="postgres-server-1" />
-    <variable name="POSTGRES_PASSWORD" value="" />
-    <variable name="POSTGRES_USER" value="postgres" />
+    <variable name="INSTANCE_NAME" value="postgres-server" />
+    <variable name="USER" value="" />
+    <variable name="PASSWORD" value="" />
+    <variable name="DATABASE" value="" />
   </variables>
   <description>
     <![CDATA[ Deploy a PostgreSQL Database server.
 The service can be started using the following variables:
-$POSTGRES_INSTANCE_NAME: service instance name
-$POSTGRES_USER: (Optional) change it if you want a different root username . Default "postgres" is used if left empty.
-$POSTGRES_PASSWORD: Password for the root user.
-$POSTGRES_DATABASE: Name of a database to be created on start.
-]]>
+$INSTANCE_NAME (Required): service instance name
+$USER: (Optional) change it if you want a different root username . Default "postgres" is used if left empty.
+$PASSWORD (Required) : Password for the root user.
+$DATABASE (Optional) : Name of a database to be created on start. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
-    <info name="Documentation" value="https://www.postgresql.org/"/>
-    <info name="group" value="public-objects"/>
-    <info name="pca.service.id" value="PostgreSQL"/>
-    <info name="pca.states" value="(VOID,RUNNING)(STOPPED,RUNNING)"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+    <info name="pca.states" value="(VOID,RUNNING)"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="pca.service.id" value="PostgreSQL"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
     <task name="Loop_Over_Instance_Status">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Update_Service_Instance"/>
-      </depends>
-      <inputFiles>
-        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
-      </inputFiles>
-      <forkEnvironment >
-        <additionalClasspath>
-          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
-        </additionalClasspath>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id: " + service_instance_id)
-
-// Construct synchro channel
-channel = "Service_Instance_" + service_instance_id  
-//synchronizationapi.createChannelIfAbsent(channel, false)
-
-// Delete service instance from database is set to false
-synchronizationapi.put(channel, "DELETE_LAUNCHED", false) 
-synchronizationapi.put(channel, "DELETE_INSTANCE", false) 
-
-// Loop over service instance status
-def current_status = "RUNNING"
-def container = variables.get("POSTGRES_INSTANCE_NAME")
-print("container: " + container)
-
-while(current_status=="RUNNING") {
-  sleep(30000);
-  
-  // Check docker container status 
-  def ByteArrayOutputStream sout = new ByteArrayOutputStream();
-  def ByteArrayOutputStream serr = new ByteArrayOutputStream();
-  def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${container}"].execute().waitForProcessOutput(sout, serr)
-  def container_running = new String(sout.toByteArray()).trim()
-  
-  if ((container_running != "true") && (synchronizationapi.get(channel, "DELETE_LAUNCHED") == false)){
-          current_status = 'ERROR'
-          // Update docker container is not running
-          def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-          service_instance_data.setInstanceStatus(current_status)
-          service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
-          break    
-  }
-  
-  // Check service instance status
-  current_status = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id).getInstanceStatus() 
-  println("current_status: " + current_status)
-}
-
-// Allow the Delete workflow to be fulfilled
-synchronizationapi.put(channel, "DELETE_INSTANCE", true)
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="Start_PostgreSQL">
-      <description>
-        <![CDATA[ Pull PostgreSQL image and start a container ]]>
-      </description>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
-      </genericInformation>
-      <scriptExecutable>
-        <script>
-          <code language="bash">
-            <![CDATA[
-printf "Pulling postgre image \n"
-docker pull activeeon/postgres
-
-CONTAINER=$variables_POSTGRES_INSTANCE_NAME_CL
-POSTGRES_DATABASE=$variables_POSTGRES_DATABASE_CL
-POSTGRES_USER=$variables_POSTGRES_USER_CL
-POSTGRES_PASSWORD=$variables_POSTGRES_PASSWORD_CL
-
-if [ -z "$CONTAINER" ]; then
-  CONTAINER=$variables_POSTGRES_INSTANCE_NAME
-fi
-
-if [ -z "$POSTGRES_DATABASE" ]; then
-  POSTGRES_DATABASE=$variables_POSTGRES_DATABASE
-fi
-
-if [ -z "$POSTGRES_USER" ] && [ ! -z "$variables_POSTGRES_USER" ]; then
-  POSTGRES_USER=$variables_POSTGRES_USER
-fi
-if [ -z "$POSTGRES_USER" ]; then
-  POSTGRES_USER="postgres"
-  echo "WARNING: POSTGRES_USER not provided by the user. Using the default username: postgres"
-fi
-
-if [ -z "$POSTGRES_PASSWORD" ]; then
-  POSTGRES_PASSWORD=$variables_POSTGRES_PASSWORD
-fi
-
-echo POSTGRES_INSTANCE_NAME = "$CONTAINER"
-echo POSTGRES_DATABASE = "$POSTGRES_DATABASE"
-echo POSTGRES_USER = "$POSTGRES_USER"
-echo POSTGRES_PASSWORD = "$POSTGRES_PASSWORD"
-
-if [ -z "$POSTGRES_PASSWORD" ]; then
-	echo ERROR: POSTGRES_PASSWORD cannot be empty.
-    exit 1
-fi
-
-if [ "$(docker ps -a | grep $CONTAINER)" ]; then
- RUNNING=$(docker inspect --format="{{ .State.Running }}" $CONTAINER 2> /dev/null)
- STOPPED=$(docker inspect --format="{{ .State.Status }}" $CONTAINER 2> /dev/null)  
-
- if [ "$RUNNING" == "true" ]; then 
-   echo "$CONTAINER container is running"
- elif [ "$STOPPED" == "exited" ]; then 
-   echo "Starting $CONTAINER container"
-   docker start $CONTAINER
- fi
-
-else 
- echo "Running $CONTAINER container"
- if [ "$POSTGRES_DATABASE" == null ] && [ "$POSTGRES_USER" == null ]; then
-   docker run --name $CONTAINER -p 5432 -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD -d activeeon/postgres -c 'listen_addresses=0.0.0.0'
- elif [ "$POSTGRES_DATABASE" == null ] && [ "$POSTGRES_USER" != null ]; then
-   docker run --name $CONTAINER -p 5432 -e POSTGRES_USER=$POSTGRES_USER -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD -d activeeon/postgres -c 'listen_addresses=0.0.0.0'
- elif [ "$POSTGRES_DATABASE" != null ] && [ "$POSTGRES_USER" == null ]; then
-   docker run --name $CONTAINER -p 5432 -e POSTGRES_DATABASE=$POSTGRES_DATABASE -d activeeon/postgres -c 'listen_addresses=0.0.0.0'
- else 
-   docker run --name $CONTAINER -p 5432 -e POSTGRES_USER=$POSTGRES_USER -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD -e POSTGRES_DB=$POSTGRES_DATABASE -d activeeon/postgres -c 'listen_addresses=0.0.0.0'
- fi
-
-fi
-
-port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' $CONTAINER)
-echo "$port" > $CONTAINER"_port"
-
-# Endpoint added to the job variables using a groovy post-script
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <post>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-def PA_SCHEDULER_REST_URL = variables.get('PA_SCHEDULER_REST_URL')
-def hostname = new URL(PA_SCHEDULER_REST_URL).getHost()
-def CONTAINER = variables.get("POSTGRES_INSTANCE_NAME_CL")
-if (CONTAINER == null)
-  CONTAINER=variables.get("POSTGRES_INSTANCE_NAME")
-else
-  variables.put("POSTGRES_INSTANCE_NAME",CONTAINER)
-
-def port = CONTAINER+"_port"
-def endpoint = 'http://'+hostname + ":" + new File(port).text.trim()
-
-println("postgres_endpoint: " + endpoint)
-
-variables.put("endpoint", endpoint)
-]]>
-          </code>
-        </script>
-      </post>
-    </task>
-    <task name="Update_Service_Instance">
-      <description>
-        <![CDATA[ Update service instance data ]]>
-      </description>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
       <depends>
         <task ref="Start_PostgreSQL"/>
@@ -242,43 +54,245 @@ import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+println("BEGIN " + variables.get("PA_TASK_NAME"))
 
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceName = variables.get("INSTANCE_NAME")
 
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id: " + service_instance_id)
+println("INSTANCE_NAME="+instanceName)
 
-// Set service instance status to running
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-service_instance_data.setInstanceStatus("RUNNING")
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
-// Set service instance status endpoint
-HashMap<String, String> endpoints = new HashMap<String, String>()
-def instance_name = variables.get("POSTGRES_INSTANCE_NAME")
-def endpoint = variables.get("endpoint")
-service_instance_data = service_instance_data.putInstanceEndpointsItem(instance_name, endpoint)
+// Inform other platforms that other actions are canceled through Synchronization API
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.put(channel, "DELETE_LAUNCHED", false)
+synchronizationapi.put(channel, "DELETE_INSTANCE", false)
 
-// Update service instance data
-service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
+// Loop over service instance status
+def currentStatus = "RUNNING"
+def exitWithError = false
+while(currentStatus=="RUNNING") {
+    sleep(10000);
+    // Check docker container status
+    def ByteArrayOutputStream sout = new ByteArrayOutputStream();
+    def ByteArrayOutputStream serr = new ByteArrayOutputStream();
+    def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().waitForProcessOutput(sout, serr)
+    def isContainerRunning = new String(sout.toByteArray()).trim().toBoolean()
 
-// Inform other platforms that service is running
-channel = "Service_Instance_" + service_instance_id  
-synchronizationapi.createChannelIfAbsent(channel, false)
-synchronizationapi.put(channel, "RUNNING", true)
+    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "DELETE_LAUNCHED")) && (!synchronizationapi.get(channel, "STOP_LAUNCHED"))){
+        currentStatus = 'ERROR'
+        exitWithError = true
+        println("[ERROR] An internal error occured in docker container: " + instanceName)
+        // Update docker container is not running
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+        serviceInstanceData.setInstanceStatus(currentStatus)
+        serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+        break
+    }
+    // Check service instance status
+    currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
+}
 
-synchronizationapi.put(channel, "POSTGRES_INSTANCE_NAME", instance_name)
+// Allow the Delete workflow to be fulfilled
+synchronizationapi.put(channel, "DELETE_INSTANCE", true)
+if (exitWithError){
+    System.exit(1)
+}
+println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
       </scriptExecutable>
+    </task>
+    <task name="Start_PostgreSQL"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Pull PostgreSQL image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+################################################################################
+### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+DOCKER_IMAGE=activeeon/postgres
+PORT=5432
+USER="$variables_USER"
+
+if [ -z "$USER" ]; then
+  USER="postgres"
+  echo "[WARNING] USER not provided by the user. Using the default username: postgres"
+fi
+
+PASSWORD="$variables_PASSWORD"
+
+if [ -z "$PASSWORD" ]; then
+	echo [ERROR] PASSWORD cannot be empty.
+    exit 1
+fi
+
+DATABASE="$variables_DATABASE"
+# Check whether USER and PASSWORD have been well entered
+if [ \( ! -z "$USER" -a -z "$PASSWORD" \) -o \( -z "$USER" -a ! -z "$PASSWORD" \) ]; then
+    echo [ERROR] "$variables_PA_JOB_NAME"_USER and "$variables_PA_JOB_NAME"_PASSWORD are used in junction. They should be either both entered or both blank.
+    exit 1
+fi
+################################################################################
+
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
+
+INSTANCE_NAME=$variables_INSTANCE_NAME
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    exit 1
+fi
+
+if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
+    RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+    STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
+    if [ "$RUNNING" == "true" ]; then
+        echo "$INSTANCE_NAME" container is running
+        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+	elif [ "$STOPPED" == "exited" ]; then
+		echo Starting docker container: "$INSTANCE_NAME"
+        INSTANCE_STATUS=$(docker start $INSTANCE_NAME 2>&1)
+        echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
+    fi
+else
+    ################################################################################
+    ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+    echo "Running docker container: $INSTANCE_NAME"
+    if [ "$DATABASE" == null ] && [ "$USER" == null ]; then
+        docker run --name "$INSTANCE_NAME" -p "$PORT" -e POSTGRES_PASSWORD="$PASSWORD" -d "$DOCKER_IMAGE" -c 'listen_addresses=0.0.0.0'
+    elif [ "$DATABASE" == null ] && [ "$USER" != null ]; then
+        docker run --name "$INSTANCE_NAME" -p "$PORT" -e POSTGRES_USER="$USER" -e POSTGRES_PASSWORD="$PASSWORD" -d "$DOCKER_IMAGE" -c 'listen_addresses=0.0.0.0'
+    elif [ "$DATABASE" != null ] && [ "$USER" == null ]; then
+        docker run --name "$INSTANCE_NAME" -p "$PORT" -e POSTGRES_DATABASE="$DATABASE" -d "$DOCKER_IMAGE" -c 'listen_addresses=0.0.0.0'
+    else 
+        docker run --name "$INSTANCE_NAME" -p "$PORT" -e POSTGRES_USER="$USER" -e POSTGRES_PASSWORD="$PASSWORD" -e POSTGRES_DB="$DATABASE" -d "$DOCKER_IMAGE" -c 'listen_addresses=0.0.0.0'
+    fi
+    if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
+        RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+        if [ "$RUNNING" == "true" ]; then
+            echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+        fi
+    else
+        echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
+    fi
+    ################################################################################
+fi
+port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo $port > $INSTANCE_NAME"_port"
+
+# Endpoint added to the job variables using a groovy post-script
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS POSTSCRIPT PROPAGATES USEFUL INFORMATION SUCH AS:                         *
+* 1) SERVICE ENDPOINT (PROTOCOL://HOSTNAME:PORT)                                 *
+* 2) CREDENTIALS (IF THERE ARE ANY) BY ADDING THEM TO 3RD PARTY CREDENTIALS      *
+*********************************************************************************/
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+// Acquire service instance id and instance name
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceName = variables.get("INSTANCE_NAME")
+
+def hostname = new URL(paSchedulerRestUrl).getHost()
+def port = new File(instanceName+"_port").text.trim()
+def endpoint = 'http://'+ hostname + ":" + port
+
+/*********************************************************************************
+* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
+/********************************************************************************/
+def username = variables.get("USER")
+def password = variables.get("PASSWORD")
+
+// Add any credentials to 3rd party credentials if they apply:
+if (!username.isEmpty()){
+    def PASSWORD_KEY = "postgres://" + username + "@" + hostname+ ":" + port
+    schedulerapi.connect()
+    schedulerapi.putThirdPartyCredential(PASSWORD_KEY, password)
+}
+/********************************************************************************/
+
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+// Inform other platforms that service is running through Synchronization API
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.createChannelIfAbsent(channel, false)
+synchronizationapi.put(channel, "RUNNING", true)
+synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
+
+// Update service instance data : (status, endpoint)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+def status = new File(instanceName+"_status").text.trim()
+def currentStatus = (!status.equals(instanceName)) ? "ERROR" : "RUNNING"
+serviceInstanceData.setInstanceStatus(currentStatus)
+serviceInstanceData = serviceInstanceData.putInstanceEndpointsItem(instanceName, endpoint)
+serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+
+// Print warning or error messages and force job to exit with error if there are any.
+if (!status.equals(instanceName)){
+    println("[ERROR] Could not start docker container: " + instanceName + ". Docker output: " + status)
+    System.exit(1)
+}
+
+// LOG OUTPUT
+println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
+println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
     </task>
   </taskFlow>
 </job>
