@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Cassandra_Service_Start" projectName="Cassandra"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="CASSANDRA_INSTANCE_NAME" value="cassandra-server" />
+    <variable name="CASSANDRA_ENV_VARS" value="" />
+  </variables>
+  <description>
+    <![CDATA[ Start the Cassandra server as a service. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="database-services"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_Cassandra"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Cassandra server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Cassandra" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT MAPS THE SERVICE SPECIFIC VARIABLES WITH GENERIC VARIABLE NAMES *
+* THIS AVOIDS YOU FROM CHANGING THE WHOLE PCA WORKFLOWS IMPLEMENTATIONS          *
+*********************************************************************************/
+
+variables.put("INSTANCE_NAME", variables.get("CASSANDRA_INSTANCE_NAME"))
+variables.put("ENV_VARS", variables.get("CASSANDRA_ENV_VARS"))
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+/*********************************************************************************
+* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
+/********************************************************************************/
+def envVars = variables.get("ENV_VARS")
+/********************************************************************************/
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def sessionId = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def serviceId = variables.get("SERVICE_ID")
+def instanceName = variables.get("INSTANCE_NAME")
+println("SERVICE_ID:    " + serviceId)
+println("INSTANCE_NAME: " + instanceName)
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData serviceInstanceData : service_instances) {
+    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
+        if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
+            instance_exists = true
+            def instanceId = serviceInstanceData.getInstanceId()
+            endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+            println("INSTANCE_ID: " + instanceId)
+            println("ENDPOINT:    " + endpoint)
+            variables.put("INSTANCE_ID", instanceId)
+            variables.put("ENDPOINT", endpoint)
+            break
+        }
+  	}
+}
+
+println("INSTANCE_EXISTS ? " + instance_exists)
+
+if (!instance_exists){
+    // Prepare service description
+    ServiceDescription serviceDescription = new ServiceDescription()
+    serviceDescription.setBucketName("cloud-automation")
+    serviceDescription.setWorkflowName(serviceId)
+    serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
+
+/*********************************************************************************
+* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
+/********************************************************************************/
+    serviceDescription.putVariablesItem("ENV_VARS", envVars)
+/********************************************************************************/
+    // Run service
+    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription)
+
+    // Acquire service Instance ID
+    def serviceInstanceId = serviceInstanceData.getInstanceId()
+
+    // Create synchro channel
+    def channel = "Service_Instance_" + serviceInstanceId
+    println("CHANNEL: " + channel)
+    synchronizationapi.createChannelIfAbsent(channel, false)
+    synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+
+    // Acquire service endpoint
+    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
+    def instanceId = serviceInstanceData.getInstanceId()
+    endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+
+    println("INSTANCE_ID: " + instanceId)
+    println("ENDPOINT: " + endpoint)
+
+    variables.put("INSTANCE_ID", instanceId)
+    variables.put("ENDPOINT", endpoint)
+}
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>
