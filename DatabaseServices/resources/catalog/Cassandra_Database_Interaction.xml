@@ -3,25 +3,196 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.10"
      xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="Cassandra" projectName="3. NoSQL"
+    name="Cassandra_Database_Interaction" projectName="Cassandra Workflows"
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
-    <variable name="CASSANDRA_HOSTNAME" value="localhost" model=""/>
-    <variable name="CASSANDRA_KEYSPACE" value="" model=""/>
-    <variable name="CASSANDRA_PORT" value="" model=""/>
+    <variable name="CASSANDRA_INSTANCE_NAME" value="cassandra-server" />
+    <variable name="CASSANDRA_ENV_VARS" value="" />
+    <variable name="CASSANDRA_KEYSPACE" value="activeeon" />
+    <variable name="ACTION" value="Finish_Cassandra" model="PA:LIST(Stop_Cassandra, Resume_Cassandra, Finish_Cassandra)"/>
   </variables>
   <description>
-    <![CDATA[ Import data from (or export data to) Cassandra database. ]]>
+    <![CDATA[ This workflow shows how to deploy and use a PCA Cassandra service.
+It demonstrates how to start a Cassandra database server using the PCA client API, export and import data from the database then stop the service. ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="data-connectors"/>
+    <info name="bucketName" value="database-services"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
-    <info name="Documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
+    <task name="Parse_Endpoint">
+      <description>
+        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOSTNAME and a PORT number to use them as an input in the data connector tasks. ]]>
+      </description>
+      <depends>
+        <task ref="Start_Cassandra"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def endpoint = variables.get("ENDPOINT")
+def host
+def port
+
+if (endpoint != null){
+  endpoint = endpoint.replace("http://", "")
+  host = endpoint.split(":")[0]
+  variables.put("CASSANDRA_HOSTNAME", host)
+  port = endpoint.split(":")[1]
+  variables.put("CASSANDRA_PORT", port)
+}
+else{
+  throw new IOException("[ERROR] Cassandra endpoint not found")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Start_Cassandra"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Cassandra server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Cassandra" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT MAPS THE SERVICE SPECIFIC VARIABLES WITH GENERIC VARIABLE NAMES *
+* THIS AVOIDS YOU FROM CHANGING THE WHOLE PCA WORKFLOWS IMPLEMENTATIONS          *
+*********************************************************************************/
+
+variables.put("INSTANCE_NAME", variables.get("CASSANDRA_INSTANCE_NAME"))
+variables.put("ENV_VARS", variables.get("CASSANDRA_ENV_VARS"))
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+/*********************************************************************************
+* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
+/********************************************************************************/
+def envVars = variables.get("ENV_VARS")
+/********************************************************************************/
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def sessionId = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def serviceId = variables.get("SERVICE_ID")
+def instanceName = variables.get("INSTANCE_NAME")
+println("SERVICE_ID:    " + serviceId)
+println("INSTANCE_NAME: " + instanceName)
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData serviceInstanceData : service_instances) {
+    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
+        if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
+            instance_exists = true
+            def instanceId = serviceInstanceData.getInstanceId()
+            endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+            println("INSTANCE_ID: " + instanceId)
+            println("ENDPOINT:    " + endpoint)
+            variables.put("INSTANCE_ID", instanceId)
+            variables.put("ENDPOINT", endpoint)
+            break
+        }
+  	}
+}
+
+println("INSTANCE_EXISTS ? " + instance_exists)
+
+if (!instance_exists){
+    // Prepare service description
+    ServiceDescription serviceDescription = new ServiceDescription()
+    serviceDescription.setBucketName("cloud-automation")
+    serviceDescription.setWorkflowName(serviceId)
+    serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
+
+/*********************************************************************************
+* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
+/********************************************************************************/
+    serviceDescription.putVariablesItem("ENV_VARS", envVars)
+/********************************************************************************/
+    // Run service
+    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription)
+
+    // Acquire service Instance ID
+    def serviceInstanceId = serviceInstanceData.getInstanceId()
+
+    // Create synchro channel
+    def channel = "Service_Instance_" + serviceInstanceId
+    println("CHANNEL: " + channel)
+    synchronizationapi.createChannelIfAbsent(channel, false)
+    synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+
+    // Acquire service endpoint
+    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
+    def instanceId = serviceInstanceData.getInstanceId()
+    endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+
+    println("INSTANCE_ID: " + instanceId)
+    println("ENDPOINT: " + endpoint)
+
+    variables.put("INSTANCE_ID", instanceId)
+    variables.put("ENDPOINT", endpoint)
+}
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
     <task name="Import_from_Cassandra">
       <description>
         <![CDATA[ This task allows importing data from Cassandra.
@@ -33,7 +204,7 @@ $CASSANDRA_OUPUT: Relative path in the data space used to save the results in a 
       </description>
       <variables>
         <variable name="LABEL" value="" inherited="false" />
-        <variable name="CASSANDRA_QUERY" value="" inherited="false" />
+        <variable name="CASSANDRA_QUERY" value="SELECT * FROM diabetes" inherited="false" />
         <variable name="CASSANDRA_OUTPUT" value="" inherited="false" />
       </variables>
       <genericInformation>
@@ -211,14 +382,17 @@ $CASSANDRA_INPUT (required) is the relative path of the CSV file that contains d
  - A relative path in the data space of a csv file. ]]>
       </description>
       <variables>
-        <variable name="CASSANDRA_TABLE" value="" inherited="false" />
-        <variable name="CASSANDRA_PRIMARY_KEY" value="" inherited="false" />
-        <variable name="CASSANDRA_INPUT" value="" inherited="false" />
+        <variable name="CASSANDRA_TABLE" value="diabetes" inherited="false" />
+        <variable name="CASSANDRA_PRIMARY_KEY" value="preg" inherited="false" />
+        <variable name="CASSANDRA_INPUT" value="pima-indians-diabetes.csv" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
         <info name="task.documentation" value="http://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
       </genericInformation>
+      <depends>
+        <task ref="Prepare_Cassandra_Cluster"/>
+      </depends>
       <inputFiles>
         <files  includes="$CASSANDRA_INPUT" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
@@ -344,6 +518,111 @@ except Exception as e:
     print(e)
     sys.exit(1)
 print("END Export_Data")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Cassandra_Service_Action"
+    
+    
+    onTaskError="cancelJob" >
+      <variables>
+        <variable name="INSTANCE_ID" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Import_from_Cassandra"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN " + variables.get("PA_TASK_NAME") + " ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def sessionId = schedulerapi.getSession()
+
+// Define PCA URL
+def schedulerRestUrl = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = schedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def instanceId = variables.get("INSTANCE_ID") as int
+println("INSTANCE_ID: " + instanceId)
+assert instanceId != null
+
+// Stop service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation")
+service.setWorkflowName(variables.get("ACTION"))
+serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId, service)
+
+println("--- END " + variables.get("PA_TASK_NAME") + " ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Prepare_Cassandra_Cluster">
+      <description>
+        <![CDATA[ This task aims to prepare the cassandra cluster by creating a keyspace and add authentication. ]]>
+      </description>
+      <depends>
+        <task ref="Parse_Endpoint"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import re
+import sys
+from cassandra.cluster import Cluster
+from cassandra.auth import PlainTextAuthProvider
+from cassandra.query import dict_factory
+
+HOSTNAME = variables.get("CASSANDRA_HOSTNAME")
+PORT = variables.get("CASSANDRA_PORT")
+KEYSPACE = variables.get("CASSANDRA_KEYSPACE")
+if HOSTNAME is None:
+    print("CASSANDRA_HOSTNAME not defined by the user.")
+    sys.exit(1)
+if PORT is None:
+    print("CASSANDRA_PORT not defined by the user. Using the default value: 9042")
+    PORT = 9042
+if KEYSPACE is None: 
+    print("CASSANDRA_KEYSPACE not defined by the user.")
+    sys.exit(1)
+
+cluster = Cluster([HOSTNAME], port=PORT)
+session = cluster.connect()
+print("creating keyspace..."+ KEYSPACE)
+session.execute("""CREATE KEYSPACE IF NOT EXISTS %s WITH replication = { 'class': 'SimpleStrategy', 'replication_factor': '1' } """ % KEYSPACE)
 ]]>
           </code>
         </script>
