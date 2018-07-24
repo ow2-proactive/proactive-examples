@@ -16,12 +16,16 @@
   </variables>
   <description>
     <![CDATA[ Deploy a Docker image as a PCA service.
+The underlying docker command is the following:
+
+docker run -- name $DOCKER_CONTAINER_NAME -p $DOCKER_PORT $DOCKER_OPTIONS -d $DOCKER_IMAGE $DOCKER_COMMAND
+
 The service can be started using the following variables:
-$DOCKER_IMAGE (Required): Docker image name. It can include a tag as well.
-$DOCKER_PORT (Required): The main image port. Please note that it will be forwarded to a random port that will be returned by this service.
-$DOCKER_CONTAINER (Required): If you desire to stop this container and restart it later.
-$DOCKER_ENV_VARS (Optional): each environment variable should be preceded by -e
-$DOCKER_CONFIG_VARS (Optional) if your docker image allows setting some parameters in some config files on launch ]]>
+$DOCKER_IMAGE: Docker image name. It can include a tag as well.
+$DOCKER_PORT: The main image port. Please note that it will be forwarded to a random port that will be returned by this service.
+$DOCKER_CONTAINER: If you desire to stop this container and restart it later.
+$DOCKER_OPTIONS (OPTIONAL): options like environment variables, etc.
+$DOCKER_COMMAND (OPTIONAL) ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
@@ -75,7 +79,12 @@ def channel = "Service_Instance_" + instanceId
 synchronizationapi.put(channel, "DELETE_LAUNCHED", false)
 synchronizationapi.put(channel, "DELETE_INSTANCE", false)
 
-// Loop over service instance status
+// Fetch all logs from docker container
+def fetchLogsCmd = ('docker logs '+instanceName).execute()
+fetchLogsCmd.consumeProcessOutput(System.out, System.err)
+def now = new Date()
+
+// Loop over service instance status and fetch docker container logs
 def currentStatus = "RUNNING"
 def exitWithError = false
 while(currentStatus=="RUNNING") {
@@ -96,6 +105,12 @@ while(currentStatus=="RUNNING") {
         serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
         break
     }
+
+    // Fetch new logs since last fetch time mark.
+    fetchLogsCmd = ('docker logs --since ' + now.format("yyyy-MM-dd'T'HH:mm:ssXXX") + ' ' + instanceName).execute()
+	fetchLogsCmd.consumeProcessOutput(System.out, System.err)
+    now = new Date()
+
     // Check service instance status
     currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
 }
@@ -112,23 +127,27 @@ println("END " + variables.get("PA_TASK_NAME"))
       </scriptExecutable>
     </task>
     <task name="Start_Docker"
-    
-    
+
+
     onTaskError="cancelJob" >
       <description>
         <![CDATA[ Pull the given $DOCKER_IMAGE and start a container as a PCA Service.
+The underlying docker command is the following:
+
+docker run -- name $DOCKER_CONTAINER_NAME -p $DOCKER_PORT $DOCKER_OPTIONS -d $DOCKER_IMAGE $DOCKER_COMMAND
+
 The service can be started using the following variables:
 $DOCKER_IMAGE: Docker image name. It can include a tag as well.
 $DOCKER_PORT: The main image port. Please note that it will be forwarded to a random port that will be returned by this service.
 $DOCKER_CONTAINER: If you desire to stop this container and restart it later.
-$DOCKER_ENV_VARS (OPTIONAL): each environment variable should be preceded by -e 
-$DOCKER_CONFIG_VARS (OPTIONAL) if your docker image allows setting some parameters in some config files on launch ]]>
+$DOCKER_OPTIONS (OPTIONAL): options like environment variables, etc.
+$DOCKER_COMMAND (OPTIONAL) ]]>
       </description>
       <variables>
         <variable name="DOCKER_IMAGE" value="" inherited="true" />
         <variable name="DOCKER_PORT" value="" inherited="true" />
-        <variable name="DOCKER_ENV_VARS" value="" inherited="true" />
-        <variable name="DOCKER_CONFIG_VARS" value="" inherited="true" />
+        <variable name="DOCKER_OPTIONS" value="" inherited="true" />
+        <variable name="DOCKER_COMMAND" value="" inherited="true" />
         <variable name="DOCKER_CONTAINER" value="" inherited="true" />
       </variables>
       <genericInformation>
@@ -162,17 +181,11 @@ echo BEGIN "$variables_PA_TASK_NAME"
 ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
 DOCKER_IMAGE="$variables_DOCKER_IMAGE"
 PORT="$variables_DOCKER_PORT"
-ENV_VARS="$variables_DOCKER_ENV_VARS"
-CONFIG_VARS="$variables_DOCKER_CONFIG_VARS"
-INSTANCE_NAME="$variables_INSTANCE_NAME"
+DOCKER_OPTIONS="$variables_DOCKER_OPTIONS"
+DOCKER_COMMAND="$variables_DOCKER_COMMAND"
 
 if [ -z "$DOCKER_IMAGE" ]; then
     echo [ERROR] The DOCKER_IMAGE is not provided by the user. Empty value is not allowed.
-    exit 1
-fi
-
-if [ -z "$INSTANCE_NAME" ]; then
-    echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
     exit 1
 fi
 
@@ -183,13 +196,19 @@ fi
 
 echo DOCKER_IMAGE = "$DOCKER_IMAGE"
 echo DOCKER_PORT = "$PORT"
-echo DOCKER_CONTAINER = "$INSTANCE_NAME"
-echo DOCKER_ENV_VARS = "$ENV_VARS"
-echo DOCKER_CONFIG_VARS = "$CONFIG_VARS"
+echo DOCKER_OPTIONS = "$DOCKER_OPTIONS"
+echo DOCKER_COMMAND = "$DOCKER_COMMAND"
 ################################################################################
 
 echo "Pulling "$variables_PA_JOB_NAME" image"
 docker pull $DOCKER_IMAGE
+
+INSTANCE_NAME=$variables_INSTANCE_NAME
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo ERROR: The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    exit 1
+fi
 
 if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
     RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
@@ -206,15 +225,15 @@ else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running docker container: $INSTANCE_NAME"
-    echo "docker run --name $INSTANCE_NAME -p "$PORT" "$ENV_VARS" -d "$DOCKER_IMAGE" "$CONFIG_VARS""
-    if [ -z "$ENV_VARS" -a -z "$CONFIG_VARS" ]; then
+    echo "docker run --name $INSTANCE_NAME -p "$PORT" "$DOCKER_OPTIONS" -d "$DOCKER_IMAGE" "$DOCKER_COMMAND""
+    if [ -z "$DOCKER_OPTIONS" -a -z "$DOCKER_COMMAND" ]; then
         INSTANCE_STATUS=$( eval "docker run --name "$INSTANCE_NAME" -p "$PORT" -d "$DOCKER_IMAGE"" 2>&1)
-    elif [ ! -z "$ENV_VARS" -a -z "$CONFIG_VARS" ]; then
-        INSTANCE_STATUS=$(eval "docker run --name "$INSTANCE_NAME" -p "$PORT" "$ENV_VARS" -d "$DOCKER_IMAGE"" 2>&1)
-    elif [ -z "$ENV_VARS" -a ! -z "$CONFIG_VARS" ]; then
-        INSTANCE_STATUS=$(eval "docker run --name "$INSTANCE_NAME" -p "$PORT" -d "$DOCKER_IMAGE" "$CONFIG_VARS""  2>&1)
+    elif [ ! -z "$DOCKER_OPTIONS" -a -z "$DOCKER_COMMAND" ]; then
+        INSTANCE_STATUS=$(eval "docker run --name "$INSTANCE_NAME" -p "$PORT" "$DOCKER_OPTIONS" -d "$DOCKER_IMAGE"" 2>&1)
+    elif [ -z "$DOCKER_OPTIONS" -a ! -z "$DOCKER_COMMAND" ]; then
+        INSTANCE_STATUS=$(eval "docker run --name "$INSTANCE_NAME" -p "$PORT" -d "$DOCKER_IMAGE" "$DOCKER_COMMAND""  2>&1)
     else
-        INSTANCE_STATUS=$(eval "docker run --name "$INSTANCE_NAME" -p "$PORT" "$ENV_VARS" -d "$DOCKER_IMAGE" "$CONFIG_VARS"" 2>&1)
+        INSTANCE_STATUS=$(eval "docker run --name "$INSTANCE_NAME" -p "$PORT" "$DOCKER_OPTIONS" -d "$DOCKER_IMAGE" "$DOCKER_COMMAND"" 2>&1)
     fi
     if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
@@ -269,12 +288,6 @@ def apiClient = new ApiClient()
 apiClient.setBasePath(pcaUrl)
 def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
-// Inform other platforms that service is running through Synchronization API
-def channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, false)
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
 // Update service instance data : (status, endpoint)
 def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
 def status = new File(instanceName+"_status").text.trim()
@@ -288,6 +301,12 @@ if (!status.equals(instanceName)){
     println("[ERROR] Could not start docker container: " + instanceName + ". Docker output: " + status)
     System.exit(1)
 }
+
+// Inform other platforms that service is running through Synchronization API
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.createChannelIfAbsent(channel, false)
+synchronizationapi.put(channel, "RUNNING", true)
+synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
 
 // LOG OUTPUT
 println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
