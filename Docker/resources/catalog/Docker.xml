@@ -36,100 +36,7 @@ $DOCKER_COMMAND (OPTIONAL) ]]>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Loop_Over_Instance_Status">
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/docker.png"/>
-        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
-      </genericInformation>
-      <depends>
-        <task ref="Start_Docker"/>
-      </depends>
-      <inputFiles>
-        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
-      </inputFiles>
-      <forkEnvironment >
-        <additionalClasspath>
-          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
-        </additionalClasspath>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-println("BEGIN " + variables.get("PA_TASK_NAME"))
-
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-def instanceId = variables.get("PCA_INSTANCE_ID") as int
-def instanceName = variables.get("INSTANCE_NAME")
-
-println("INSTANCE_NAME="+instanceName)
-
-// Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-// Inform other platforms that other actions are canceled through Synchronization API
-def channel = "Service_Instance_" + instanceId
-synchronizationapi.put(channel, "DELETE_LAUNCHED", false)
-synchronizationapi.put(channel, "DELETE_INSTANCE", false)
-
-// Fetch all logs from docker container
-def fetchLogsCmd = ('docker logs '+instanceName).execute()
-fetchLogsCmd.consumeProcessOutput(System.out, System.err)
-def now = new Date()
-
-// Loop over service instance status and fetch docker container logs
-def currentStatus = "RUNNING"
-def exitWithError = false
-while(currentStatus=="RUNNING") {
-    sleep(10000);
-    // Check docker container status
-    def ByteArrayOutputStream sout = new ByteArrayOutputStream();
-    def ByteArrayOutputStream serr = new ByteArrayOutputStream();
-    def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().waitForProcessOutput(sout, serr)
-    def isContainerRunning = new String(sout.toByteArray()).trim().toBoolean()
-
-    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "DELETE_LAUNCHED")) && (!synchronizationapi.get(channel, "STOP_LAUNCHED"))){
-        currentStatus = 'ERROR'
-        exitWithError = true
-        println("[ERROR] An internal error occured in docker container: " + instanceName)
-        // Update docker container is not running
-        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
-        serviceInstanceData.setInstanceStatus(currentStatus)
-        serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
-        break
-    }
-
-    // Fetch new logs since last fetch time mark.
-    fetchLogsCmd = ('docker logs --since ' + now.format("yyyy-MM-dd'T'HH:mm:ssXXX") + ' ' + instanceName).execute()
-	fetchLogsCmd.consumeProcessOutput(System.out, System.err)
-    now = new Date()
-
-    // Check service instance status
-    currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
-}
-
-// Allow the Delete workflow to be fulfilled
-synchronizationapi.put(channel, "DELETE_INSTANCE", true)
-if (exitWithError){
-    System.exit(1)
-}
-println("END " + variables.get("PA_TASK_NAME"))
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="Start_Docker"
-
-
-    onTaskError="cancelJob" >
+    <task name="Start_Docker"  onTaskError="cancelJob" >
       <description>
         <![CDATA[ Pull the given $DOCKER_IMAGE and start a container as a PCA Service.
 The underlying docker command is the following:
@@ -317,6 +224,104 @@ println("END " + variables.get("PA_TASK_NAME"))
           </code>
         </script>
       </post>
+    </task>
+    <task name="Loop_Over_Instance_Status">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/docker.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Docker"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceName = variables.get("INSTANCE_NAME")
+
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+// Inform other platforms that other actions are canceled through Synchronization API
+def channel = "Service_Instance_" + instanceId
+
+// Check docker container status
+def ByteArrayOutputStream sout = new ByteArrayOutputStream();
+def ByteArrayOutputStream serr = new ByteArrayOutputStream();
+def proc = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().waitForProcessOutput(sout, serr)
+def isContainerRunning = new String(sout.toByteArray()).trim().toBoolean()
+
+if ((!isContainerRunning) && (!synchronizationapi.get(channel, "DELETE_LAUNCHED")) && (!synchronizationapi.get(channel, "STOP_LAUNCHED"))){
+    currentStatus = 'ERROR'
+    println("[ERROR] An internal error occured in docker container: " + instanceName)
+    // Update docker container is not running
+    def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+    serviceInstanceData.setInstanceStatus(currentStatus)
+    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+    // Tell the CRON loop to stop
+    variables.put("IS_FINISHED",true)
+    // Exit with error
+    System.exit(1)
+} else {
+    def lastTime=variables.get('LAST_TIME_MARK')
+    // Fetch new logs since last fetch time mark.
+    def fetchLogsCmd = ["docker", "logs", "--since", lastTime, instanceName]
+    if(!lastTime){
+        // Fetch all logs from docker container
+        fetchLogsCmd = ["docker", "logs", instanceName]
+    }
+    fetchLogsCmd.execute().consumeProcessOutput(System.out, System.err)
+}
+
+// Check service instance status
+def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
+if(!currentStatus.equals("RUNNING")){
+    // Allow the Delete workflow to be fulfilled
+    synchronizationapi.put(channel, "DELETE_INSTANCE", true)
+    // Tell the CRON loop to stop
+    variables.put("IS_FINISHED",true)
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="Loop_Over_Instance_Status">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def isFinished = variables.get('IS_FINISHED') as boolean
+if(!isFinished){
+    variables.put("LAST_TIME_MARK",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
+	loop = '*/1 * * * *'
+} else{
+    loop = false
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
     </task>
   </taskFlow>
 </job>
