@@ -13,7 +13,7 @@
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
-    <info name="pca.states" value="(RUNNING,FINISHED)(STOPPED,FINISHED)(ERROR,FINISHED)"/>
+    <info name="pca.states" value="(RUNNING,FINISHED)(PAUSED,FINISHED)(ERROR,FINISHED)"/>
     <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
     <info name="pca.service.id" value="MySQL"/>
     <info name="group" value="public-objects"/>
@@ -43,14 +43,16 @@
 * THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING FINISHED             *
 *********************************************************************************/
 
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
 // Acquire service instance id and instance name from synchro channel
-def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def channel = "Service_Instance_" + instanceId
 def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
 variables.put("INSTANCE_NAME", instanceName)
 
 // Inform other platforms that service is being finished through Synchronization API
-synchronizationapi.put(channel, "DELETE_LAUNCHED", true)
+synchronizationapi.put(channel, "FINISH_LAUNCHED", true)
 ]]>
           </code>
         </script>
@@ -59,8 +61,6 @@ synchronizationapi.put(channel, "DELETE_LAUNCHED", true)
         <script>
           <code language="bash">
             <![CDATA[
-echo --- BEGIN  "$variables_PA_TASK_NAME"  ---
-
 echo Removing docker container: "$variables_INSTANCE_NAME"
 INSTANCE_NAME=$(docker rm -f $variables_INSTANCE_NAME 2>&1)
 echo $INSTANCE_NAME > $variables_INSTANCE_NAME"_status"
@@ -82,27 +82,24 @@ import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
 def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
 def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-def instanceId = variables.get("PCA_INSTANCE_ID") as int
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
-    
+
 def ALREADY_REMOVED_MESSAGE = "Error: No such container: " + instanceName
 
 // Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
 
 // Update service instance data : (status, endpoint)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
 def status = new File(instanceName+"_status").text.trim()
 def currentStatus = (!status.equals(ALREADY_REMOVED_MESSAGE) && !status.equals(instanceName)) ? "ERROR" : "FINISHED"
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
 serviceInstanceData.setInstanceStatus(currentStatus)
-serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
 
-// Delete synchro channel
+// Inform other jobs that the service is finished and deleted.
 def channel = "Service_Instance_" + instanceId
-synchronizationapi.waitUntil(channel, "DELETE_INSTANCE", "{k,x -> x == true}")
-synchronizationapi.deleteChannel(channel)
+synchronizationapi.put(channel, "FINISH_DONE", true)
 
 // Print warning or error messages and force job to exit with error if there are any.
 if (status.equals(ALREADY_REMOVED_MESSAGE)){
