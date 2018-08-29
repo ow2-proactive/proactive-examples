@@ -1,31 +1,31 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Train_Model" onTaskError="continueJobExecution" priority="normal" projectName="6. Train" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Filter_Columns" onTaskError="continueJobExecution" priority="normal" projectName="3. Data Preprocessing" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
-    <![CDATA[ Train a model using a classification or regression algorithm. ]]>
+    <![CDATA[ Filter the columns of your data. ]]>
   </description>
   <genericInformation>
 <info name="bucketName" value="machine-learning-new"/>
-<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_model"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/filled_filter.png"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_filter_data"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
-    <task name="Train_Model">
+    <task name="Filter_Columns">
       <description>
-        <![CDATA[ Train a model using a classification or regression algorithm. ]]>
+        <![CDATA[ Filter the columns of your data. ]]>
       </description>
       <variables>
         <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
         <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
         <variable inherited="false" model="PA:Boolean" name="TASK_ENABLED" value="True"/>
-        <variable inherited="false" name="LABEL_COLUMN" value=""/>
+        <variable inherited="false" name="COLUMNS_NAME" value=""/>
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_model"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/filled_filter.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_filter_data"/>
       </genericInformation>
       <forkEnvironment javaHome="/usr">
         <envScript>
@@ -69,20 +69,14 @@ if str(variables.get("TASK_ENABLED")).lower() != 'true':
 
 print("BEGIN " + __file__)
 
-import sys, bz2, uuid, json
-import random, pickle
+import sys, bz2, uuid
 import pandas as pd
+import numpy as np
 
-is_labeled_data = False
-LABEL_COLUMN = variables.get("LABEL_COLUMN")
-if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
-  is_labeled_data = True
+COLUMNS_NAME = variables.get("COLUMNS_NAME")
+assert COLUMNS_NAME is not None and COLUMNS_NAME is not ""
 
-input_variables = {
-  'task.dataframe_id': None, 
-  'task.dataframe_id_train': None,
-  'task.algorithm_json': None
-}
+input_variables = {'task.dataframe_id': None}
 for key in input_variables.keys():
   for res in results:
     value = res.getMetadata().get(key)
@@ -90,100 +84,17 @@ for key in input_variables.keys():
       input_variables[key] = value
       break
 
-dataframe_id = None
-if input_variables['task.dataframe_id'] is not None:
-  dataframe_id = input_variables['task.dataframe_id']
-if input_variables['task.dataframe_id_train'] is not None:
-  dataframe_id = input_variables['task.dataframe_id_train']
+dataframe_id = input_variables['task.dataframe_id']
 print("dataframe id (in): ", dataframe_id)
 
 dataframe_json = variables.get(dataframe_id)
 assert dataframe_json is not None
 dataframe_json = bz2.decompress(dataframe_json).decode()
+
 dataframe = pd.read_json(dataframe_json, orient='split')
 
-algorithm_json = input_variables['task.algorithm_json']
-assert algorithm_json is not None
-algorithm = json.loads(algorithm_json)
-#-------------------------------------------------------------
-class obj(object):
-  def __init__(self, d):
-    for a, b in d.items():
-      if isinstance(b, (list, tuple)):
-        setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
-      else:
-        setattr(self, a, obj(b) if isinstance(b, dict) else b)
-#-------------------------------------------------------------
-alg = obj(algorithm)
-
-if alg.is_supervised and is_labeled_data:
-  model = None
-  columns = [LABEL_COLUMN]
-  dataframe_train = dataframe.drop(columns, axis=1, inplace=False)
-  dataframe_label = dataframe.filter(columns, axis=1)
-
-  #-------------------------------------------------------------
-  # Classification algorithms
-  #
-  if alg.name == 'SupportVectorMachines':
-    from sklearn.svm import SVC
-    model = SVC(
-      C=alg.C, 
-      kernel=alg.kernel
-    )
-   
-  if alg.name == 'GaussianNaiveBayes':
-    from sklearn.naive_bayes import GaussianNB
-    model = GaussianNB()
-  
-  if alg.name == 'LogisticRegression':
-    from sklearn.linear_model import LogisticRegression
-    model = LogisticRegression(
-      penalty=alg.penalty, 
-      solver=alg.solver, 
-      max_iter=alg.max_iter, 
-      n_jobs=alg.n_jobs
-    )
-
-  #-------------------------------------------------------------
-  # Regression algorithms
-  if alg.name == 'LinearRegression':
-    from sklearn.linear_model import LinearRegression
-    model = LinearRegression(n_jobs=alg.n_jobs)
-
-  if alg.name == 'SupportVectorRegression':
-    from sklearn.svm import SVR
-    model = SVR(
-      C=alg.C, 
-      kernel=alg.kernel, 
-      epsilon=alg.epsilon
-    )
-  
-  if alg.name == 'BayesianRidgeRegression':
-    from sklearn.linear_model import BayesianRidge
-    model = BayesianRidge(
-      alpha_1=alg.alpha_1, 
-      alpha_2=alg.alpha_2, 
-      lambda_1=alg.lambda_1, 
-      lambda_2=alg.lambda_2, 
-      n_iter=alg.n_iter
-    )
-  #-------------------------------------------------------------
-
-  if model is not None:
-    model.fit(dataframe_train.values, dataframe_label.values.ravel())
-    model_bin = pickle.dumps(model)
-    model_compressed = bz2.compress(model_bin)
-    model_id = str(uuid.uuid4())
-    variables.put(model_id, model_compressed)
-    print("model id: ", model_id)
-    print('model size (original):   ', sys.getsizeof(model_bin), " bytes")
-    print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")
-    resultMetadata.put("task.model_id", model_id)
-  else:
-    print("Algorithm not found!")
-else:
-  print("The algorithm must be supervised and the dataframe must be labelled!")
+columns = [x.strip() for x in COLUMNS_NAME.split(',')]
+dataframe.filter(columns, axis=1, inplace=True)
 
 dataframe_json = dataframe.to_json(orient='split').encode()
 compressed_data = bz2.compress(dataframe_json)
@@ -197,9 +108,7 @@ print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
 print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
-#resultMetadata.put("task.dataframe_id", dataframe_id)
-resultMetadata.put("task.algorithm_json", algorithm_json)
-resultMetadata.put("task.label_column", LABEL_COLUMN)
+resultMetadata.put("task.dataframe_id", dataframe_id)
 
 LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
 LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
@@ -259,10 +168,10 @@ print("END " + __file__)
         <controlFlow block="none"/>
         <metadata>
           <positionTop>
-            395
+            482.40234375
         </positionTop>
           <positionLeft>
-            880.99609375
+            657.1484375
         </positionLeft>
         </metadata>
       </task>
