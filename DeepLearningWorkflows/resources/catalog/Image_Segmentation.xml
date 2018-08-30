@@ -1,362 +1,36 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.10"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="Image_Segmentation" projectName="4. Custom AI workflows"
-    priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Image_Segmentation" onTaskError="continueJobExecution" priority="normal" projectName="4. Custom AI workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
-    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
-    <variable name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
+    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
     <![CDATA[ Image segmentation using SegNet deep neural network. ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="deep-learning-workflows"/>
-    <info name="Documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html"/>
-    <info name="group" value="public-objects"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/image_segmentation.png"/>
-  </genericInformation>
+<info name="bucketName" value="deep-learning-workflows-dev"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/image_segmentation.png"/>
+<info name="Documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Import_Image_Dataset">
-      <description>
-        <![CDATA[ Load and return an image dataset. ]]>
-      </description>
-      <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip" inherited="true" />
-        <variable name="SPLIT_TRAIN" value="0.5" inherited="false" />
-        <variable name="SPLIT_VAL" value="0.25" inherited="false" />
-        <variable name="SPLIT_TEST" value="0.25" inherited="false" />
-        <variable name="DATASET_TYPE" value="Segmentation" inherited="true" model="PA:LIST(Classification, Segmentation)"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_image.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_import_image_dataset"/>
-      </genericInformation>
-      <selection>
-        <script
-         type="static" >
-          <code language="python">
-            <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr" >
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Import_Image_Dataset")
-
-import wget
-import zipfile
-import shutil
-import json
-import uuid 
-import re
-import os
-from os import remove, listdir, makedirs
-from os.path import basename, splitext, exists, join
-from sklearn.model_selection import train_test_split
- 
-DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip'  #SEGMENTATION DATASET
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/ants_vs_bees.zip'
-SPLIT_SETS  = ['train','val','test']
-SPLIT_TRAIN = 0.50
-SPLIT_VAL   = 0.25
-SPLIT_TEST  = 0.25
-
-
-if 'variables' in locals():
-  if variables.get("DATASET_URL") is not None:
-    DATASET_URL = variables.get("DATASET_URL")
-  if variables.get("SPLIT_TRAIN") is not None:
-    SPLIT_TRAIN = float(str(variables.get("SPLIT_TRAIN")))
-  if variables.get("SPLIT_VAL") is not None:
-    SPLIT_VAL = float(str(variables.get("SPLIT_VAL")))
-  if variables.get("SPLIT_TEST") is not None:
-    SPLIT_TEST = float(str(variables.get("SPLIT_TEST")))
-  
-DATASET_TYPE = variables.get("DATASET_TYPE")
-DATASET_TYPE = DATASET_TYPE.upper()
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Define localspace
-LOCALSPACE = join('data', ID)
-if exists(LOCALSPACE):
-  shutil.rmtree(LOCALSPACE)
-makedirs(LOCALSPACE)
-
-print("LOCALSPACE:  " + LOCALSPACE)
-print("DATASET_URL: " + DATASET_URL)
-assert DATASET_URL is not None
-
-print("Split information: ")
-print("SPLIT_TRAIN: " + str(SPLIT_TRAIN))
-print("SPLIT_VAL:   " + str(SPLIT_VAL))
-print("SPLIT_TEST:  " + str(SPLIT_TEST))
-
-assert SPLIT_TRAIN >= 0.0
-assert SPLIT_VAL >= 0.0
-assert SPLIT_TEST >= 0.0
-assert (SPLIT_TRAIN + SPLIT_VAL + SPLIT_TEST) == 1.0
-if SPLIT_TRAIN == 0.0 and SPLIT_VAL > 0.0:
-  raise AssertionError("SPLIT_VAL cannot be defined when SPLIT_TRAIN equals zero") 
-
-DATASET_NAME = splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0]
-DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
-
-if exists(DATASET_PATH):
-  shutil.rmtree(DATASET_PATH)
-makedirs(DATASET_PATH)
-
-print("Dataset information: ")
-print("DATASET_NAME: " + DATASET_NAME)
-print("DATASET_PATH: " + DATASET_PATH)
-
-print("Downloading...")
-filename = wget.download(DATASET_URL, DATASET_PATH)
-print("FILENAME: " + filename)
-print("OK")
-
-print("Extracting...")
-dataset_zip = zipfile.ZipFile(filename)
-dataset_zip.extractall(DATASET_PATH)
-dataset_zip.close()
-remove(filename)
-print("OK")
-
-
-#CLASSIFICATION DATASET 
-if DATASET_TYPE == 'CLASSIFICATION':  
-    k = 0
-    images_list = []
-    images_label = []
-    labels_name = []
-    for root in listdir(DATASET_PATH):
-        if (not root.startswith('.')):
-            labels_name.append(root)
-            label_dir = join(DATASET_PATH, root)
-            print(label_dir)
-            files = listdir(label_dir)
-            files[:] = [join(label_dir,file) for file in files]
-            files_size = len(files)
-            files_label = [k] * files_size
-            images_list = images_list + files
-            images_label = images_label + files_label
-            k = k + 1
-
-
-    print("Splitting the dataset into train and test")
-    images_train, images_test, labels_train, labels_test = train_test_split(images_list, images_label, test_size=SPLIT_TEST, random_state=1)
-
-    images_val = []
-    labels_val = []
-    if SPLIT_TRAIN != 0.0 and SPLIT_VAL != 0.0:
-        print("Splitting the train into train and val")
-        images_train, images_val, labels_train, labels_val = train_test_split(images_train, labels_train, test_size=SPLIT_VAL, random_state=1)
-
-    images_split = {SPLIT_SETS[0] : images_train, SPLIT_SETS[1] : images_val, SPLIT_SETS[2] : images_test}
-    labels_split = {SPLIT_SETS[0] : labels_train, SPLIT_SETS[1] : labels_val, SPLIT_SETS[2] : labels_test}
-
-    def move_images(_path, _images_list, _labels_list, _labels_name):
-        if exists(_path):
-            shutil.rmtree(_path)
-        makedirs(_path)
-        for _label_name in _labels_name:
-            makedirs(join(_path, _label_name))
-        for _image_path, _image_label in zip(_images_list, _labels_list):
-            _image_path_dest = join(_path, _labels_name[_image_label], basename(_image_path))
-            print("Moving " + _image_path + " to " + _image_path_dest)
-            shutil.move(_image_path, _image_path_dest)
-
-    DATASET_LABELS = json.dumps(labels_name)
-    print("DATASET_LABELS: " + DATASET_LABELS)
-
-
-    for SPLIT_NAME in SPLIT_SETS:
-        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
-        print("SPLIT_PATH: " + SPLIT_PATH)
-        move_images(SPLIT_PATH, images_split[SPLIT_NAME], labels_split[SPLIT_NAME], labels_name)
-
-    if 'variables' in locals():
-        variables.put("DATASET_NAME", DATASET_NAME)
-        variables.put("DATASET_PATH", DATASET_PATH)
-        variables.put("DATASET_LABELS", DATASET_LABELS)
-        variables.put("DATASET_TYPE", DATASET_TYPE)        
-    
-    print("END Import_Image_Dataset")
-    
-#SEGMENTATION DATASET    
-elif DATASET_TYPE == 'SEGMENTATION':
-    k = 0
-    images_list = []
-    images_list_gt = []
-    labels_name = []              
-    num_folder = len(next(os.walk(DATASET_PATH))[1])
-
-
-    if num_folder == 2:
-        for root in listdir(DATASET_PATH):
-            labels_name.append(root)
-            label_dir = join(DATASET_PATH, root)
-            print(label_dir)
-            files = listdir(label_dir)
-            files[:] = [join(label_dir,file) for file in files]
-            files_size = len(files)
-            if k == 0:
-                images_list = images_list + files
-            if k == 1:
-                images_list_gt = images_list_gt + files  
-            k = k + 1   
-
-    try:
-        new_list = [x for x in images_list if re.search('.DS_Store', x)]
-        images_list.remove(''.join(new_list))
-    except:
-        pass            
-
-    try:
-        new_list_gt = [x for x in images_list_gt if re.search('.DS_Store', x)]
-        images_list_gt.remove(''.join(new_list_gt))    
-    except:
-        pass    
-    
-    images_list = sorted(images_list)
-    images_list_gt = sorted(images_list_gt)
-
-    print("Splitting the dataset into train and test")
-    images_train, images_test, images_train_gt, images_test_gt = train_test_split(images_list, images_list_gt, test_size=SPLIT_TEST, random_state=1)
-    
-    images_val = []
-
-    if SPLIT_TRAIN != 0.0 and SPLIT_VAL != 0.0:
-        print("Splitting the train into train and val")
-        images_train, images_val, images_train_gt, images_val_gt = train_test_split(images_train, images_train_gt, test_size=SPLIT_VAL, random_state=1)
-
-        images_split = {SPLIT_SETS[0] : images_train, SPLIT_SETS[1] : images_val, SPLIT_SETS[2] : images_test}
-        images_split_gt = {SPLIT_SETS[0] : images_train_gt, SPLIT_SETS[1] : images_val_gt, SPLIT_SETS[2] : images_test_gt}
-
-    for SPLIT_NAME in SPLIT_SETS:
-        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
-        print("SPLIT_PATH: " + SPLIT_PATH)
-
-            
-    def move_seg_images(_path, _images_list, _labels_name):
-        if exists(_path):
-            shutil.rmtree(_path)
-        makedirs(_path)
-        for _image_path in _images_list:
-            _image_path_dest = join(_path, basename(_image_path))
-            print("Moving " + _image_path + " to " + _image_path_dest)
-            shutil.move(_image_path, _image_path_dest)
-
-    k = 0
-    for bx in labels_name:
-        for SPLIT_NAME in SPLIT_SETS:
-            SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
-            if k == 0:
-                print("SPLIT_PATH: " + SPLIT_PATH)
-                move_seg_images(SPLIT_PATH + '/' + labels_name[0], images_split[SPLIT_NAME], labels_name)           
-            if k == 1:
-                print("SPLIT_PATH: " + SPLIT_PATH)
-                move_seg_images(SPLIT_PATH + '/' + labels_name[1], images_split_gt[SPLIT_NAME], labels_name)
-        k = k + 1            
-        
-    
-    if 'variables' in locals():
-        variables.put("DATASET_NAME", DATASET_NAME)
-        variables.put("DATASET_PATH", DATASET_PATH)
-        variables.put("DATASET_TYPE", DATASET_TYPE) 
-        
-    print("END Import_Image_Dataset")
-
-    if num_folder != 2:    
-        print('Please, check your dataset!')
-        
-else: 
-    print('Please, check your dataset type variable!')
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-      <outputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferToGlobalSpace"/>
-      </outputFiles>
-    </task>
     <task name="SegNet">
       <description>
         <![CDATA[ SegNet is a deep convolutional encoder-decoder architecture for robust semantic pixel-wise labelling.
 You can see more details in: http://mi.eng.cam.ac.uk/projects/segnet/ ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="IMG_SIZE" value="(64, 64)" inherited="true" />
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="IMG_SIZE" value="(64, 64)"/>
+        <variable inherited="true" name="NUM_CLASSES" value="5"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_segmentation.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/dev/MLOS/MLOSUserGuide.html#_alexnet"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_segnet"/>
       </genericInformation>
       <selection>
-        <script
-         type="static" >
+        <script type="static">
           <code language="python">
             <![CDATA[
 import os
@@ -381,7 +55,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -418,9 +92,13 @@ else:
 print("BEGIN SegNet")
 
 import json
+from ast import literal_eval as make_tuple
 
-IMG_SIZE = variables.get("IMG_SIZE") 
-  
+IMG_SIZE = variables.get("IMG_SIZE")
+NUM_CLASSES = int(str(variables.get("NUM_CLASSES")))
+ 
+IMG_SIZE = make_tuple(IMG_SIZE)
+
 # Define the NET model
 NET_MODEL = """
 
@@ -600,36 +278,44 @@ if 'variables' in locals():
   variables.put("NET_TRANSFORM", NET_TRANSFORM)
   variables.put("NET_CRITERION", NET_CRITERION)
   variables.put("IMG_SIZE", IMG_SIZE)
+  variables.put("NUM_CLASSES", NUM_CLASSES)
+
+print("END SegNet")
 ]]>
           </code>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            444.5
+        </positionTop>
+        <positionLeft>
+            873.5
+        </positionLeft>
+      </metadata>
     </task>
-    <task name="Predict_Image_Segmentation_Model">
+    <task name="Export_Images">
       <description>
-        <![CDATA[ Predict a model using a deep learning algorithm. ]]>
+        <![CDATA[ Download a zip file of your results ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="BATCH_SIZE" value="1" inherited="false" />
-        <variable name="NUM_WORKERS" value="1" inherited="false" />
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_predict_image_model"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_images"/>
       </genericInformation>
       <depends>
-        <task ref="Train_Image_Segmentation_Model"/>
+        <task ref="Predict_Image_Segmentation_Model"/>
       </depends>
       <inputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
-        <files  includes="$MODEL_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$OUTPUT_FOLDER/**"/>
       </inputFiles>
       <selection>
-        <script
-         type="static" >
+        <script type="static">
           <code language="python">
             <![CDATA[
 import os
@@ -654,7 +340,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -688,16 +374,980 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Predict_Image_Model")
+print("BEGIN Export_Images")
 
 import os
 import cv2
+import json
 import glob
 import uuid  
 import torch 
 import numpy
+import torch
+import shutil
 import random
-import shutil 
+import zipfile
+import pandas as pd
+
+from PIL import Image
+from os.path import join, exists
+from os import remove, listdir, makedirs
+
+import torch
+import torch.nn as nn
+import torch.nn.init as init
+import torch.nn.functional as F
+from torch.utils.data import Dataset 
+
+from torch.utils import model_zoo
+from ast import literal_eval as make_tuple
+from os.path import basename, splitext, exists, join, isfile
+
+from torch.optim import SGD, Adam
+from torch.autograd import Variable
+from torch.utils.data import DataLoader
+from torchvision.transforms import Compose
+from torchvision import datasets, models, transforms
+from torchvision.transforms import ToTensor, ToPILImage, Normalize, Scale
+
+if 'variables' in locals():
+  DATASET_PATH   = variables.get("DATASET_PATH")
+  NET_TRANSFORM  = variables.get("NET_TRANSFORM")
+  CNN_TRANSFORM  = variables.get("CNN_TRANSFORM")
+  PREDICT_DATA   = variables.get("PREDICT_DATA_JSON")
+  SHUFFLE = variables.get("SHUFFLE")
+  BATCH_SIZE = int(str(variables.get("BATCH_SIZE")))
+  NUM_WORKERS = int(str(variables.get("NUM_WORKERS")))
+  DATASET_TYPE = variables.get("DATASET_TYPE")  
+  IMG_SIZE   = variables.get("IMG_SIZE") 
+
+#CLASSIFICATION
+if DATASET_TYPE == 'CLASSIFICATION':
+	# Load CNN transform
+	# data_transforms
+	if CNN_TRANSFORM != None:
+		assert CNN_TRANSFORM is not None
+		exec(CNN_TRANSFORM)   
+        
+	# Load dataset
+	image_dataset = {x: 
+		datasets.ImageFolder(join(DATASET_PATH, x), data_transforms[x]) 
+  		for x in ['test']}
+
+	data_loader = {x: 
+		DataLoader(image_dataset[x], batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS) 
+		for x in ['test']}        
+        
+	# Get an unique ID
+	ID = str(uuid.uuid4())
+
+	# Define localspace
+	LOCALSPACE = join('results', ID)
+	os.makedirs(LOCALSPACE, exist_ok=True)
+    
+	if PREDICT_DATA != None: 
+		prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
+		df = pd.DataFrame(prediction_result)
+		preds = df['Predictions']
+        
+		for index, elem in enumerate(preds):
+			# check if folder exist
+			os.makedirs(join(LOCALSPACE,  preds[index]), exist_ok=True)       
+			shutil.copy2(data_loader['test'].dataset.imgs[index][0], LOCALSPACE + '/' + preds[index])
+            
+		FILE_NAME = '.zip'  
+		FILE_PATH = join(LOCALSPACE, FILE_NAME)
+		print("FILE_PATH: " + FILE_PATH)  
+             
+		def zipdir(_path, _ziph):
+			# ziph is zipfile handle
+			for root, dirs, files in os.walk(_path):
+				for file in files:
+					_ziph.write(join(root, file))   
+            
+		zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
+		zipdir(LOCALSPACE, zipf)
+		zipf.close()
+  
+		assert isfile(FILE_PATH) == True   
+        
+		# Read the whole file at once
+		FILE_BIN = None
+		with open(FILE_PATH, "rb") as binary_file:
+			FILE_BIN = binary_file.read()
+		assert FILE_BIN is not None  
+               
+		if 'variables' in locals():
+			result = FILE_BIN
+			resultMetadata.put("file.extension", ".zip")
+			resultMetadata.put("file.name", "result.zip")
+			resultMetadata.put("content.type", "application/octet-stream") 
+			print("END Export_Images")
+	else:
+		print("It is not possible to export the images")   
+        
+#DETECTION / SEGMENTATION     
+if DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
+    IMG_SIZE = tuple(IMG_SIZE)
+    # Get an unique ID
+    ID = str(uuid.uuid4())
+    # Define localspace
+    LOCALSPACE = join('results', ID)
+    os.makedirs(LOCALSPACE, exist_ok=True)
+    if PREDICT_DATA != None: 
+        prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
+        df = pd.DataFrame(prediction_result)
+        os.makedirs(join(LOCALSPACE, 'images'), exist_ok=True)
+        os.makedirs(join(LOCALSPACE, 'outputs'), exist_ok=True)
+        imgs = df['Image Paths']
+        preds = df['Outputs']
+        for index, elem in enumerate(preds): 
+        	shutil.copy2(imgs[index], LOCALSPACE + '/' + 'images') 
+        	shutil.copy2(elem, LOCALSPACE + '/' + 'outputs') 
+            
+        FILE_NAME = '.zip' 
+        FILE_PATH = join(LOCALSPACE, FILE_NAME)
+        print("FILE_PATH: " + FILE_PATH) 
+        
+        def zipdir(_path, _ziph):
+        	# ziph is zipfile handle
+        	for root, dirs, files in os.walk(_path):
+        		for file in files:
+        			_ziph.write(join(root, file))  
+                    
+        zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
+        zipdir(LOCALSPACE, zipf)
+        zipf.close()
+        
+        assert isfile(FILE_PATH) == True 
+        
+		# Read the whole file at once
+        FILE_BIN = None
+        with open(FILE_PATH, "rb") as binary_file:
+        	FILE_BIN = binary_file.read()
+        assert FILE_BIN is not None  
+        
+        if 'variables' in locals():
+        	result = FILE_BIN
+        	resultMetadata.put("file.extension", ".zip")
+        	resultMetadata.put("file.name", "result.zip")
+        	resultMetadata.put("content.type", "application/octet-stream") 
+        	print("END Export_Images")
+    else:
+        print("It is not possible to export the images")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            700.5
+        </positionTop>
+        <positionLeft>
+            959.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Import_Image_Dataset">
+      <description>
+        <![CDATA[ Load and return an image dataset. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip"/>
+        <variable inherited="true" name="SPLIT_TRAIN" value="0.70"/>
+        <variable inherited="true" name="SPLIT_VAL" value="0.05"/>
+        <variable inherited="true" name="SPLIT_TEST" value="0.25"/>
+        <variable inherited="true" model="PA:LIST(Classification, Detection, Segmentation)" name="DATASET_TYPE" value="Segmentation"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_image.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_import_image_dataset"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Import_Image_Dataset")
+
+import re
+import os
+import shutil
+import json
+import wget
+import uuid 
+import zipfile
+from os import remove, listdir, makedirs
+from os.path import basename, splitext, exists, join
+from sklearn.model_selection import train_test_split
+ 
+#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/ants_vs_bees.zip'  #CLASSIFICATION DATASET
+DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/pascal_voc.zip'     #DTECTION DATASET
+#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip'        #SEGMENTATION DATASET
+
+SPLIT_SETS  = ['train','val','test']
+
+if 'variables' in locals():
+  if variables.get("DATASET_URL") is not None:
+    DATASET_URL = variables.get("DATASET_URL")
+  if variables.get("SPLIT_TRAIN") is not None:
+    SPLIT_TRAIN = float(str(variables.get("SPLIT_TRAIN")))
+  if variables.get("SPLIT_VAL") is not None:
+    SPLIT_VAL = float(str(variables.get("SPLIT_VAL")))
+  if variables.get("SPLIT_TEST") is not None:
+    SPLIT_TEST = float(str(variables.get("SPLIT_TEST")))
+  
+DATASET_TYPE = variables.get("DATASET_TYPE")
+DATASET_TYPE = DATASET_TYPE.upper()
+print(DATASET_TYPE)
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Define localspace
+LOCALSPACE = join('data', ID)
+if exists(LOCALSPACE):
+  shutil.rmtree(LOCALSPACE)
+makedirs(LOCALSPACE)
+
+print("LOCALSPACE:  " + LOCALSPACE)
+print("DATASET_URL: " + DATASET_URL)
+assert DATASET_URL is not None
+
+print("Split information: ")
+print("SPLIT_TRAIN: " + str(SPLIT_TRAIN))
+print("SPLIT_VAL:   " + str(SPLIT_VAL))
+print("SPLIT_TEST:  " + str(SPLIT_TEST))
+
+assert SPLIT_TRAIN >= 0.0
+assert SPLIT_VAL >= 0.0
+assert SPLIT_TEST >= 0.0
+assert (SPLIT_TRAIN + SPLIT_VAL + SPLIT_TEST) == 1.0
+if SPLIT_TRAIN == 0.0 and SPLIT_VAL > 0.0:
+  raise AssertionError("SPLIT_VAL cannot be defined when SPLIT_TRAIN equals zero") 
+
+DATASET_NAME = splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0]
+DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
+
+if exists(DATASET_PATH):
+  shutil.rmtree(DATASET_PATH)
+makedirs(DATASET_PATH)
+
+print("Dataset information: ")
+print("DATASET_NAME: " + DATASET_NAME)
+print("DATASET_PATH: " + DATASET_PATH)
+
+print("Downloading...")
+filename = wget.download(DATASET_URL, DATASET_PATH)
+print("FILENAME: " + filename)
+print("OK")
+
+print("Extracting...")
+dataset_zip = zipfile.ZipFile(filename)
+dataset_zip.extractall(DATASET_PATH)
+dataset_zip.close()
+remove(filename)
+print("OK")
+
+#CLASSIFICATION DATASET 
+if DATASET_TYPE == 'CLASSIFICATION':  
+    k = 0
+    images_list = []
+    images_label = []
+    labels_name = []
+    for root in listdir(DATASET_PATH):
+        if (not root.startswith('.')):
+            labels_name.append(root)
+            label_dir = join(DATASET_PATH, root)
+            print(label_dir)
+            files = listdir(label_dir)
+            files[:] = [join(label_dir,file) for file in files]
+            files_size = len(files)
+            files_label = [k] * files_size
+            images_list = images_list + files
+            images_label = images_label + files_label
+            k = k + 1
+
+
+    print("Splitting the dataset into train and test")
+    images_train, images_test, labels_train, labels_test = train_test_split(images_list, images_label, test_size=SPLIT_TEST, random_state=1)
+
+    images_val = []
+    labels_val = []
+    if SPLIT_TRAIN != 0.0 and SPLIT_VAL != 0.0:
+        print("Splitting the train into train and val")
+        images_train, images_val, labels_train, labels_val = train_test_split(images_train, labels_train, test_size=SPLIT_VAL, random_state=1)
+
+    images_split = {SPLIT_SETS[0] : images_train, SPLIT_SETS[1] : images_val, SPLIT_SETS[2] : images_test}
+    labels_split = {SPLIT_SETS[0] : labels_train, SPLIT_SETS[1] : labels_val, SPLIT_SETS[2] : labels_test}
+
+    def move_images(_path, _images_list, _labels_list, _labels_name):
+        if exists(_path):
+            shutil.rmtree(_path)
+        makedirs(_path)
+        for _label_name in _labels_name:
+            makedirs(join(_path, _label_name))
+        for _image_path, _image_label in zip(_images_list, _labels_list):
+            _image_path_dest = join(_path, _labels_name[_image_label], basename(_image_path))
+            print("Moving " + _image_path + " to " + _image_path_dest)
+            shutil.move(_image_path, _image_path_dest)
+
+    DATASET_LABELS = json.dumps(labels_name)
+    print("DATASET_LABELS: " + DATASET_LABELS)
+
+
+    for SPLIT_NAME in SPLIT_SETS:
+        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
+        print("SPLIT_PATH: " + SPLIT_PATH)
+        move_images(SPLIT_PATH, images_split[SPLIT_NAME], labels_split[SPLIT_NAME], labels_name)
+
+    if 'variables' in locals():
+        variables.put("DATASET_NAME", DATASET_NAME)
+        variables.put("DATASET_PATH", DATASET_PATH)
+        variables.put("DATASET_LABELS", DATASET_LABELS)
+        variables.put("DATASET_TYPE", DATASET_TYPE)        
+    
+    print("END Import_Image_Dataset")
+    
+#DETECTION / SEGMENTATION DATASET    
+elif DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
+    print(DATASET_TYPE)
+    k = 0
+    images_list = []
+    images_list_gt = []
+    labels_name = []              
+    num_folder = len(next(os.walk(DATASET_PATH))[1])
+
+
+    if num_folder == 2:
+        for root in listdir(DATASET_PATH):
+            labels_name.append(root)
+            label_dir = join(DATASET_PATH, root)
+            print(label_dir)
+            files = listdir(label_dir)
+            files[:] = [join(label_dir,file) for file in files]
+            files_size = len(files)
+            if k == 0:
+                images_list = images_list + files
+            if k == 1:
+                images_list_gt = images_list_gt + files  
+            k = k + 1   
+
+    try:
+        new_list = [x for x in images_list if re.search('.DS_Store', x)]
+        images_list.remove(''.join(new_list))
+    except:
+        pass            
+
+    try:
+        new_list_gt = [x for x in images_list_gt if re.search('.DS_Store', x)]
+        images_list_gt.remove(''.join(new_list_gt))    
+    except:
+        pass    
+    
+    images_list = sorted(images_list)
+    images_list_gt = sorted(images_list_gt)
+
+    print("Splitting the dataset into train and test")
+    images_train, images_test, images_train_gt, images_test_gt = train_test_split(images_list, images_list_gt, test_size=SPLIT_TEST, random_state=1)
+    
+    images_val = []
+
+    if SPLIT_TRAIN != 0.0 and SPLIT_VAL != 0.0:
+        print("Splitting the train into train and val")
+        images_train, images_val, images_train_gt, images_val_gt = train_test_split(images_train, images_train_gt, test_size=SPLIT_VAL, random_state=1)
+
+        images_split = {SPLIT_SETS[0] : images_train, SPLIT_SETS[1] : images_val, SPLIT_SETS[2] : images_test}
+        images_split_gt = {SPLIT_SETS[0] : images_train_gt, SPLIT_SETS[1] : images_val_gt, SPLIT_SETS[2] : images_test_gt}
+
+    for SPLIT_NAME in SPLIT_SETS:
+        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
+        print("SPLIT_PATH: " + SPLIT_PATH)
+
+            
+    def move_seg_images(_path, _images_list, _labels_name):
+        if exists(_path):
+            shutil.rmtree(_path)
+        makedirs(_path)
+        for _image_path in _images_list:
+            _image_path_dest = join(_path, basename(_image_path))
+            print("Moving " + _image_path + " to " + _image_path_dest)
+            shutil.move(_image_path, _image_path_dest)
+
+    k = 0
+    for bx in labels_name:
+        for SPLIT_NAME in SPLIT_SETS:
+            SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
+            if k == 0:
+                print("SPLIT_PATH: " + SPLIT_PATH)
+                move_seg_images(SPLIT_PATH + '/' + labels_name[0], images_split[SPLIT_NAME], labels_name)           
+            if k == 1:
+                print("SPLIT_PATH: " + SPLIT_PATH)
+                move_seg_images(SPLIT_PATH + '/' + labels_name[1], images_split_gt[SPLIT_NAME], labels_name)
+        k = k + 1            
+        
+    
+    if 'variables' in locals():
+        variables.put("DATASET_NAME", DATASET_NAME)
+        variables.put("DATASET_PATH", DATASET_PATH)
+        variables.put("DATASET_TYPE", DATASET_TYPE) 
+        
+    print("END Import_Image_Dataset")
+
+    if num_folder != 2:    
+        print('Please, check your dataset!')
+        
+else: 
+    print('Please, check your dataset type variable!')
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <outputFiles>
+        <files accessMode="transferToGlobalSpace" includes="$DATASET_PATH/**"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            444.5
+        </positionTop>
+        <positionLeft>
+            1029.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Import_Model">
+      <description>
+        <![CDATA[ Import a trained model by a deep learning algorithm. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="MODEL_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_segnet.zip"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_import_model"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Import_Model")
+
+import wget
+import uuid
+import shutil
+import zipfile
+
+from os.path import join, exists
+from os import remove, listdir, makedirs
+
+# Pre-trained models
+# Text:  https://s3.eu-west-2.amazonaws.com/activeeon-public/models/basic_sentiment_analysis.zip
+# Image: https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_resnet18.zip
+
+# Load a trained model on ResNet-18 with two classes [ants, bees]
+#MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_resnet18.zip' ##CLASSIFICATION MODEL
+
+# Load a trained model on SegNet with five classes 
+#MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_segnet.zip'##SEGMENTATION MODEL
+
+# Load a trained model on SDD with twenty-one classes 
+MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/sdd_voc.zip'##OBJECT DETECTION MODEL ON PASCAL VOC DATASET
+
+
+if 'variables' in locals():
+  MODEL_URL = variables.get("MODEL_URL")
+
+print("MODEL_URL:   " + MODEL_URL)
+assert MODEL_URL is not None
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Create an empty dir
+MODEL_FOLDER = join('models', ID)
+if exists(MODEL_FOLDER):
+  shutil.rmtree(MODEL_FOLDER)
+makedirs(MODEL_FOLDER)
+print("MODEL_FOLDER: " + MODEL_FOLDER)
+
+print("Downloading...")
+filename = wget.download(MODEL_URL, MODEL_FOLDER)
+print("FILENAME: " + filename)
+print("OK")
+
+print("Extracting...")
+dataset_zip = zipfile.ZipFile(filename)
+dataset_zip.extractall(MODEL_FOLDER)
+dataset_zip.close()
+remove(filename)
+print("OK")
+
+MODEL_PATH = None
+LABELS_PATH = None
+TEXT_PATH = None 
+for file in listdir(MODEL_FOLDER):
+  if file.endswith(".pt") or file.endswith(".pth"):
+    MODEL_PATH = join(MODEL_FOLDER, file)
+  if file.endswith("label.pkl"):
+    LABELS_PATH = join(MODEL_FOLDER, file)
+  if file.endswith("text.pkl"):
+    TEXT_PATH = join(MODEL_FOLDER, file)
+  if file.endswith(".txt"):
+    LABELS_PATH = join(MODEL_FOLDER, file)
+
+assert MODEL_PATH is not None
+#assert LABELS_PATH is not None
+print(LABELS_PATH)
+print("Model information: ")
+print("MODEL_PATH:  " + MODEL_PATH)
+if LABELS_PATH != None:
+	print("LABELS_PATH: " + LABELS_PATH)
+print("TEXT_PATH:   " + str(TEXT_PATH))
+
+if 'variables' in locals():
+  variables.put("MODEL_PATH", MODEL_PATH)
+  variables.put("LABELS_PATH", LABELS_PATH)
+  variables.put("TEXT_PATH", TEXT_PATH)
+  variables.put("MODEL_FOLDER", MODEL_FOLDER)
+
+print("END Import_Model")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <outputFiles>
+        <files accessMode="transferToGlobalSpace" includes="$MODEL_FOLDER/**"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            444.5
+        </positionTop>
+        <positionLeft>
+            1185.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Export_Results">
+      <description>
+        <![CDATA[ Preview the predicted results ]]>
+      </description>
+      <variables>
+        <variable inherited="true" name="OUTPUT_FILE" value="HTML"/>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_results"/>
+      </genericInformation>
+      <depends>
+        <task ref="Predict_Image_Segmentation_Model"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$OUTPUT_FOLDER/**"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Export_Results")
+
+import base64
+import pandas as pd
+from PIL import Image
+from io import BytesIO
+
+if 'variables' in locals():
+  PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
+  OUTPUT_FILE = variables.get("OUTPUT_FILE")
+
+assert PREDICT_DATA is not None
+df = pd.read_json(PREDICT_DATA, orient='split')  
+
+# check the predictions
+if {'Predictions','Targets'}.issubset(df.columns):
+	pred_result =[]
+	for indice in range(len(df)):
+		if df['Predictions'][indice] == df['Targets'][indice]:
+			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/tick_green.png?raw=true'
+			pred_result.append(result)
+		else:
+			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/close_red.png?raw=true'
+			pred_result.append(result)
+	df_pred_image_url = pd.DataFrame(pred_result)
+	df['Results'] = df_pred_image_url
+ 
+def get_thumbnail(path):
+  i = Image.open(path)
+  extension = i.format
+  i.thumbnail((200, 200), Image.LANCZOS)
+  return i, extension
+
+def image_base64(im):
+  if isinstance(im, str):
+    im, extension = get_thumbnail(im)
+  with BytesIO() as buffer:
+    im.save(buffer, extension)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+def image_formatter(im):
+  extension = im.format
+  return f'<img src="data:image/extension;base64,{image_base64(im)}" height="200" width="200">'
+
+def image_formatter_url(im_url):
+  return """<img src="{0}" height="50" width="50"/>""".format(im_url)
+  
+
+result = ''
+with pd.option_context('display.max_colwidth', -1):
+  result = df.to_html(escape=False, formatters=dict(Images=image_formatter, Outputs=image_formatter, Results=image_formatter_url))
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+               
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <style>{0}</style>
+                </head>
+                <body>{1}</body></html>
+""".format(css_style, result)
+
+if OUTPUT_FILE == 'HTML':  
+    result = result.encode('utf-8')
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "result.html")
+    resultMetadata.put("content.type", "text/html")
+    print("END Export_Results")
+elif OUTPUT_FILE == 'CSV':
+    if 'Images' in df.columns:
+        df.pop('Images')
+    if 'Results' in df.columns:        
+        df.pop('Results')  
+    if 'Outputs' in df.columns:        
+        df.pop('Outputs') 
+    result = df.to_csv()    
+    resultMetadata.put("file.extension", ".csv")
+    resultMetadata.put("file.name", "result.csv")
+    resultMetadata.put("content.type", "text/csv") 
+    print("END Export_Results")
+else:
+  print('It is not possible to export the data')
+]]>
+              </code>
+            </script>
+          </scriptExecutable>
+          <controlFlow block="none"/>
+          <metadata>
+            <positionTop>
+            700.5
+        </positionTop>
+            <positionLeft>
+            1099.5
+        </positionLeft>
+          </metadata>
+        </task>
+        <task name="Predict_Image_Segmentation_Model">
+          <description>
+            <![CDATA[ Predict a model using a deep learning algorithm. ]]>
+          </description>
+          <variables>
+            <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+            <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+            <variable inherited="true" name="BATCH_SIZE" value="1"/>
+            <variable inherited="true" name="NUM_WORKERS" value="1"/>
+            <variable inherited="true" name="SHUFFLE" value="True"/>
+          </variables>
+          <genericInformation>
+            <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
+            <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_predict_image_segmentation_model"/>
+          </genericInformation>
+          <depends>
+            <task ref="SegNet"/>
+            <task ref="Import_Image_Dataset"/>
+            <task ref="Import_Model"/>
+          </depends>
+          <inputFiles>
+            <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+            <files accessMode="transferFromGlobalSpace" includes="$MODEL_FOLDER/**"/>
+          </inputFiles>
+          <selection>
+            <script type="static">
+              <code language="python">
+                <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+              </code>
+            </script>
+          </selection>
+          <forkEnvironment javaHome="/usr">
+            <envScript>
+              <script>
+                <code language="python">
+                  <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+                </code>
+              </script>
+            </envScript>
+          </forkEnvironment>
+          <scriptExecutable>
+            <script>
+              <code language="cpython">
+                <![CDATA[
+print("BEGIN Predict_Image_Segmentation_Model")
+
+import os
+import cv2
+import uuid  
+import torch 
+import random 
 import pandas as pd
 
 from PIL import Image
@@ -717,30 +1367,22 @@ from torchvision import models
 from argparse import ArgumentParser
 from torch.optim import SGD, Adam
 from torch.autograd import Variable
+from torchvision.transforms import Compose
 from torch.utils.data import DataLoader
 from torchvision.transforms import ToTensor, ToPILImage, Normalize, Scale
-from torchvision.transforms import Compose
-
-NUM_EPOCHS  = 1
-BATCH_SIZE  = 1
-NUM_WORKERS = 1
-SHUFFLE     = True
-NUM_CLASSES = 5
 
 if 'variables' in locals():
-  if variables.get("NUM_EPOCHS") is not None:
-    NUM_EPOCHS = int(str(variables.get("NUM_EPOCHS")))
-    NUM_CLASSES = int(str(variables.get("NUM_CLASSES")))
-    BATCH_SIZE   = variables.get("BATCH_SIZE")
-    NUM_WORKERS   = variables.get("NUM_WORKERS")
-  IMG_SIZE   = variables.get("IMG_SIZE")
-  SHUFFLE   = variables.get("SHUFFLE")
+  NUM_CLASSES = int(str(variables.get("NUM_CLASSES")))
   DATASET_PATH  = variables.get("DATASET_PATH")
   MODEL_PATH     = variables.get("MODEL_PATH")
   NET_MODEL     = variables.get("NET_MODEL")
   NET_TRANSFORM = variables.get("NET_TRANSFORM")
-
-IMG_SIZE = make_tuple(IMG_SIZE)
+  NET_CRITERION = variables.get("NET_CRITERION") 
+  IMG_SIZE = variables.get("IMG_SIZE")
+  SHUFFLE = variables.get("SHUFFLE")
+  BATCH_SIZE = int(str(variables.get("BATCH_SIZE")))
+  NUM_WORKERS = int(str(variables.get("NUM_WORKERS")))
+    
 IMG_SIZE = tuple(IMG_SIZE)
 
 assert DATASET_PATH is not None
@@ -754,7 +1396,7 @@ exec(NET_MODEL)
 model.eval()
 
 # Load trained model
-model = torch.load(MODEL_PATH)
+model=torch.load(MODEL_PATH,map_location={'cuda:0': 'cpu'})
 
 # http://pytorch.org/docs/master/cuda.html#torch.cuda.is_available
 # Returns a bool indicating if CUDA is currently available.
@@ -771,9 +1413,7 @@ ID = str(uuid.uuid4())
 
 # Create an empty dir
 OUTPUT_FOLDER = join('output', ID)
-if exists(OUTPUT_FOLDER):
-  shutil.rmtree(OUTPUT_FOLDER)
-makedirs(OUTPUT_FOLDER)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True) 
 print("OUTPUT_FOLDER: " + OUTPUT_FOLDER)
 
 # VOC12 DATASET
@@ -886,9 +1526,9 @@ image_name, label_name = predict_model(model, loader, use_gpu)
 df_name = pd.DataFrame(image_name)
 df_image_name = pd.DataFrame(image_name)
 df_label_name = pd.DataFrame(label_name)
-df_name.columns = ['Image Name']
-df_image_name.columns = ['Image']
-df_label_name.columns = ['Segmentation']
+df_name.columns = ['Image Paths']
+df_image_name.columns = ['Images']
+df_label_name.columns = ['Outputs']
 
 df = pd.concat([df_name, df_image_name, df_label_name], axis=1)
 
@@ -898,594 +1538,25 @@ if 'variables' in locals():
   variables.put("NUM_WORKERS", NUM_WORKERS)
   variables.put("SHUFFLE", True)
   variables.put("OUTPUT_FOLDER", OUTPUT_FOLDER)
+  variables.put("NUM_CLASSES", NUM_CLASSES)
 
-print("END Predict_Image_Model")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-      <outputFiles>
-        <files  includes="$OUTPUT_FOLDER/**" accessMode="transferToGlobalSpace"/>
-      </outputFiles>
-    </task>
-    <task name="Export_Results">
-      <description>
-        <![CDATA[ Preview the predicted results ]]>
-      </description>
-      <variables>
-        <variable name="OUTPUT_FILE" value="HTML" inherited="false" />
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_results"/>
-      </genericInformation>
-      <depends>
-        <task ref="Predict_Image_Segmentation_Model"/>
-      </depends>
-      <inputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
-        <files  includes="$OUTPUT_FOLDER/**" accessMode="transferFromGlobalSpace"/>
-      </inputFiles>
-      <selection>
-        <script
-         type="static" >
-          <code language="python">
-            <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr" >
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Export_Results")
-
-import base64
-import os.path
-import pandas as pd
-import numpy as np
-
-from pandas.io.json import json_normalize
-from PIL import Image
-from io import BytesIO
-
-if 'variables' in locals():
-  PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
-  OUTPUT_FILE = variables.get("OUTPUT_FILE")
-
-assert PREDICT_DATA is not None
-df = pd.read_json(PREDICT_DATA, orient='split')  
-
-
-# check the predictions
-if {'Prediction','Target'}.issubset(df.columns):
-	pred_result =[]
-	for indice in range(len(df)):
-		if df['Prediction'][indice] == df['Target'][indice]:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/tick_green.png?raw=true'
-			pred_result.append(result)
-		else:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/close_red.png?raw=true'
-			pred_result.append(result)
-	df_pred_image_url = pd.DataFrame(pred_result)
-	df['Result'] = df_pred_image_url
- 
-def get_thumbnail(path):
-  i = Image.open(path)
-  extension = i.format
-  i.thumbnail((150, 150), Image.LANCZOS)
-  return i, extension
-
-def image_base64(im):
-  if isinstance(im, str):
-    im, extension = get_thumbnail(im)
-  with BytesIO() as buffer:
-    im.save(buffer, extension)
-    return base64.b64encode(buffer.getvalue()).decode()
-
-def image_formatter(im):
-  extension = im.format
-  return f'<img src="data:image/extension;base64,{image_base64(im)}" height="150" width="150">'
-
-def image_formatter_url(im_url):
-  return """<img src="{0}" height="50" width="50"/>""".format(im_url)
-  
-
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-  #result = df.to_html(escape=False)
-  result = df.to_html(escape=False, formatters=dict(Image=image_formatter, Segmentation=image_formatter, Result=image_formatter_url))
-
-css_style="""
-table {
-  border: 1px solid #999999;
-  text-align: center;
-  border-collapse: collapse;
-  width: 100%; 
-}
-td {
-  border: 1px solid #999999;         
-  padding: 3px 2px;
-  font-size: 13px;
-  border-bottom: 1px solid #999999;
-  #border-bottom: 1px solid #FF8C00;  
-  border-bottom: 1px solid #0B6FA4;   
-}
-th {
-  font-size: 17px;
-  font-weight: bold;
-  color: #FFFFFF;
-  text-align: center;
-  background: #0B6FA4;
-  #background: #E7702A;       
-  #border-left: 2px solid #999999
-  border-bottom: 1px solid #FF8C00;            
-}
-"""
-result = """
-
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <style>{0}</style>
-                </head>
-                <body>{1}</body></html>
-""".format(css_style, result)
-
-if OUTPUT_FILE == 'HTML':  
-    result = result.encode('utf-8')
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "result.html")
-    resultMetadata.put("content.type", "text/html")
-    print("END Export_Results")
-elif OUTPUT_FILE == 'CSV':
-    if 'Image' in df.columns:
-        df.pop('Image')
-    if 'Result' in df.columns:        
-        df.pop('Result')        
-    result = df.to_csv()    
-    resultMetadata.put("file.extension", ".csv")
-    resultMetadata.put("file.name", "result.csv")
-    resultMetadata.put("content.type", "text/csv") 
-    print("END Export_Results")
-else:
-  print('It is not possible to export the data')
+print("END Predict_Image_Segmentation_Model")
 ]]>
               </code>
             </script>
           </scriptExecutable>
-          <controlFlow block="none"></controlFlow>
-        </task>
-        <task name="Train_Image_Segmentation_Model">
-          <description>
-            <![CDATA[ Train a model using a Segmentation network. ]]>
-          </description>
-          <variables>
-            <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-            <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-            <variable name="NUM_EPOCHS" value="1" inherited="true" />
-            <variable name="BATCH_SIZE" value="1" inherited="false" />
-            <variable name="NUM_WORKERS" value="1" inherited="false" />
-            <variable name="NUM_CLASSES" value="5" inherited="true" />
-          </variables>
-          <genericInformation>
-            <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
-            <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_train_image_segmentation_model"/>
-          </genericInformation>
-          <depends>
-            <task ref="Import_Image_Dataset"/>
-            <task ref="SegNet"/>
-          </depends>
-          <inputFiles>
-            <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
-          </inputFiles>
-          <selection>
-            <script
-         type="static" >
-              <code language="python">
-                <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
-]]>
-              </code>
-            </script>
-          </selection>
-          <forkEnvironment javaHome="/usr" >
-            <envScript>
-              <script>
-                <code language="python">
-                  <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-                </code>
-              </script>
-            </envScript>
-          </forkEnvironment>
-          <scriptExecutable>
-            <script>
-              <code language="cpython">
-                <![CDATA[
-print("BEGIN Train_Image_Segmentation_Model")
-
-import time
-import os
-import copy
-import uuid
-import json
-import argparse
-import numpy as np 
-from PIL import Image
- 
-from os.path import join, exists
-from os import remove, listdir, makedirs
-from ast import literal_eval as make_tuple
-
-import torch
-import torch.nn as nn
-import torch.nn.init as init
-import torch.nn.functional as F
-from torch.utils.data import Dataset 
-
-from torch.utils import model_zoo
-from torchvision import models
-  
-from argparse import ArgumentParser
-from torch.optim import SGD, Adam
-from torch.autograd import Variable
-from torch.utils.data import DataLoader
-from torchvision.transforms import ToTensor, ToPILImage, Normalize, Scale
-from torchvision.transforms import Compose
-
-
-VISDOM_ENABLED = variables.get("visdom_endpoint")
-
-if VISDOM_ENABLED is not None:
-  from visdom import Visdom
-    
-NUM_EPOCHS  = 1
-BATCH_SIZE  = 4
-NUM_WORKERS = 2
-SHUFFLE     = True
-NUM_CLASSES = 5
-
-
-if 'variables' in locals():
-  if variables.get("NUM_EPOCHS") is not None:
-    NUM_EPOCHS = int(str(variables.get("NUM_EPOCHS")))
-    NUM_CLASSES = int(str(variables.get("NUM_CLASSES")))
-  DATASET_PATH  = variables.get("DATASET_PATH")
-  NET_MODEL     = variables.get("NET_MODEL")
-  NET_TRANSFORM = variables.get("NET_TRANSFORM")
-  NET_CRITERION = variables.get("NET_CRITERION") 
-  IMG_SIZE = variables.get("IMG_SIZE")
-
-assert DATASET_PATH is not None
-assert NET_MODEL is not None
-assert NET_TRANSFORM is not None
-assert NET_CRITERION is not None
-
-IMG_SIZE = make_tuple(IMG_SIZE)
-IMG_SIZE = tuple(IMG_SIZE)
-
-# Load NET model
-exec(NET_MODEL)
-
-# Load CNN transform
-# data_transforms
-exec(NET_TRANSFORM)
-
-
-# VOC12 DATASET
-EXTENSIONS = ['.jpg', '.png']
-
-def load_image(file):
-    return Image.open(file)
-
-def is_image(filename):
-    return any(filename.endswith(ext) for ext in EXTENSIONS)
-
-def image_path(root, basename, extension):
-    return os.path.join(root, f'{basename}{extension}')
-
-def image_basename(filename):
-    return os.path.basename(os.path.splitext(filename)[0])
-
-class VOC12(Dataset):
-
-    def __init__(self, root, input_transform=None, target_transform=None):
-        self.images_root = os.path.join(root, 'images')
-        self.labels_root = os.path.join(root, 'classes')
-
-        self.filenames = [image_basename(f)
-            for f in os.listdir(self.labels_root) if is_image(f)]
-        self.filenames.sort()
-
-        self.input_transform = input_transform
-        self.target_transform = target_transform
-
-    def __getitem__(self, index):
-        filename = self.filenames[index]
-
-        with open(image_path(self.images_root, filename, '.jpg'), 'rb') as f:
-            image = load_image(f).convert('RGB')
-            image_size = image.size
-        with open(image_path(self.labels_root, filename, '.png'), 'rb') as f:
-            label = load_image(f).convert('P')
-            file_name = image_path(self.labels_root, filename, '.png')
-
-        if self.input_transform is not None:
-            image = self.input_transform(image)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-
-        return image, label, image_size, file_name 
-
-    def __len__(self):
-        return len(self.filenames)
-
-
-# Load train dataset
-DATASET_TRAIN_PATH = join(DATASET_PATH, 'train')
-loader = DataLoader(VOC12(DATASET_TRAIN_PATH, input_transform, target_transform), 
-                    num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
-
-
-# http://pytorch.org/docs/master/cuda.html#torch.cuda.is_available
-# Returns a bool indicating if CUDA is currently available.
-use_gpu = torch.cuda.is_available()
-
-
-if use_gpu:
-  model = model.cuda()
-model.train()
-
-weight = torch.ones(NUM_CLASSES) 
-weight[0] = 0 
-
-# Load NET criterion
-exec(NET_CRITERION)
-
-if use_gpu:
-  criterion = CrossEntropyLoss2d(weight.cuda())
-else:
-  criterion = CrossEntropyLoss2d(weight)   
-  
-# Observe that all parameters are being optimized
-optimizer_ft = SGD(model.parameters(), 1e-3, .9)
-
-
-###############################IF VISDOM IS ENABLED###############################
-if VISDOM_ENABLED is not None:
-  visdom_endpoint = VISDOM_ENABLED.replace("http://", "")
-
-  (VISDOM_HOST, VISDOM_PORT) = visdom_endpoint.split(":")  
-
-  print("Connecting to %s" % VISDOM_PORT)
-  viz = Visdom(server="http://"+VISDOM_HOST, port=VISDOM_PORT)
-  assert viz.check_connection()
-
-
-  win_global_loss_train = viz.line(Y = np.array([1]), X = np.array([1]),
-                             opts = dict(
-                                    xlabel = 'Epoch',
-                                    ylabel = 'Loss',
-                                    title = 'Training loss (per epoch)',
-                                    ),
-                             )
-
-
-  win_global_acc_train = viz.line(Y = np.array([1]), X = np.array([1]),
-                             opts = dict(
-                                    xlabel = 'Epoch',
-                                    ylabel = 'Accuracy',
-                                    title = 'Training accuracy (per epoch)',
-                                    ),
-                             )                                   
-
-
-  win_train = viz.text("Training:\n")  
-                                  
-##################################################################################
-
-
-def train_model(model, criterion, optimizer, num_epochs):
-  since = time.time()   
-  best_model = copy.deepcopy(model.state_dict())
-  best_acc = 0.0
-  for epoch in range(1, NUM_EPOCHS+1):     
-      epoch_loss = []
-      print('Epoch {}/{}'.format(epoch, NUM_EPOCHS))
-      print('-' * 10)             
-     
-      for step, (images, labels, image_size, filename) in enumerate(loader):
-          if use_gpu:
-              images = images.cuda()
-              labels = labels.cuda()
-          inputs = Variable(images)
-          targets = Variable(labels)
-          outputs = model(inputs)  
-
-          optimizer.zero_grad()
-          loss = criterion(outputs, targets[:, 0]) 
-          loss.backward()
-          optimizer.step()   
-          
-          epoch_loss.append(loss.data[0]) 
-          epoch_acc = sum(epoch_loss) / len(epoch_loss)
-  
-          print(f'loss: {epoch_acc} (epoch: {epoch}, step: {step})')
-          
-
-	  ##################################################IF VISDOM IS ENABLED###########################################
-          if VISDOM_ENABLED is not None:
-              viz.text('-' * 10, win=win_train, append=True)  
-              viz.text('Epoch {}/{}'.format(epoch, NUM_EPOCHS), win=win_train, append=True)     
-              viz.text('Loss: {:.4f} Acc: {:.4f}'.format(loss.data[0], epoch_acc), win=win_train, append=True) 
-          
-              # plot loss and accuracy per epoch
-              if epoch == 1:
-                  viz.line(Y = np.array([loss.data[0]]), X = np.array([epoch]), win = win_global_loss_train, update='replace')
-                  viz.line(Y = np.array([epoch_acc]), X = np.array([epoch]), win = win_global_acc_train, update='replace')            
-              elif epoch != 1:
-                  viz.line(Y = np.array([loss.data[0]]), X = np.array([epoch]), win = win_global_loss_train, update='append')
-                  viz.line(Y = np.array([epoch_acc]), X = np.array([epoch]), win = win_global_acc_train, update='append')      
-               
-	  ####################################################################################################################          
-
-      if epoch_acc > best_acc:
-          best_acc = epoch_acc
-          best_model = copy.deepcopy(model.state_dict())
-  print()        
-       
-  time_elapsed = time.time() - since
-  print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
-  model.load_state_dict(best_model)          
-  return model
-
-# Return the best model
-best_model = train_model(model, criterion, optimizer_ft, num_epochs=NUM_EPOCHS)  
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Create an empty dir
-MODEL_FOLDER = join('models', ID)
-if exists(MODEL_FOLDER):
-  shutil.rmtree(MODEL_FOLDER)
-makedirs(MODEL_FOLDER)
-print("MODEL_FOLDER: " + MODEL_FOLDER)
-
-# Save trained model
-print('Saving trained model...')
-MODEL_PATH = join(MODEL_FOLDER, "model.pt")
-torch.save(best_model, MODEL_PATH)
-
-print("Model information: ")
-print("MODEL_PATH:  " + MODEL_PATH)
-
-if 'variables' in locals():
-  variables.put("MODEL_FOLDER", MODEL_FOLDER)
-  variables.put("MODEL_PATH", MODEL_PATH)
- 
-
-print("END Train_Image_Segmentation_Model")
-]]>
-              </code>
-            </script>
-          </scriptExecutable>
-          <controlFlow block="none"></controlFlow>
-          <post>
-            <script>
-              <code language="bash">
-                <![CDATA[
-
-]]>
-              </code>
-            </script>
-          </post>
+          <controlFlow block="none"/>
           <outputFiles>
-            <files  includes="$MODEL_FOLDER/**" accessMode="transferToGlobalSpace"/>
+            <files accessMode="transferToGlobalSpace" includes="$OUTPUT_FOLDER/**"/>
           </outputFiles>
+          <metadata>
+            <positionTop>
+            573.5
+        </positionTop>
+            <positionLeft>
+            1029.5
+        </positionLeft>
+          </metadata>
         </task>
       </taskFlow>
     </job>
