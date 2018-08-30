@@ -1,0 +1,545 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Elasticsearch_Database_Interaction" projectName="Elasticsearch Workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <variables>
+    <variable name="ACTION" value="Finish_Elasticsearch" model="PA:LIST(Pause_Elasticsearch, Resume_Elasticsearch, Finish_Elasticsearch)"/>
+    <variable name="ELASTICSEARCH_INSTANCE_NAME" value="elasticsearch-server" model="PA:SPEL( (variables[ELASTICSEARCH_INSTANCE_NAME] = &quot;elasticsearch-server-&quot;+(T(java.lang.Math).random()*1000).intValue()) instanceof T(String) )"/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies and interact with an elasticsearch database. It is a complete example putting together the use of
+1) a PCA service to create an elasticsearch database and,
+2)  an elasticsearch connector from data-connectors bucket to interact with this database along with its tow modes: Import and Export. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="database-services"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Parse_Endpoint">
+      <description>
+        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOSTNAME and a PORT number to use them as an input in the data connector tasks.]]>
+      </description>
+      <depends>
+        <task ref="Start_Elasticsearch"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def elasticsearchEndpoint = variables.get("ENDPOINT")
+def elasticsearchHost
+def elasticsearchPort
+
+if (elasticsearchEndpoint != null){
+  elasticsearchEndpoint = elasticsearchEndpoint.replace("http://", "")
+  elasticsearchHost = elasticsearchEndpoint.split(":")[0]
+  variables.put("ELASTICSEARCH_HOSTNAME", elasticsearchHost)
+  elasticsearchPort = elasticsearchEndpoint.split(":")[1]
+  variables.put("ELASTICSEARCH_PORT", elasticsearchPort)
+
+}
+else{
+  throw new IOException("[ERROR] Elasticsearch endpoint not found")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Start_Elasticsearch"
+    
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Elasticsearch server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Elasticsearch" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PRESCRIPT MAPS THE SERVICE SPECIFIC VARIABLES WITH GENERIC VARIABLE NAMES *
+* THIS AVOIDS YOU FROM CHANGING THE WHOLE PCA WORKFLOWS IMPLEMENTATIONS          *
+*********************************************************************************/
+
+variables.put("INSTANCE_NAME", variables.get("ELASTICSEARCH_INSTANCE_NAME"))
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+println("--- BEGIN " + variables.get("PA_TASK_NAME") + " ---")
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def sessionId = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def serviceId = variables.get("SERVICE_ID")
+def instanceName = variables.get("INSTANCE_NAME")
+println("SERVICE_ID:    " + serviceId)
+println("INSTANCE_NAME: " + instanceName)
+
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData serviceInstanceData : service_instances) {
+	if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
+      if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
+        instance_exists = true
+        def instanceId = serviceInstanceData.getInstanceId()
+  		endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+        println("INSTANCE_ID: " + instanceId)
+        println("ENDPOINT:    " + endpoint)
+        variables.put("INSTANCE_ID", instanceId)
+        variables.put("ENDPOINT", endpoint)
+        break
+      }
+  	}
+}
+
+println("INSTANCE_EXISTS ? " + instance_exists)
+
+if (!instance_exists){
+  // Prepare service description
+  ServiceDescription serviceDescription = new ServiceDescription()
+  serviceDescription.setBucketName("cloud-automation")
+  serviceDescription.setWorkflowName(serviceId)
+  serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
+  // Run service
+  def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription)
+
+  // Acquire service Instance ID
+  def serviceInstanceId = serviceInstanceData.getInstanceId()
+
+  // Create synchro channel
+  def channel = "Service_Instance_" + serviceInstanceId
+  println("CHANNEL: " + channel)
+  synchronizationapi.createChannelIfAbsent(channel, false)
+  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+
+  // Acquire service endpoint
+  serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
+  def instanceId = serviceInstanceData.getInstanceId()
+  endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+
+  println("INSTANCE_ID: " + instanceId)
+  println("ENDPOINT: " + endpoint)
+
+  variables.put("INSTANCE_ID", instanceId)
+  variables.put("ENDPOINT", endpoint)
+}
+
+println("--- END " + variables.get("PA_TASK_NAME") + " ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Import_from_Elasticsearch">
+      <description>
+        <![CDATA[ Load data from Elasticsearch.
+If your server requires authentification, then use the $ELASTICSEARCH_USER variable then add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT>
+It also requires a $QUERY and an $INDEX to fetch data.
+The imported data is exported in a JSON format. ]]>
+      </description>
+      <variables>
+        <variable name="ELASTICSEARCH_QUERY" value="{&quot;query&quot;: { &quot;match&quot;: {&quot;mass&quot;: &quot;77&quot;} }}" inherited="false" />
+        <variable name="ELASTICSEARCH_INDEX" value="activeeon" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Export_to_Elasticsearch"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters
+containerName = 'activeeon/dlm3'
+dockerRunCommand =  'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import pandas as pd
+import json
+from elasticsearch import Elasticsearch
+
+print("BEGIN Import Data from Elasticsearch")
+
+HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
+PORT = int(variables.get("ELASTICSEARCH_PORT"))
+INDEX = variables.get("ELASTICSEARCH_INDEX")
+USER = variables.get("ELASTICSEARCH_USER")
+PASSWORD = None
+
+if not HOSTNAME:
+    print("[ERROR] ELASTICSEARCH_HOSTNAME not defined by the user.")
+    sys.exit(1)
+if not PORT:
+    PORT = 9200
+    print("[WARNING] ELASTICSEARCH_PORT not defined by the user. Using the default value: " + PORT)
+if not INDEX:
+    INDEX = ""
+    print("[WARNING] ELASTICSEARCH_INDEX not defined by the user. Searching in all indices.")
+if USER:
+    # This key is used for getting the password from 3rd party credentials.
+    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOSTNAME + ":" + str(PORT)
+    PASSWORD = credentials.get(ELASTICSEARCH_PASSWORD_KEY)
+    if not PASSWORD:
+        print("[ERROR] The ELASTICSEARCH_USER is used in junction with a password. Please add the corresponding password to 3rd-party credentials in the scheduler-portal under the key :\"" + ELASTICSEARCH_URL_KEY + "\"")
+        sys.exit(1)
+if variables.get("ELASTICSEARCH_QUERY"):
+    # This is a workaround to force the variable string value into json
+    exec("QUERY=json.loads(variables.get('ELASTICSEARCH_QUERY'))")
+else:
+    #print("ELASTICSEARCH_QUERY not defined by the user.")
+    #sys.exit(1)
+    print("[WARNING] ELASTICSEARCH_QUERY not defined by the user. Fetching all documents.")
+    QUERY = { "query": { "match_all": {} } }
+
+def connect(host, port, username, password):
+    """ A util for making a connection to elasticsearch """
+
+    # Connect to cluster over HTTP:
+    es_header = [{
+        'host': host,
+        'port': port}]
+    # If a username is provided, then connect through SSL
+    if username:
+        es_header[0]['use_ssl'] = True
+        es_header[0]['http_auth'] = (username,password)
+    # Instantiate the new Elasticsearch connection:
+    es = Elasticsearch(es_header)
+    return es
+
+def read_elasticsearch(index, query, host, port, username, password):
+
+    # Connect to elasticsearch
+    es = connect(host=host, port=port, username=username, password=password)
+
+
+    # Make a query to the specific DB and Collection
+    res = es.search(index=index, body=query)
+    print("%d documents found" % res['hits']['total'])
+
+    return res
+
+print("EXECUTING QUERY...")
+print('ELASTICSEARCH_HOSTNAME=', HOSTNAME)
+print('ELASTICSEARCH_PORT=', PORT)
+print('ELASTICSEARCH_USER=', USER)
+print('ELASTICSEARCH_INDEX=', INDEX)
+print('ELASTICSEARCH_QUERY=', json.dumps(QUERY))
+
+query_results= read_elasticsearch(INDEX, QUERY, HOSTNAME,  PORT,  USER,  PASSWORD)
+
+#**************Preview Data*********************
+result = json.dumps(query_results).encode('utf-8')
+resultMetadata.put("file.extension", ".json")
+resultMetadata.put("file.name", "result.json")
+resultMetadata.put("content.type", "application/json")
+#***********************************************
+print("END Import Data from Elasticsearch")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Export_to_Elasticsearch">
+      <description>
+        <![CDATA[ This task allows exporting data to ElasticSearch.
+It uses the following variables:
+$ELASTICSEARCH_USER (optional) If your server requires authentification, then please add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT>
+$ELASTICSEARCH_INDEX (required) the index to use. It is created if it does not exist
+$ELASTICSEARCH_DOC_TYPE (required) the documents type.
+$ELASTICSEARCH_INPUT (required) A JSON Object/Array to be indexed in ElasticSearch. This variable can:
+ - A String describing the JSON Object/Array
+ - A relative path in the data space of a JSON file. ]]>
+      </description>
+      <variables>
+        <variable name="ELASTICSEARCH_INDEX" value="activeeon" inherited="false" />
+        <variable name="ELASTICSEARCH_DOC_TYPE" value="star_wars" inherited="false" />
+        <variable name="ELASTICSEARCH_INPUT" value="star_wars_people.json" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_nosql"/>
+      </genericInformation>
+      <depends>
+        <task ref="Parse_Endpoint"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$ELASTICSEARCH_INPUT" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters
+containerName = 'activeeon/dlm3'
+dockerRunCommand =  'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+from elasticsearch import Elasticsearch
+from elasticsearch.helpers import bulk
+from bson.json_util import dumps, loads
+
+ELASTICSEARCH_URL_KEY = "elasticsearch://<username>@<hostname>:<port>"
+
+def get_input_json(input):
+    """
+    A util for detecting whether the input string is a valid json or a file path/url
+    """
+    if input.startswith(("{", "[")):
+        print("Exporting a JSON String")
+        return loads(input)
+    else:
+        print("Exporting JSON File:{0}".format(input))
+        json_data = open(input, "r").read()
+        return loads(json_data)
+
+def connect(host, port, username, password):
+    """ A util for making a connection to elasticsearch """
+
+    # Connect to cluster over HTTP:
+    es_header = [{
+        'host': host,
+        'port': port}]
+    # If a username is provided, then connect through SSL
+    if username:
+        es_header[0]['use_ssl'] = True
+        es_header[0]['http_auth'] = (username,password)
+    # Instantiate the new Elasticsearch connection:
+    es = Elasticsearch(es_header)
+    return es
+
+def write_elasticsearch(index, inputs, doc_type, host, port, username, password):
+
+    # Connect to elasticsearch
+    es = connect(host=host, port=port, username=username, password=password)
+
+    # Create an index if it does not exist
+    if not es.indices.exists(index=index):
+        es.indices.create(index=index,body={})
+
+    if isinstance(inputs, list):
+        res = bulk(es, inputs, index=index,doc_type=doc_type, raise_on_error=True)
+        if res[0] == len(inputs):
+            print("Successfully inserted [{0}/{1}] documents.".format(res[0], len(inputs)))
+            return 'True'
+        else:
+            print("Failed to insert all documents. Only [{0}/{1}] were inserted".format(res[0], len(inputs)))
+            return 'False'
+    elif isinstance(inputs,dict):
+        res = es.index(index=index, doc_type=doc_type, body=inputs)
+        if res:
+            print("Successfully inserted 1 documents")
+            return 'True'
+        else:
+            print("Failed to insert document.")
+            return 'False'
+
+HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
+PORT = int(variables.get("ELASTICSEARCH_PORT"))
+INDEX = variables.get("ELASTICSEARCH_INDEX")
+DOC_TYPE = variables.get("ELASTICSEARCH_DOC_TYPE")
+INPUT = get_input_json(variables.get("ELASTICSEARCH_INPUT"))
+USER = variables.get("ELASTICSEARCH_USER")
+PASSWORD= None
+
+if not HOSTNAME:
+    print("[ERROR] ELASTICSEARCH_HOSTNAME not defined by the user.")
+    sys.exit(1)
+if not PORT:
+    PORT = 9200
+    print("[WARNING] ELASTICSEARCH_PORT not defined by the user. Using the default value: " + PORT)
+if not INDEX:
+    print("[ERROR] ELASTICSEARCH_INDEX not defined by the user.")
+    sys.exit(1)
+if not DOC_TYPE:
+    print("[ERROR] ELASTICSEARCH_DOC_TYPE not defined by the user.")
+    sys.exit(1)
+if USER:
+    # This key is used for getting the password from 3rd party credentials.
+    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOSTNAME + ":" + str(PORT)
+    PASSWORD = credentials.get(ELASTICSEARCH_PASSWORD_KEY)
+    if not PASSWORD:
+        print("[ERROR] The ELASTICSEARCH_USER is used in junction with a password. Please add the corresponding password to 3rd-party credentials in the scheduler-portal under the key :\"" + ELASTICSEARCH_URL_KEY + "\"")
+        sys.exit(1)
+
+print('BEGIN Export Data to Elasticsearch')
+print('ELASTICSEARCH_HOSTNAME=', HOSTNAME)
+print('ELASTICSEARCH_PORT=', PORT)
+print('ELASTICSEARCH_USER=', USER)
+print('ELASTICSEARCH_INDEX=', INDEX)
+
+# Insert INPUT in Elasticsearch
+write_elasticsearch(INDEX, INPUT, DOC_TYPE, HOSTNAME,  PORT,  USER,  PASSWORD)
+print("END Export Data to Elasticsearch")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Elasticsearch_Service_Action"
+    
+    
+    onTaskError="cancelJob" >
+      <variables>
+        <variable name="INSTANCE_ID" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Import_from_Elasticsearch"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("--- BEGIN " + variables.get("PA_TASK_NAME") + " ---")
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def sessionId = schedulerapi.getSession()
+
+// Define PCA URL
+def schedulerRestUrl = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = schedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def instanceId = variables.get("INSTANCE_ID") as int
+println("INSTANCE_ID: " + instanceId)
+assert instanceId != null
+
+// Execute action on service
+ServiceDescription service = new ServiceDescription()
+service.setBucketName("cloud-automation")
+service.setWorkflowName(variables.get("ACTION"))
+serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId, service)
+
+println("--- END " + variables.get("PA_TASK_NAME") + " ---")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>

@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="Generate_multiple_labs" projectName="CLIMB pre-treatment"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2"
+>
+  <variables>
+    <variable name="dependencies_dir_path_from_dataspace" value="LaBSGUI_dependencies_dir" />
+    <variable name="dependencies_json_file_path_from_dataspace" value="LaBSGUI_dependencies.json" />
+    <variable name="dependencies_target_dir_path" value="/home/michael/TEST" />
+    <variable name="Flexnet_host_IP_address" value="192.168.1.157" />
+    <variable name="LaBSGUI_dir_path" value="/home/michael/TEST/LaBSGUI_V3.0.beta_linux_x86_64" />
+    <variable name="main_scr_file_path_from_dataspace" value="Script_load.scr" />
+  </variables>
+  <description>
+    <![CDATA[ Generate labs files from a scr file and dependent files. The dependent files paths are specified in a dedicated json file. ]]>
+  </description>
+  <genericInformation>
+    <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/multiple_labs.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="compute_nb_labs_file">
+      <inputFiles>
+        <files  includes="$dependencies_json_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the main scr file name, a script file with VARIABLES replacing file paths
+def main_scr_file_path_from_dataspace = variables.get("main_scr_file_path_from_dataspace")
+
+// Keep only the filename without the extension
+def main_scr_file_no_entension = main_scr_file_path_from_dataspace.split("\\.")[0]
+
+// Store it as an environment variable
+variables.put("main_scr_file_no_entension",main_scr_file_no_entension)
+
+// Retrieve the json file name (defining VARIABLES/VALUES that will be used to set VARIABLES in the main scr file)
+def dependencies_json_file_path_from_dataspace = variables.get("dependencies_json_file_path_from_dataspace")
+
+def file_content = new File(dependencies_json_file_path_from_dataspace).text
+
+def slurper = new groovy.json.JsonSlurper()
+def result = slurper.parseText(file_content)
+
+variables["nb_labs_files"] = result.instances.size();
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_labs_files")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="instanciate_scr_file">
+      <depends>
+        <task ref="compute_nb_labs_file"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$main_scr_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$dependencies_json_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the main scr file content
+def main_scr_file_path_from_dataspace = variables.get("main_scr_file_path_from_dataspace")
+def main_scr_content = new File(main_scr_file_path_from_dataspace).text;
+
+// Retrieve the name of the json section
+def replication_id = variables.get('PA_TASK_REPLICATION');
+def instance_name = "instance_" + replication_id
+
+// Read the json file
+def dependencies_json_file_path_from_dataspace = variables.get("dependencies_json_file_path_from_dataspace")
+def json_content = new File(dependencies_json_file_path_from_dataspace).text
+
+// From json to map
+def slurper = new groovy.json.JsonSlurper()
+def instances_map = (Map) slurper.parseText(json_content)
+
+// Iterate over the map
+instances_map.get("instances").get(instance_name).each{ k, v -> 
+	main_scr_content = main_scr_content.replaceAll(k, v);
+}
+
+// Create output_file
+def main_scr_file_no_entension = variables.get("main_scr_file_no_entension")
+def instanciated_scr_file = main_scr_file_no_entension + "_" + replication_id + ".scr"
+new File(instanciated_scr_file).withWriter{ it << main_scr_content }
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files excludes="$main_scr_file_path_from_dataspace" includes="*.scr" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="instanciation_finished">
+      <depends>
+        <task ref="instanciate_scr_file"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "instanciation_finished"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_labs_files")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="generate_labs_file">
+      <depends>
+        <task ref="instanciation_finished"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$main_scr_file_no_entension_$PA_TASK_REPLICATION.scr" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$dependencies_dir_path_from_dataspace/*" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def LaBSGUI_dir_path = variables.get("LaBSGUI_dir_path")
+selected = new File(LaBSGUI_dir_path).exists()
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment >
+        <SystemEnvironment>
+          <variable name="LABS_LICPATH" value="$Flexnet_host_IP_address" />
+        </SystemEnvironment>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+cp $variables_dependencies_dir_path_from_dataspace/* $variables_dependencies_target_dir_path
+
+chmod -R +x $variables_LaBSGUI_dir_path
+scr_file=$variables_main_scr_file_no_entension"_"$variables_PA_TASK_REPLICATION".scr"
+
+$variables_LaBSGUI_dir_path/bin/labsgui $scr_file
+
+cp $variables_dependencies_target_dir_path/*.labs .
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="*.labs" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="end_deployment">
+      <depends>
+        <task ref="generate_labs_file"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var myObject={};
+myObject.id="multiLaBSGUI";
+myObject.status="TERMINATED";
+myObject.endpoint=""
+result = JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>

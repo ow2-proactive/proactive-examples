@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="LaBSsolver_deploy" projectName="CLIMB deployment"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2"
+>
+  <variables>
+    <variable name="IP_addresses_file_path_from_dataspace" value="Hosts_infos.txt" />
+    <variable name="LaBSsolver_dir_path_from_dataspace" value="build_centos5_ompi1_4_v3.0_beta" />
+    <variable name="LaBSsolver_target_dir_path" value="/home/michael/TEST" />
+  </variables>
+  <description>
+    <![CDATA[ Deploy LaBSsolver on specified remote machines. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="cloud-automation"/>
+    <info name="group" value="public-objects"/>
+    <info name="pca.service.id" value="LABSsolver_install"/>
+    <info name="pca.states" value="(VOID,LaBSsolver_DEPLOYED)"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/labssolver.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="process_IP_addresses">
+      <inputFiles>
+        <files  includes="$IP_addresses_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the hosts IP addresses
+def IP_addresses_file_path_from_dataspace = variables.get("IP_addresses_file_path_from_dataspace")
+def file_content = new File(IP_addresses_file_path_from_dataspace).text
+
+// 1 host info per replicated task
+def lines_array = file_content.split("\n")
+variables["nb_hosts"] = lines_array.length
+
+// Store IP addresses and LaBS directories in variables for the replicated tasks
+for (int i = 0; i < lines_array.length; i++)
+{   
+   variables["IP_address_"+i] = lines_array[i]
+   println variables["IP_address_"+i]
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_hosts")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="deploy_LaBSsolver">
+      <depends>
+        <task ref="process_IP_addresses"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$LaBSsolver_dir_path_from_dataspace/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var task_id = variables.get('PA_TASK_REPLICATION');
+var host_IP_address = variables.get('IP_address_' + task_id);
+
+selected = false;
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(host_IP_address))
+    selected = true;
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.apache.commons.io.FileUtils;
+
+def LaBSsolver_dir_path_from_dataspace = variables.get("LaBSsolver_dir_path_from_dataspace")
+def LaBSsolver_target_dir_path = variables.get("LaBSsolver_target_dir_path")
+
+def srcDir = new File(LaBSsolver_dir_path_from_dataspace)
+def destDir = new File(LaBSsolver_target_dir_path)
+
+FileUtils.copyDirectoryToDirectory(srcDir, destDir)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="update_service_instance">
+      <depends>
+        <task ref="deploy_LaBSsolver"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def spark_master_IP_address = variables.get("spark_master_IP_address")
+def spark_UI_port = variables.get("spark_UI_port")
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+api_client.setDebugging(true)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Update the related service instance status
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("LaBSsolver_DEPLOYED")
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>

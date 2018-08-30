@@ -7,76 +7,26 @@
     priority="normal"
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
-  <variables>
-    <variable name="MONGODB_INSTANCE_NAME" value="mongodb-server-1" />
-  </variables>
   <description>
     <![CDATA[ Delete MongoDB instance. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
-    <info name="group" value="public-objects"/>
-    <info name="pca.service.id" value="MongoDB"/>
-    <info name="pca.states" value="(RUNNING,FINISHED)(STOPPED,FINISHED)(ERROR,FINISHED)"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+    <info name="pca.states" value="(RUNNING,FINISHED)(PAUSED,FINISHED)(ERROR,FINISHED)"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="pca.service.id" value="MongoDB"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Remove_MongoDB">
+    <task name="Finish_MongoDB">
       <description>
-        <![CDATA[ Delete MongoDB instance ]]>
+        <![CDATA[ Finish MongoDB instance and remove its docker container ]]>
       </description>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
-      <pre>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN PRE-SCRIPT Finish_MongoDB ---")
-
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-
-// Construct synchro channel name
-channel = "Service_Instance_" + service_instance_id  
-println("channel: " + channel)
-
-//Acquire docker container to delete from synchro channel
-def instance_name = synchronizationapi.get(channel, "MONGODB_INSTANCE_NAME")
-println("instance_name: " + instance_name)
-variables.put("MONGODB_INSTANCE_NAME", instance_name)
-
-// Inform the Activation workflow that the delete is triggered
-synchronizationapi.put(channel, "DELETE_LAUNCHED", true) 
-println "DELETE_LAUNCHED = true"
-
-println("--- END PRE-SCRIPT Finish_MongoDB ---")
-]]>
-          </code>
-        </script>
-      </pre>
-      <scriptExecutable>
-        <script>
-          <code language="bash">
-            <![CDATA[
-echo "--- BEGIN Finish_MongoDB ---"
-
-echo "MongoDB instance name (from batch): $variables_MONGODB_INSTANCE_NAME"
-docker rm -f $variables_MONGODB_INSTANCE_NAME
-
-echo "--- END Finish_MongoDB ---"
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="End_Deployment">
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Remove_MongoDB"/>
-      </depends>
       <inputFiles>
         <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
@@ -85,50 +35,85 @@ echo "--- END Finish_MongoDB ---"
           <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
         </additionalClasspath>
       </forkEnvironment>
-      <scriptExecutable>
+      <pre>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN End_Deployement ---")
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING FINISHED             *
+*********************************************************************************/
+
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+// Acquire service instance id and instance name from synchro channel
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def channel = "Service_Instance_" + instanceId
+def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
+variables.put("INSTANCE_NAME", instanceName)
+
+// Inform other platforms that service is being finished through Synchronization API
+synchronizationapi.put(channel, "FINISH_LAUNCHED", true)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo Removing docker container: "$variables_INSTANCE_NAME"
+INSTANCE_NAME=$(docker rm -f $variables_INSTANCE_NAME 2>&1)
+echo $INSTANCE_NAME > $variables_INSTANCE_NAME"_status"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS POSTSCRIPT INFORMS PLATFORM THAT PCA SERVICE IS DELETED                   *
+*********************************************************************************/
 
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
-// PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service");
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
 
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+def ALREADY_REMOVED_MESSAGE = "Error: No such container: " + instanceName
 
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id: " + service_instance_id)
+// Connect to Cloud Automation API
+def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
 
-// Update service instance status
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-service_instance_data.setInstanceStatus("FINISHED")
-service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
+// Update service instance data : (status, endpoint)
+def status = new File(instanceName+"_status").text.trim()
+def currentStatus = (!status.equals(ALREADY_REMOVED_MESSAGE) && !status.equals(instanceName)) ? "ERROR" : "FINISHED"
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+serviceInstanceData.setInstanceStatus(currentStatus)
+serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
 
-// Create synchro channel
-channel = "Service_Instance_" + service_instance_id  
-synchronizationapi.waitUntil(channel, "DELETE_INSTANCE", "{k,x -> x == true}")
+// Inform other jobs that the service is finished and deleted.
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.put(channel, "FINISH_DONE", true)
 
-// Delete service instance
-//service_instance_data = service_instance_rest_api.deleteServiceInstancesFromDatabaseUsingDELETE(service_instance_id)
+// Print warning or error messages and force job to exit with error if there are any.
+if (status.equals(ALREADY_REMOVED_MESSAGE)){
+    println("[WARNING] docker container: " + instanceName + " is already removed.")
+} else if (!status.equals(instanceName)){
+    println("[ERROR] Could not remove docker container: " + instanceName + ". Docker output: " + status)
+    System.exit(1)
+}
 
-// Delete synchro channel
-synchronizationapi.deleteChannel(channel)
-
-println("--- END End_Deployement ---")
+println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
-      </scriptExecutable>
+      </post>
     </task>
   </taskFlow>
 </job>
