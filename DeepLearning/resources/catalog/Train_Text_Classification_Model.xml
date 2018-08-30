@@ -1,24 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.10"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+  xmlns="urn:proactive:jobdescriptor:3.11"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
     name="Train_Text_Classification_Model" projectName="4. Train Model"
     priority="normal"
     onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
+     maxNumberOfExecution="2"
+>
   <variables>
-    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
     <variable name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
   </variables>
   <description>
     <![CDATA[ Train a text-oriented model using deep learning architectures ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="deep-learning"/>
-    <info name="Documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_train_text_classification_model"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
     <info name="group" value="public-objects"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
   </genericInformation>
   <taskFlow>
     <task name="Train_Text_Classification_Model">
@@ -33,40 +35,23 @@
         <variable name="TRAINABLE" value="False" inherited="false" model="PA:Boolean"/>
         <variable name="GLOVE" value="6B" inherited="false" model="PA:List(42B, 840B, twitter.27B,6B)"/>
         <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
         <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
         <variable name="USE_GPU" value="False" inherited="false" model="PA:Boolean"/>
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_train_text_classification_model"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
       </genericInformation>
       <inputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
-        <files  includes=".vector_cache/*.pt" accessMode="transferFromGlobalSpace"/>
+        <files  includes="text_data/**" accessMode="transferFromGlobalSpace"/>
+        <files  includes=".vector_cache/**" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
       <selection>
         <script
          type="static" >
-          <code language="python">
+          <code language="javascript">
             <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
 ]]>
           </code>
         </script>
@@ -105,7 +90,7 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Train_Text_Classification_Model")
+print("BEGIN Model training")
 
 from torchtext import data
 from torchtext import datasets
@@ -126,7 +111,7 @@ import torch.nn.functional as F
 import pandas as pd
 import os
 import shutil
-from torchtext.data import Iterator, BucketIterator
+import numpy as np
 
 #-------------------------evaluate function definition--------------------------
 def evaluate(model, test, data_iter, label_field, loss_function, name):
@@ -160,6 +145,7 @@ def evaluate(model, test, data_iter, label_field, loss_function, name):
             avg_loss += loss.data[0]
     if name is 'test_labeled':
         avg_loss /= len(test)
+        pred_res = torch.LongTensor(pred_res)
         acc = get_accuracy(truth_res, pred_res)
         print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
     return acc, result
@@ -169,13 +155,17 @@ def get_accuracy(truth, pred):
      assert len(truth)==len(pred)
      right = 0
      for i in range(len(truth)):
-         if truth[i]==pred[i]:
-             right += 1.0
+        print("truth[i]")
+        print(truth[i])
+        print("pred[i]")
+        print(pred[i])
+        if truth[i]==pred[i]:
+            right += 1.0
      return right/len(truth)
      
 #-------------------------train function definition--------------------------     
 def train_epoch_progress(model, train_iter, train, loss_function, optimizer, text_field, label_field, batch_size, epoch):
-    model.train()
+    #model.train()
     avg_loss = 0.0
     truth_res = []
     pred_res = []
@@ -188,7 +178,7 @@ def train_epoch_progress(model, train_iter, train, loss_function, optimizer, tex
         model.hidden = model.init_hidden()
         pred = model(sent)
         pred_label = pred.data.max(1)[1].numpy()
-        pred_res += [x for x in pred_label]
+        pred_res += [np.float64(x) for x in pred_label]
         model.zero_grad()
         loss = loss_function(pred, label)
         avg_loss += loss.data[0]
@@ -196,6 +186,7 @@ def train_epoch_progress(model, train_iter, train, loss_function, optimizer, tex
         loss.backward()
         optimizer.step()
     avg_loss /= len(train)
+    pred_res = torch.LongTensor(pred_res)
     acc = get_accuracy(truth_res, pred_res)
     return avg_loss, acc
 
@@ -359,11 +350,9 @@ for epoch in range(EPOCHS):
 # Get an unique ID
 file_id = str(uuid.uuid4())
 MODEL_FOLDER = 'text_models/'
-MODEL_FOLDER =  os.path.join(MODEL_FOLDER, file_id)
 if os.path.exists(MODEL_FOLDER):
   shutil.rmtree(MODEL_FOLDER)
 os.makedirs(MODEL_FOLDER)
-
 
 # Save trained model
 print('Saving trained model...')
@@ -409,17 +398,25 @@ except NameError as err:
     print("Warning: this script is running outside from ProActive.")
     pass
   
-print("END Train_Text_Classification_Model")
+print("END Model training")
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
       <outputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferToGlobalSpace"/>
-        <files  includes="$MODEL_FOLDER/**" accessMode="transferToGlobalSpace"/>
-        <files  includes=".vector_cache/*.pt" accessMode="transferToGlobalSpace"/>
+        <files  includes="text_data/**" accessMode="transferToGlobalSpace"/>
+        <files  includes=".vector_cache/**" accessMode="transferToGlobalSpace"/>
+        <files  includes="text_models/**" accessMode="transferToGlobalSpace"/>
       </outputFiles>
+      <metadata>
+        <positionTop>
+            619.59375
+        </positionTop>
+        <positionLeft>
+            856.921875
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
 </job>
