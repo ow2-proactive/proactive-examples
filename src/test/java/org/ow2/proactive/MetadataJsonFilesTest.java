@@ -35,6 +35,10 @@ public class MetadataJsonFilesTest {
 
     private final static String FILE_KEY_NAME = "file";
 
+    private final static String TEST_KEY_NAME = "test";
+
+    private final static String SCENARIOS_KEY_NAME = "scenarios";
+
     private final String packageDirPath;
 
     private JSONParser parser;
@@ -68,6 +72,14 @@ public class MetadataJsonFilesTest {
 
         String metadataJsonFilePath = new File(this.packageDirPath, METADATA_JSON_FILE_NAME).getAbsolutePath();
         JSONObject jsonObject = (JSONObject) this.parser.parse(new FileReader(metadataJsonFilePath));
+
+        // Test if test scenarios are there
+        JSONObject test =  (JSONObject) jsonObject.get(TEST_KEY_NAME);
+        if (test != null) {
+            String scenariosFilePath = (String) test.get(SCENARIOS_KEY_NAME);
+            File scenariosFile = new File(this.packageDirPath, scenariosFilePath);
+            Assert.assertTrue(scenariosFile + " does not exist!", scenariosFile.exists());
+        }
 
         // Test if all dataspace resources are there
         JSONObject dataspace =  (JSONObject) jsonObject.get(DATASPACE_KEY_NAME);
