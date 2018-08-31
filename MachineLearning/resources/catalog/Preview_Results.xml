@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Preview_Results" onTaskError="continueJobExecution" priority="normal" projectName="2. Input and Output Data" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+  </variables>
+  <description>
+    <![CDATA[ Export the results. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="machine-learning-new"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_results"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task name="Preview_Results">
+      <description>
+        <![CDATA[ Export the results. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+        <variable inherited="false" model="PA:Boolean" name="TASK_ENABLED" value="True"/>
+        <variable inherited="false" model="PA:LIST(CSV,JSON,HTML)" name="OUTPUT_TYPE" value="HTML"/>
+        <variable inherited="false" model="PA:Integer" name="LIMIT_OUTPUT_VIEW" value="1000"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_results"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import pandas as pd
+import numpy as np
+import bz2
+
+OUTPUT_TYPE = variables.get("OUTPUT_TYPE")
+assert OUTPUT_TYPE is not None and OUTPUT_TYPE is not ""
+
+input_variables = {'task.dataframe_id': None}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
+
+dataframe_id = input_variables['task.dataframe_id']
+print("dataframe id (in): ", dataframe_id)
+
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
+
+dataframe = pd.read_json(dataframe_json, orient='split')
+print(dataframe.head())
+
+OUTPUT_TYPE = OUTPUT_TYPE.upper()
+if OUTPUT_TYPE == "S3":
+  import s3fs, uuid
+
+  UserAccessKeyID=str(variables.get('UserAccessKeyID'))
+  UserSecretAccessKey=str(variables.get('UserSecretAccessKey'))
+  UserBucketPath=variables.get('UserBucketPath')
+
+  dataframe_id = str(uuid.uuid4())
+  print("dataframe id (out): ", dataframe_id)
+  bytes_to_write = dataframe.to_csv(index=False).encode()
+
+  fs = s3fs.S3FileSystem(
+      key=UserAccessKeyID, 
+      secret=UserSecretAccessKey,
+      s3_additional_kwargs={'ACL': 'public-read'}
+  )
+
+  bucket_path=str(UserBucketPath) if UserBucketPath is not None else 's3://activeeon-public/results/'
+  s3file_path = bucket_path+dataframe_id+'.csv'
+  with fs.open(s3file_path, 'wb') as f:
+    f.write(bytes_to_write)
+
+  dataframe_url = fs.url(s3file_path).split('?')[0]
+  dataframe_info = fs.info(s3file_path)
+  print("The dataframe was uploaded successfully to the following url:")
+  print(dataframe_url)
+  print("File info:")
+  print(dataframe_info)
+
+if OUTPUT_TYPE == "CSV":
+  #result = dataframe.to_csv(encoding='utf-8', index=False)
+  result = dataframe.to_csv(index=False)
+  resultMetadata.put("file.extension", ".csv")
+  resultMetadata.put("file.name", "dataframe.csv")
+  resultMetadata.put("content.type", "text/csv")
+
+if OUTPUT_TYPE == "JSON":
+  result = dataframe.to_json(orient='split', encoding='utf-8')
+  resultMetadata.put("file.extension", ".json")
+  resultMetadata.put("file.name", "dataframe.json")
+  resultMetadata.put("content.type", "application/json")
+
+if OUTPUT_TYPE == "HTML":
+  LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+  LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+  if LIMIT_OUTPUT_VIEW > 0:
+    print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+    dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+  
+  with pd.option_context('display.max_colwidth', -1):
+    result = dataframe.to_html(escape=False)
+  css_style="""
+  table {
+    border: 1px solid #999999;
+    text-align: center;
+    border-collapse: collapse;
+    width: 100%; 
+  }
+  td {
+    border: 1px solid #999999;         
+    padding: 3px 2px;
+    font-size: 13px;
+    border-bottom: 1px solid #999999;
+    #border-bottom: 1px solid #FF8C00;  
+    border-bottom: 1px solid #0B6FA4;   
+  }
+  th {
+    font-size: 17px;
+    font-weight: bold;
+    color: #FFFFFF;
+    text-align: center;
+    background: #0B6FA4;
+    #background: #E7702A;       
+    #border-left: 2px solid #999999
+    border-bottom: 1px solid #FF8C00;            
+  }
+  """
+  result = """
+  
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8" />
+                <style>{0}</style>
+              </head>
+              <body>{1}</body></html>
+  """.format(css_style, result)
+  result = result.encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "output.html")
+  resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
+]]>
+            </code>
+          </script>
+        </scriptExecutable>
+        <controlFlow block="none"/>
+        <metadata>
+          <positionTop>
+            352.54168701171875
+        </positionTop>
+          <positionLeft>
+            596.0833740234375
+        </positionLeft>
+        </metadata>
+      </task>
+    </taskFlow>
+  </job>

@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.8"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.8 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.8/schedulerjob.xsd"
+    name="LaBSsolver_multiple" 
+    projectName="CLIMB treatment"
+    priority="normal">
+  <variables>
+    <variable name="LaBS_benchmark_inputs_file_path_from_dataspace" value="LaBS_benchmark_inputs.txt"/>
+    <variable name="single_host_exclusive" value="false" model="PA:Boolean"/>
+    <variable name="LaBS_solver_dir_path" value="/home/michael/TEST/build_centos5_ompi1_4_v3.0_beta/"/>
+    <variable name="schemes_dir_path" value="/home/michael/TEST/build_centos5_ompi1_4_v3.0_beta/schemes/"/>
+    <variable name="Flexnet_host_IP_address" value="192.168.1.157"/>
+  </variables>
+  <description>
+    <![CDATA[ Submit multiple solving tasks in parallel. Each solving task performs a mpi solving work. User can specify in a dedicated file, the number of node per mpi work. ]]>
+  </description>
+<genericInformation>
+   <info name="group" value="public-objects"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/multiple_postlabs.png"/>
+  </genericInformation>
+ 
+  <taskFlow>
+    <task name="retrieve_LaBS_benchmark_inputs">
+      <inputFiles>
+        <files  includes="$LaBS_benchmark_inputs_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the input parameters file name path
+String LaBS_benchmark_inputs_file_path_from_dataspace = variables.get("LaBS_benchmark_inputs_file_path_from_dataspace");
+
+// Retrieve input parameters of all tasks
+String file_content = new File(LaBS_benchmark_inputs_file_path_from_dataspace).text; 
+
+// 1 line of inputs per replicated task
+String[] lines_array = file_content.split("\n");
+result = lines_array
+
+// Retrieve nb_inputs for replication
+variables["nb_benchmarks"] = lines_array.length;
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_benchmarks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="generate_LaBS_workflows">
+      <depends>
+        <task ref="retrieve_LaBS_benchmark_inputs"/>
+      </depends>
+      <inputFiles>
+        <files  includes="Solve_labs_TO_BE_SUBMITTED.xml" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve the replication number
+def replication_id = variables.get('PA_TASK_REPLICATION');
+
+// Retrieve the inputs parameters
+def single_host_exclusive = Boolean.parseBoolean(variables.get('single_host_exclusive'));
+
+// Retrieve the LaBS inputs parameters
+def LaBS_benchmark_inputs = results[0].value()[replication_id].split(",");
+def nb_cores = LaBS_benchmark_inputs[0]
+def problem_file_path = LaBS_benchmark_inputs[1]
+
+// Retrieve the ready-to-fill workflow xml
+def LaBS_content = new File("Solve_labs_TO_BE_SUBMITTED.xml").text;
+
+// Set variables
+LaBS_content = LaBS_content.replaceAll("NB_CORES_TO_SET", nb_cores);
+LaBS_content = LaBS_content.replaceAll("PROBLEM_FILE_PATH_TO_SET", problem_file_path);
+LaBS_content = LaBS_content.replaceAll("REPLICATION_ID_TO_SET", replication_id+"");
+LaBS_content = LaBS_content.replaceAll("LABS_SOLVER_DIR_PATH_TO_SET", variables.get('LaBS_solver_dir_path'));
+LaBS_content = LaBS_content.replaceAll("SCHEMES_DIR_PATH_TO_SET", variables.get('schemes_dir_path'));
+LaBS_content = LaBS_content.replaceAll("FLEXNET_HOST_IP_ADDRESS_TO_SET", variables.get('Flexnet_host_IP_address'));
+
+if(nb_cores.equals("1"))
+	LaBS_content = LaBS_content.replaceAll("PARALLEL_SECTION_TO_SET", "");
+else if(!single_host_exclusive)
+	LaBS_content = LaBS_content.replaceAll("PARALLEL_SECTION_TO_SET", "<parallel numberOfNodes=\"" + nb_cores + "\"></parallel>");
+else
+	LaBS_content = LaBS_content.replaceAll("PARALLEL_SECTION_TO_SET", "<parallel numberOfNodes=\"" + nb_cores + "\"><topology><singleHostExclusive/></topology></parallel>");
+
+// Create a new file from the updated content
+new File("LaBS_" + replication_id + ".xml").withWriter{ it << LaBS_content }
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="LaBS_$PA_TASK_REPLICATION.xml" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+    </task>
+    <task name="submitting_LaBS_workflows">
+      <depends>
+        <task ref="generate_LaBS_workflows"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Submitting LaBS workflows"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_benchmarks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="submit_LaBS_workflows">
+      <depends>
+        <task ref="submitting_LaBS_workflows"/>
+      </depends>
+      <inputFiles>
+        <files  includes="LaBS_$PA_TASK_REPLICATION.xml" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.scheduler.common.job.*
+import org.ow2.proactive.scheduler.common.task.*
+import org.ow2.proactive.scripting.*
+
+def replication_id = variables.get('PA_TASK_REPLICATION')
+def solve_labs_file_name = "LaBS_" + replication_id + ".xml"
+def solve_labs_file = new File(solve_labs_file_name)
+
+schedulerapi.connect()
+def job_id = schedulerapi.submit(solve_labs_file)
+def job_result = schedulerapi.waitForJob(job_id.toString(), 120000)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+
+
+    <task name="end_deployment">
+      <depends>
+        <task ref="submit_LaBS_workflows"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+var myObject={};
+myObject.id="multiLaBSsolver";
+myObject.status="TERMINATED";
+myObject.endpoint=""
+result = JSON.stringify(myObject);
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+  </taskFlow>
+</job>
+
+

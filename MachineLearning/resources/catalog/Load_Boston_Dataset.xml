@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Load_Boston_Dataset" onTaskError="continueJobExecution" priority="normal" projectName="1. Public Datasets" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Load_Boston_Dataset" onTaskError="continueJobExecution" priority="normal" projectName="1. Public Datasets" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
@@ -7,7 +7,7 @@
     <![CDATA[ Load and return the boston house-prices dataset regression. ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="machine-learning"/>
+<info name="bucketName" value="machine-learning-new"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/load_dataset.png"/>
 <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_load_boston_dataset"/>
 <info name="group" value="public-objects"/>
@@ -19,6 +19,9 @@
       </description>
       <variables>
         <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+        <variable inherited="false" model="PA:Boolean" name="TASK_ENABLED" value="True"/>
+        <variable inherited="false" model="PA:Integer" name="LIMIT_OUTPUT_VIEW" value="-1"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/load_dataset.png"/>
@@ -32,7 +35,7 @@
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
   # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
+  containerName = variables.get("DOCKER_IMAGE") 
   dockerRunCommand =  'docker run ' 
   dockerParameters = '--rm ' 
   # Prepare ProActive home volume 
@@ -58,68 +61,112 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Load_Boston_Dataset")
+__file__ = variables.get("PA_TASK_NAME")
+
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid
+import pandas as pd
+import numpy as np
 
 from sklearn.datasets import load_boston
-import pandas as pd
-
 boston = load_boston()
 dataframe_load = pd.DataFrame(boston.data)
 dataframe_load.columns = boston.feature_names 
 data_label = boston.target
+dataframe = dataframe_load.assign(LABEL=data_label)
 
-dataframe  = dataframe_load.assign(LABEL=data_label)
+dataframe_json = dataframe.to_json(orient='split').encode()
+compressed_data = bz2.compress(dataframe_json)
 
-columns_name = dataframe.columns
-columns_number = len(columns_name)
+dataframe_id = str(uuid.uuid4())
+variables.put(dataframe_id, compressed_data)
 
-data  = dataframe.values[:,0:columns_number-1]
-label = dataframe.values[:,columns_number-1]
+print("dataframe id: ", dataframe_id)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+print(dataframe.head())
 
-data_df = pd.DataFrame(data=data,columns=columns_name[0:columns_number-1])
-label_df = pd.DataFrame(data=label,columns=[columns_name[columns_number-1]])
+resultMetadata.put("task.name", __file__)
+resultMetadata.put("task.dataframe_id", dataframe_id)
 
-DATAFRAME_JSON = dataframe.to_json(orient='split')
-COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
-DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
-LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
-DATA_TEST_DF_JSON = data_df.to_json(orient='split')
-LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
-IS_LABELED_DATA = 'True'
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
 
-try:
-  #**************Preview Data*********************
-  result = dataframe.to_html()
-  resultMetadata.put("file.extension", ".html")
-  resultMetadata.put("file.name", "output.html")
-  resultMetadata.put("content.type", "text/html")
-  #***********************************************
-  
-  variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
-  variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
-  variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
-  variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
-  variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
-  variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
-  variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
-except NameError:
-  pass
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False)
 
-print("END Load_Boston_Dataset")
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8" />
+                <style>{0}</style>
+              </head>
+              <body>{1}</body></html>
+""".format(css_style, result)
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
 ]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-      <post>
-        <script>
-          <code language="groovy">
-            <![CDATA[
+            </code>
+          </script>
+        </scriptExecutable>
+        <controlFlow block="none"/>
+        <post>
+          <script>
+            <code language="groovy">
+              <![CDATA[
 variables.put("PREVIOUS_PA_TASK_NAME", variables.get("PA_TASK_NAME"))
 ]]>
-          </code>
-        </script>
-      </post>
-    </task>
-  </taskFlow>
-</job>
+            </code>
+          </script>
+        </post>
+        <metadata>
+          <positionTop>
+            316.58203125
+        </positionTop>
+          <positionLeft>
+            648.125
+        </positionLeft>
+        </metadata>
+      </task>
+    </taskFlow>
+  </job>

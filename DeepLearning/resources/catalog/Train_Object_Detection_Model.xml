@@ -1,0 +1,890 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Train_Object_Detection_Model" onTaskError="continueJobExecution" priority="normal" projectName="4. Train Model" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+  </variables>
+  <description>
+    <![CDATA[ Train a model using a Object Detection network. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="deep-learning-dev"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
+<info name="Documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_import_image_dataset"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task name="Train_Object_Detection_Model">
+      <description>
+        <![CDATA[ Train a model using a Object Detection network. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="NUM_EPOCHS" value="1"/>
+        <variable inherited="true" name="BATCH_SIZE" value="1"/>
+        <variable inherited="true" name="NUM_WORKERS" value="4"/>
+        <variable inherited="true" name="SHUFFLE" value="True"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_train_image_segmentation_model"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$LABEL_PATH/**"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Train_Object_Detection_Model")
+
+import os
+import torch
+import cv2
+import sys
+import time
+import wget
+import copy
+import uuid
+import types
+import torch
+import pprint
+import zipfile
+import numpy as np
+import os.path as osp
+from numpy import random
+
+import torch.nn as nn
+from PIL import Image
+import torch.optim as optim
+
+import torch.nn.init as init
+import torch.nn.functional as F
+import torch.utils.data as data
+
+from torch.optim import SGD, Adam
+from torch.autograd import Function
+from torch.autograd import Variable
+import torch.backends.cudnn as cudnn
+
+from math import sqrt as sqrt
+from skimage.transform import resize
+from itertools import product as product
+from os import remove, listdir, makedirs
+from ast import literal_eval as make_tuple
+import torchvision.transforms as transforms
+from torch.utils.data import Dataset, DataLoader
+from os.path import basename, splitext, exists, join
+from lxml.etree import Element, SubElement, tostring
+
+from xml.dom.minidom import parseString
+if sys.version_info[0] == 2:
+    import xml.etree.cElementTree as ET
+else:
+    import xml.etree.ElementTree as ET
+    
+
+if 'variables' in locals():
+    
+  NUM_CLASSES = variables.get("NUM_CLASSES")
+  NET_MODEL     = variables.get("NET_MODEL")
+  NET_TRANSFORM = variables.get("NET_TRANSFORM")
+  NET_CRITERION = variables.get("NET_CRITERION")
+  DATASET_PATH  = variables.get("DATASET_PATH")
+  LABEL_PATH  = variables.get("LABEL_PATH")
+  IMG_SIZE = variables.get("IMG_SIZE")
+  LEARNING_RATE = variables.get("LEARNING_RATE")
+  MOMENTUM = float(str(variables.get("MOMENTUM")))    
+  WEIGHT_DECAY = float(str(variables.get("WEIGHT_DECAY"))) 
+  BATCH_SIZE = int(str(variables.get("BATCH_SIZE")))
+  NUM_WORKERS = int(str(variables.get("NUM_WORKERS")))
+  NET_NAME = variables.get("NET_NAME")
+  NUM_EPOCHS = int(str(variables.get("NUM_EPOCHS")))
+
+assert DATASET_PATH is not None
+assert NET_MODEL is not None
+assert NET_TRANSFORM is not None
+
+IMG_SIZE = tuple(IMG_SIZE)
+
+# Download class file 
+print("Downloading...")
+filename = wget.download(LABEL_PATH)
+print("FILENAME: " + filename)
+print("OK")
+
+# Class names
+CLASSES  = tuple(open(filename).read().splitlines())
+
+DATASET_TRAIN_PATH = join(DATASET_PATH, 'train')
+DIR_EXT = join(DATASET_TRAIN_PATH, 'classes')
+
+## Get extension class folder
+files = os.listdir(DIR_EXT);
+checkds_store = '.DS_Store' in files
+if checkds_store == True:
+    files.remove('.DS_Store')
+file_name = files[0]
+base_file, ext = os.path.splitext(file_name)
+
+# Check if gpu is available
+use_gpu = torch.cuda.is_available()
+
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Create an empty dir
+MODEL_FOLDER = join('models', ID)
+os.makedirs(MODEL_FOLDER, exist_ok=True)
+print("MODEL_FOLDER: " + MODEL_FOLDER)
+
+
+# ======================================================================================
+
+##################################  BEGIN SSD NET ###################################### 
+
+# ======================================================================================
+
+def weights_init(m):
+    if isinstance(m, nn.Conv2d):
+       # xavier(m.weight.data)
+        nn.init.xavier_uniform(m.weight.data)
+        m.bias.data.zero_()
+
+def adjust_learning_rate(optimizer, GAMMA, step):
+# ======================================================================================
+#    Sets the learning rate to the initial LR decayed by 10 at every
+#        specified step
+#    # Adapted from PyTorch Imagenet example:
+#    # https://github.com/pytorch/examples/blob/master/imagenet/main.py
+# ======================================================================================
+    LEARNING_RATE = LEARNING * (GAMMA ** (step))
+    for param_group in optimizer.param_groups:
+        param_group['LEARNING_RATE'] = LR
+
+        
+# ======================================================================================   
+# Begin Load Dataset COCO and PASCAL VOC formats
+# ======================================================================================  
+class VOCAnnotationTransform(object):
+# =============================================================================
+#    Transforms a VOC annotation into a Tensor of bbox coords and label index
+#    Initilized with a dictionary lookup of classnames to indexes
+#
+#    Arguments:
+#        class_to_ind (dict, optional): dictionary lookup of classnames -> indexes
+#            (default: alphabetic indexing of VOC's 20 classes)
+#        keep_difficult (bool, optional): keep difficult instances or not
+#            (default: False)
+#        height (int): height
+#        width (int): width
+# =============================================================================
+
+    def __init__(self, class_to_ind=None, keep_difficult=False):
+        self.class_to_ind = class_to_ind or dict(
+            zip(CLASSES, range(len(CLASSES))))
+        self.keep_difficult = keep_difficult
+
+    def __call__(self, target, width, height):
+# ======================================================================================
+#        Arguments:
+#            target (annotation) : the target annotation to be made usable
+#                will be an ET.Element
+#        Returns:
+#            a list containing lists of bounding boxes  [bbox coords, class name]
+# ======================================================================================
+        res = []
+        for obj in target.iter('object'):
+            difficult = int(obj.find('difficult').text) == 1
+            if not self.keep_difficult and difficult:
+                continue
+            name = obj.find('name').text.lower().strip()
+            bbox = obj.find('bndbox')
+
+            pts = ['xmin', 'ymin', 'xmax', 'ymax']
+            bndbox = []
+            for i, pt in enumerate(pts):
+                cur_pt = int(bbox.find(pt).text) - 1
+                # scale height or width
+                cur_pt = cur_pt / width if i % 2 == 0 else cur_pt / height
+                bndbox.append(cur_pt)
+            label_idx = self.class_to_ind[name]
+            bndbox.append(label_idx)
+            res += [bndbox]  # [xmin, ymin, xmax, ymax, label_ind]
+            # img_id = target.find('filename').text[:-4]
+
+        return res  # [[xmin, ymin, xmax, ymax, label_ind], ... ]
+
+ 
+class LoadDetection(data.Dataset):
+# ======================================================================================
+#    PASCAL VOC 2007 format  - Detection Dataset Object
+#
+#    input is image, target is annotation
+#
+#    Arguments:
+#        root (string): filepath to VOCdevkit folder.
+#        image_set (string): imageset to use (eg. 'train', 'val', 'test')
+#        transform (callable, optional): transformation to perform on the
+#            input image
+#        target_transform (callable, optional): transformation to perform on the
+#            target `annotation`
+#            (eg: take in caption string, return tensor of word indices)
+#        dataset_name (string, optional): which dataset to load   
+# ======================================================================================
+    
+    def __init__(self, root,
+                 transform=None):    
+
+        labels_root = join(root, 'classes')
+
+        target_transform=VOCAnnotationTransform()
+        self.transform = transform
+        self.target_transform = target_transform        
+        self._annopath = osp.join(root, 'classes', '%s.xml')
+        self._imgpath = osp.join(root, 'images', '%s.jpg')
+        self.ids = list()
+        l=os.listdir(labels_root)
+        self.ids=[x.split('.')[0] for x in l]
+
+    def __getitem__(self, index):
+        im, gt, h, w = self.pull_item(index) 
+        
+        return im, gt
+    
+    def __len__(self):
+        return len(self.ids)
+        
+    def pull_item(self, index):
+
+        img_id = self.ids[index] 
+        target = ET.parse(self._annopath % img_id).getroot() 
+
+        img = cv2.imread(self._imgpath % img_id)
+        height, width, channels = img.shape 
+      
+        if self.target_transform is not None:
+            target = self.target_transform(target, width, height)
+
+        if self.transform is not None:
+            target = np.array(target)
+            img, boxes, labels = self.transform(img, target[:, :4], target[:, 4])
+            # to rgb
+            img = img[:, :, (2, 1, 0)]
+            target = np.hstack((boxes, np.expand_dims(labels, axis=1)))
+        return torch.from_numpy(img).permute(2, 0, 1), target, height, width
+
+# ====================================================================================== 
+# End Load Dataset format COCO and PASCAL VOC formats
+# ======================================================================================    
+             
+# ======================================================================================
+## COCO format to PASCAL VOC format
+# ======================================================================================
+def unconvert(class_id, width, height, x, y, w, h):
+
+    xmax = int((x*width) + (w * width)/2.0)
+    xmin = int((x*width) - (w * width)/2.0)
+    ymax = int((y*height) + (h * height)/2.0)
+    ymin = int((y*height) - (h * height)/2.0)
+    class_id = int(class_id)
+    return (class_id, xmin, xmax, ymin, ymax)
+
+def xml_transform(root, classes):
+    annopath = join(root, 'classes', '%s.txt')
+    _imgpath = join(root, 'images', '%s.jpg')
+    new_annopath = join(root, 'classes', '%s.xml')
+
+    mypath  = join(root, 'classes')
+    ids = list()
+    l=os.listdir(mypath)
+    ids=[x.split('.')[0] for x in l]
+
+    for i in range(len(ids)):
+        img_id = ids[i] 
+        img= cv2.imread(_imgpath % img_id)
+        height, width, channels = img.shape 
+
+        node_root = Element('annotation')
+        node_folder = SubElement(node_root, 'folder')
+        node_folder.text = 'VOC2007'
+        img_name = img_id + '.jpg'
+    
+        node_filename = SubElement(node_root, 'filename')
+        node_filename.text = img_name
+        
+        node_source= SubElement(node_root, 'source')
+        node_database = SubElement(node_source, 'database')
+        node_database.text = 'Coco database'
+        
+        node_size = SubElement(node_root, 'size')
+        node_width = SubElement(node_size, 'width')
+        node_width.text = str(width)
+    
+        node_height = SubElement(node_size, 'height')
+        node_height.text = str(height)
+
+        node_depth = SubElement(node_size, 'depth')
+        node_depth.text = str(channels)
+    
+        node_segmented = SubElement(node_root, 'segmented')
+        node_segmented.text = '0'
+
+        target = (annopath % img_id)
+        if os.path.exists(target):
+            label_norm= np.loadtxt(target).reshape(-1, 5)
+
+            for i in range(len(label_norm)):
+                labels_conv = label_norm[i]
+                new_label = unconvert(labels_conv[0], width, height, labels_conv[1], labels_conv[2], labels_conv[3], labels_conv[4])
+                #print(new_label)
+                node_object = SubElement(node_root, 'object')
+                node_name = SubElement(node_object, 'name')
+                node_name.text = CLASSES[new_label[0]]
+                node_pose = SubElement(node_object, 'pose')
+                node_pose.text = 'Unspecified'
+                
+
+                node_truncated = SubElement(node_object, 'truncated')
+                node_truncated.text = '0'  
+                node_difficult = SubElement(node_object, 'difficult')
+                node_difficult.text = '0'
+                node_bndbox = SubElement(node_object, 'bndbox')
+                node_xmin = SubElement(node_bndbox, 'xmin')
+                node_xmin.text = str(new_label[1])
+                node_ymin = SubElement(node_bndbox, 'ymin')
+                node_ymin.text = str(new_label[3])
+                node_xmax = SubElement(node_bndbox, 'xmax')
+                node_xmax.text =  str(new_label[2])
+                node_ymax = SubElement(node_bndbox, 'ymax')
+                node_ymax.text = str(new_label[4])
+                xml = tostring(node_root, pretty_print=True)  
+     
+        f =  open(new_annopath % img_id, "wb")
+        os.remove(target)
+        f.write(xml)
+        f.close()     
+        
+# ======================================================================================   
+# END COCO format to PASCAL VOC format
+# ======================================================================================  
+
+if (NET_NAME == 'SSD'):
+
+    USE_PRETRAINED_MODEL = variables.get("USE_PRETRAINED_MODEL")
+    LR_STEPS = variables.get("LR_STEPS")
+    MEANS = variables.get("MEANS")
+    START_ITERATION  = int(str(variables.get("START_ITERATION")))
+    MAX_ITERATION = int(str(variables.get("MAX_ITERATION")))
+    MIN_SIZES = variables.get("MIN_SIZES")
+    MAX_SIZES = variables.get("MAX_SIZES")
+
+    BUILD_TYPE = 'train'
+    LR_STEPS = tuple(LR_STEPS)
+    MEANS = make_tuple(MEANS)
+    MEANS = tuple(MEANS)
+    
+    MIN_SIZES  = make_tuple(MIN_SIZES)
+    MIN_SIZES  = tuple(MIN_SIZES)
+    MIN_SIZES  = list(MIN_SIZES)
+
+    MAX_SIZES  = make_tuple(MAX_SIZES)
+    MAX_SIZES  = tuple(MAX_SIZES)
+    MAX_SIZES  = list(MAX_SIZES)
+
+    DIR_EXT = join(DATASET_TRAIN_PATH, 'classes')
+    files = os.listdir(DIR_EXT)
+    
+    checkds_store = '.DS_Store' in files
+    if checkds_store == True:
+        files.remove('.DS_Store')
+    filename = files[0]
+    base_file, ext = os.path.splitext(filename)
+    
+    if ext  == '.txt': # input coco format 
+        xml_transform(DATASET_TRAIN_PATH, CLASSES)
+        
+    # Load NET model
+    exec(NET_MODEL)
+    
+    MODEL_NAME = 'SSD'
+    ssd_net = build_ssd(BUILD_TYPE, IMG_SIZE[0], NUM_CLASSES)
+    Net = ssd_net
+    assert Net is not None, f'model {MODEL_NAME} not available'
+    model = Net
+
+    # Load criterion NET 
+    exec(NET_CRITERION)
+
+    # Load transform NET
+    exec(NET_TRANSFORM)
+
+    if use_gpu:
+        torch.cuda.FloatTensor
+    else:
+        print("WARNING: It looks like you have a CUDA device, but aren't " +  "using CUDA.\nRun with --cuda for optimal training speed.")
+        torch.FloatTensor
+          
+    if use_gpu:
+        #model = torch.nn.DataParallel(ssd_net)
+        model = ssd_net
+        #cudnn.benchmark = True    
+
+    ##  Download VGG model
+    print("Downloading...")
+    VGG_MODEL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/vgg16_reducedfc.pth'
+    filename = wget.download(VGG_MODEL)
+    print("VGG MODEL: " + filename)
+    print("OK")
+
+    resume = None 
+    model_config_path = os.path.realpath(filename)
+
+    if USE_PRETRAINED_MODEL == False:
+        print('Resuming training, loading {}...'.format(resume))
+        ssd_net.load_weights(None)
+    else:
+        vgg_weights = torch.load(model_config_path)
+        print('Loading base network...')
+        ssd_net.vgg.load_state_dict(vgg_weights)
+
+    if use_gpu:
+        model = model.cuda()  
+                  
+        
+    if not resume:
+        print('Initializing weights...')
+        # initialize newly added layers' weights with xavier method        
+        ssd_net.extras.apply(weights_init)
+        ssd_net.loc.apply(weights_init)
+        ssd_net.conf.apply(weights_init) 
+        
+        
+    optimizer_ft = optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY) 
+
+    criterion_ft = MultiBoxLoss(NUM_CLASSES, 0.5, True, 0, True, 3, 0.5, False, use_gpu)  
+
+    model.train()
+
+    print('Loading the dataset...')
+    dataset = LoadDetection(root=DATASET_TRAIN_PATH, transform=SSDAugmentation(IMG_SIZE[0], MEANS))
+    #epoch_size = len(dataset) // BATCH_SIZE 
+    epoch_size = 1
+
+    data_loader = data.DataLoader(dataset, BATCH_SIZE, num_workers=NUM_WORKERS, 
+                                  shuffle=True, collate_fn=detection_collate, 
+                                  pin_memory=True)
+           
+
+
+        
+    def train_model(model, optimizer, criterion, start_iter, max_iter, data_loader, use_gpu):
+        # loss counters
+        loc_loss = 0
+        conf_loss = 0
+        epoch = 0  
+        step_index = 0  
+    
+        since = time.time() 
+        batch_iterator = None
+    
+        for iteration in range(START_ITERATION, MAX_ITERATION):
+            if (not batch_iterator) or (iteration % epoch_size == 0):
+                batch_iterator = iter(data_loader)
+        
+                # reset epoch loss counters            
+                loc_loss = 0
+                conf_loss = 0
+                epoch += 1    
+          
+            if iteration in LR_STEPS: 
+                step_index += 1
+                adjust_learning_rate(optimizer, GAMMA, step_index) 
+                 
+            # load train data      
+            images, targets = next(batch_iterator)
+        
+            if use_gpu:
+                images = Variable(images.cuda(async=True))
+                targets = [Variable(ann.cuda(async=True)) for ann in targets]
+            else:
+                images = Variable(images)
+                targets = [Variable(ann) for ann in targets]
+            
+            # forward 
+            outputs = model(images)
+        
+            # backprop
+            optimizer.zero_grad()
+            loss_l, loss_c = criterion(outputs, targets)
+            loss = loss_l + loss_c
+            print(loss)
+        
+            #break
+            loss.backward()
+            optimizer.step()
+        
+            t1 = time.time()
+            loc_loss += loss_l.item()
+            conf_loss += loss_c.item()
+        
+            print('iter ' + repr(iteration) + ' || Loss: %.4f ||' % (loss.item()), end=' ')
+            time_elapsed = time.time() - since
+       
+        print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
+        return model
+    
+    # Return the model 
+    model = train_model(model, optimizer_ft, criterion_ft, START_ITERATION, MAX_ITERATION, data_loader, use_gpu)
+
+    # Save trained model
+    print('Saving trained model...')
+    MODEL_PATH = join(MODEL_FOLDER, "model.pt")
+    torch.save(model.state_dict(), MODEL_PATH)
+
+    print("Model information: ")
+    print("MODEL_PATH:  " + MODEL_PATH) 
+    
+    if 'variables' in locals():
+        variables.put("MODEL_FOLDER", MODEL_FOLDER)
+        variables.put("MODEL_PATH", MODEL_PATH)
+ 
+    print("END Train_Object_Detection_Model")
+# ======================================================================================
+
+###################################  END SSD NET ####################################### 
+
+# ======================================================================================
+
+
+
+
+# ======================================================================================
+
+##################################  BEGIN YOLO NET #####################################
+
+# ======================================================================================
+
+# ======================================================================================
+## PASCAL VOC format to COOC format
+# ======================================================================================
+def convert(size, box):
+    dw = 1./size[0]
+    dh = 1./size[1]
+    x = (box[0] + box[1])/2.0
+    y = (box[2] + box[3])/2.0
+    w = box[1] - box[0]
+    h = box[3] - box[2]
+    x = x*dw
+    w = w*dw
+    y = y*dh
+    h = h*dh
+    return (x,y,w,h)
+
+
+def convert_annotation(input_file, output_file, labels_root):
+    in_file = open(input_file)
+    out_file = open(labels_root +'/' + output_file + '.txt', 'w')
+    tree=ET.parse(in_file)
+    root = tree.getroot()
+    size = root.find('size')
+    w = int(size.find('width').text)
+    h = int(size.find('height').text)
+
+    for obj in root.iter('object'):
+        difficult = obj.find('difficult').text
+        cls = obj.find('name').text
+        if cls not in CLASSES or int(difficult) == 1:
+            continue
+        cls_id = CLASSES.index(cls)
+        xmlbox = obj.find('bndbox')
+        b = (float(xmlbox.find('xmin').text), float(xmlbox.find('xmax').text), float(xmlbox.find('ymin').text), float(xmlbox.find('ymax').text))
+        bb = convert((w,h), b)
+        out_file.write(str(cls_id) + " " + " ".join([str(a) for a in bb]) + '\n')
+
+# ====================================================================================== 
+# END PASCAL VOC format to COCO format
+# ======================================================================================  
+
+# ====================================================================================== 
+# BEGIN READ PASCAL VOC 2012
+# ======================================================================================  
+
+class ListDataset(Dataset):
+    def __init__(self, list_path, img_size=416):
+ 
+        images_root = join(list_path, 'images')
+        labels_root = join(list_path, 'classes')
+
+        self.img_files = [os.path.join(r,file) for r,d,f in os.walk(images_root) for file in f]
+        self.label_files = [os.path.join(r,file) for r,d,f in os.walk(labels_root) for file in f]
+        self.img_shape = (img_size, img_size)
+        self.max_objects = 50
+        
+
+    def __getitem__(self, index):
+
+        #---------
+        #  Image
+        #---------
+
+        img_path = self.img_files[index % len(self.img_files)].rstrip()
+        img = np.array(Image.open(img_path))
+
+        # Black and white images
+        if len(img.shape) == 2:
+            img = np.repeat(img[:, :, np.newaxis], 3, axis=2)
+
+        h, w, _ = img.shape
+        dim_diff = np.abs(h - w)
+        # Upper (left) and lower (right) padding
+        pad1, pad2 = dim_diff // 2, dim_diff - dim_diff // 2
+        # Determine padding
+        pad = ((pad1, pad2), (0, 0), (0, 0)) if h <= w else ((0, 0), (pad1, pad2), (0, 0))
+        # Add padding
+        input_img = np.pad(img, pad, 'constant', constant_values=128) / 255.
+        padded_h, padded_w, _ = input_img.shape
+        # Resize and normalize
+        input_img = resize(input_img, (*self.img_shape, 3), mode='reflect')
+        # Channels-first
+        input_img = np.transpose(input_img, (2, 0, 1))
+        # As pytorch tensor
+        input_img = torch.from_numpy(input_img).float()
+
+        #---------
+        #  Label
+        #---------
+
+        
+        label_path = self.label_files[index % len(self.img_files)].rstrip()
+
+        labels = None
+
+        if os.path.exists(label_path):
+
+            labels = np.loadtxt(label_path).reshape(-1, 5)
+
+            # Extract coordinates for unpadded + unscaled image
+            x1 = w * (labels[:, 1] - labels[:, 3]/2)
+            y1 = h * (labels[:, 2] - labels[:, 4]/2)
+            x2 = w * (labels[:, 1] + labels[:, 3]/2)
+            y2 = h * (labels[:, 2] + labels[:, 4]/2)
+            # Adjust for added padding
+            x1 += pad[1][0]
+            y1 += pad[0][0]
+            x2 += pad[1][0]
+            y2 += pad[0][0]
+            # Calculate ratios from coordinates
+            labels[:, 1] = ((x1 + x2) / 2) / padded_w
+            labels[:, 2] = ((y1 + y2) / 2) / padded_h
+            labels[:, 3] *= w / padded_w
+            labels[:, 4] *= h / padded_h
+        # Fill matrix
+        filled_labels = np.zeros((self.max_objects, 5))
+        if labels is not None:
+            filled_labels[range(len(labels))[:self.max_objects]] = labels[:self.max_objects]
+        filled_labels = torch.from_numpy(filled_labels)
+
+        return img_path, input_img, filled_labels
+
+    def __len__(self):
+        return len(self.img_files)
+
+# ======================================================================================  
+# END READ PASCAL VOC 2012
+# ======================================================================================
+
+if (NET_NAME == 'YOLO'):
+    ##  Download Model config
+    print("Downloading...")
+    MODEL_CONFIG_PATH = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/yolov3.cfg'
+    filename = wget.download(MODEL_CONFIG_PATH)
+    print("MODEL_CONFIG_PATH: " + filename)
+    print("OK")
+    model_config_path = os.path.realpath(filename)
+    
+    
+    ##  Download initial weights
+    print("Downloading...")
+    MODEL_WEIGHT_PATH = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/yolov3.weights'
+    file_weights = wget.download(MODEL_WEIGHT_PATH)
+    print("MODEL_WEIGHT_PATH: " + file_weights)
+    print("OK")
+    model_weight_path = os.path.realpath(file_weights)
+    
+    # xml to txt class files
+    l=os.listdir(DIR_EXT)
+    ids=[x.split('.')[0] for x in l]     
+
+    # converts all .xml to .txt files 
+    if ext == '.xml':
+        cont = 0
+        for f in os.listdir(DIR_EXT):
+            if not f.startswith('.'):
+                input_file = join(DIR_EXT, f)
+                convert_annotation(input_file, ids[cont], DIR_EXT)
+            cont += 1
+
+        # renove all .xml files 
+        filelist = [ f for f in os.listdir(DIR_EXT) if f.endswith(".xml") ]
+        for f in filelist:
+            os.remove(os.path.join(DIR_EXT, f))   
+    
+    # Load NET transforms
+    exec(NET_TRANSFORM)
+    # Load NET model
+    exec(NET_MODEL)
+    
+    MODEL_NAME = 'YOLO'
+    Net = Darknet(model_config_path)
+    #Net.apply(weights_init_normal)
+    Net.load_weights(model_weight_path)
+    assert Net is not None, f'model {MODEL_NAME} not available'
+    model = Net
+    
+    if use_gpu:
+        model = model.cuda()
+    model.train()
+    
+    loader = DataLoader(ListDataset(DATASET_TRAIN_PATH),
+                        num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
+
+    optimizer_ft = SGD(model.parameters(), lr=LEARNING_RATE/BATCH_SIZE, momentum=MOMENTUM, dampening=0, weight_decay=WEIGHT_DECAY*BATCH_SIZE)   
+    
+    def train_model(model, optimizer, num_epochs):
+      since = time.time() 
+
+      for epoch in range(1, NUM_EPOCHS+1):     
+            
+          for batch_i, (_, images, labels) in enumerate(loader):
+              if use_gpu:
+                  images = images.cuda()
+                  labels = labels.cuda()
+              inputs = Variable(images)
+            
+              targets = Variable(labels, requires_grad=False)
+              optimizer.zero_grad()
+          
+              loss = model(inputs, targets)
+              loss.backward()
+              optimizer.step()
+
+              print('[Epoch %d/%d, Batch %d/%d] [Losses -  x: %f, y: %f, w: %f, h: %f, conf: %f, cls: %f, total: %f, recall: %.5f]' %
+                                    (epoch, epoch, batch_i, len(loader),
+                                    model.losses['x'], model.losses['y'], model.losses['w'],
+                                    model.losses['h'], model.losses['conf'], model.losses['cls'],
+                                    loss.item(), model.losses['recall']))
+              model.seen += images.size(0)
+      time_elapsed = time.time() - since
+      print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
+     
+      return model
+  
+    # Return the best model              
+    model = train_model(model, optimizer_ft, num_epochs=NUM_EPOCHS)
+    
+    # Save trained model
+    print('Saving trained model...')
+    MODEL_PATH = join(MODEL_FOLDER, "model.weights")
+    model.save_weights(MODEL_PATH)
+
+    print("Model information: ")
+    print("MODEL_PATH:  " + MODEL_PATH)
+
+    if 'variables' in locals():
+        variables.put("MODEL_FOLDER", MODEL_FOLDER)
+        variables.put("MODEL_PATH", MODEL_PATH)
+ 
+    print("END Train_Object_Detection_Model")
+# ======================================================================================
+
+##################################  END YOLO NET #######################################
+
+# ======================================================================================
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="bash">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
+      <outputFiles>
+        <files accessMode="transferToGlobalSpace" includes="$MODEL_FOLDER/**"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            499
+        </positionTop>
+        <positionLeft>
+            860.75
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+</job>

@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.10"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
+    name="PostLaBS_undeploy" projectName="CLIMB deployment"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2"
+>
+  <description>
+    <![CDATA[ Remove PostLaBS installations. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="cloud-automation"/>
+    <info name="group" value="public-objects"/>
+    <info name="pca.service.id" value="PostLaBS_install"/>
+    <info name="pca.states" value="(PostLaBS_DEPLOYED,FINISHED)"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postlabs.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="process_IP_addresses">
+      <inputFiles>
+        <files  includes="$IP_addresses_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Get some service infos for the deletion
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+def IP_addresses_file_path_from_dataspace = service_instance_data.getVariables().get("IP_addresses_file_path_from_dataspace")
+def PostLaBS_target_dir_path = service_instance_data.getVariables().get("PostLaBS_target_dir_path")
+def PostLaBS_dir_path_from_dataspace = service_instance_data.getVariables().get("PostLaBS_dir_path_from_dataspace")
+
+// Store the LaBSGUI absolute path
+variables["PostLaBS_dir_path"] = new File(PostLaBS_target_dir_path, PostLaBS_dir_path_from_dataspace).absolutePath
+
+// Store the number of hosts
+def file_content = new File(IP_addresses_file_path_from_dataspace).text
+def lines_array = file_content.split("\n")
+variables["nb_hosts"] = lines_array.length
+
+// Store IP addresses and LaBS directories in variables for the replicated tasks
+for (int i = 0; i < lines_array.length; i++)
+{   
+   variables["IP_address_"+i] = lines_array[i]
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_hosts")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="undeploy_PostLaBS">
+      <depends>
+        <task ref="process_IP_addresses"/>
+      </depends>
+      <selection>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def task_id = variables.get("PA_TASK_REPLICATION")
+def host_IP_address = variables.get("IP_address_" + task_id)
+
+if (org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkIp(host_IP_address))
+    selected = true
+else
+    selected = false
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def PostLaBS_dir_path = variables.get("PostLaBS_dir_path")
+def cmd = ["rm", "-fr", PostLaBS_dir_path]
+cmd.execute().waitForProcessOutput(System.out, System.err)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="update_servince_instance">
+      <depends>
+        <task ref="undeploy_PostLaBS"/>
+      </depends>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+// Retrieve variables
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+
+// Define other variables
+def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def api_client = new ApiClient()
+api_client.setBasePath(pca_url)
+def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+
+// Get some service infos for the deletion
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
+service_instance_data.setInstanceStatus("FINISHED")
+service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+</job>
