@@ -1,677 +1,81 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="IMDB_Sentiment_Analysis" onTaskError="continueJobExecution" priority="normal" projectName="4. Custom AI workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
+    name="IMDB_Sentiment_Analysis" projectName="4. Custom AI workflows"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
   <variables>
-    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
-    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
   </variables>
   <description>
     <![CDATA[ This workflow trains a model for opinions identification and categorization expressed in a piece of text, especially in order to determine the opinion of IMDB users regarding specific movies [positive or negative]. ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="deep-learning-workflows"/>
-<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/sentiment_analysis.png"/>
-<info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
-<info name="group" value="public-objects"/>
-</genericInformation>
+    <info name="bucketName" value="deep-learning-workflows"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/sentiment_analysis.png"/>
+    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
   <taskFlow>
-    <task name="RNN">
+    <task name="Import_Text_Dataset" >
       <description>
-        <![CDATA[ Simple RNN Model.
-For implementation details, please refer to:
-http://pytorch.org/docs/master/nn.html#torch.nn.RNN ]]>
-      </description>
-      <variables>
-        <variable inherited="false" name="EMBEDDING_DIM" value="50"/>
-        <variable inherited="false" name="HIDDEN_DIM" value="40"/>
-        <variable inherited="false" name="BATCH_SIZE" value="2"/>
-        <variable inherited="false" name="DROPOUT" value="0.5"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png"/>
-      </genericInformation>
-      <selection>
-        <script type="static">
-          <code language="javascript">
-            <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Create a RNN model")
-import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
-
-BATCH_SIZE=2
-HIDDEN_DIM=50
-EMBEDDING_DIM=50
-DROPOUT=0.5
-
-if 'variables' in locals():  
-  if variables.get("BATCH_SIZE") is not None:
-    BATCH_SIZE = variables.get("BATCH_SIZE")
-  else:
-    print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
-  if variables.get("HIDDEN_DIM") is not None:
-    HIDDEN_DIM = variables.get("HIDDEN_DIM")
-  else:
-    print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
-  if variables.get("EMBEDDING_DIM") is not None:
-    EMBEDDING_DIM = variables.get("EMBEDDING_DIM")
-  else:
-    print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
-  if variables.get("DROPOUT") is not None:
-    DROPOUT = variables.get("DROPOUT")
-  else:
-    print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
-
-
-MODEL_TYPE = 'RNN'
-MODEL_CLASS = """
-class RNN(nn.Module):
-
-    def __init__(self, embedding_dim, hidden_dim, vocab_size, label_size, use_gpu, batch_size, dropout=0.5):
-        super(RNN, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.use_gpu = use_gpu
-        self.batch_size = batch_size
-        self.dropout = dropout
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.RNN = nn.RNN(input_size=embedding_dim, hidden_size=hidden_dim)
-        self.hidden2label = nn.Linear(hidden_dim, label_size)
-        self.hidden = self.init_hidden()
-
-    def init_hidden(self):
-        if self.use_gpu:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
-        else:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
-
-    def forward(self, sentence):
-        x = self.embeddings(sentence).view(len(sentence), self.batch_size, -1)
-        rnn_out, self.hidden = self.RNN(x, self.hidden)
-        y = self.hidden2label(rnn_out[-1])
-        log_probs = F.log_softmax(y)
-        return log_probs"""
-    
-MODEL_DEF = """
-MODEL = RNN(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=BATCH_SIZE)
-"""
-print(MODEL_DEF)
-
-# Forward model
-try:
-    variables.put("MODEL_CLASS", MODEL_CLASS)
-    variables.put("MODEL_DEF", MODEL_DEF)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
-    variables.put("HIDDEN_DIM", HIDDEN_DIM)
-    variables.put("EMBEDDING_DIM", EMBEDDING_DIM)
-    variables.put("DROPOUT", DROPOUT)
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END RNN model built")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-    </task>
-    <task name="Predict_Text_Model">
-      <description>
-        <![CDATA[ Predict results based on new data ]]>
-      </description>
-      <variables>
-        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-        <variable inherited="true" name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-        <variable inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" name="LOSS_FUNCTION" value="NLLLoss"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/predict.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Train_Text_Model"/>
-      </depends>
-      <inputFiles>
-        <files accessMode="transferFromGlobalSpace" includes="text_data/**"/>
-        <files accessMode="transferFromGlobalSpace" includes="text_models/**"/>
-      </inputFiles>
-      <selection>
-        <script type="static">
-          <code language="javascript">
-            <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Prediction")
-
-from torchtext import data
-from torchtext import datasets
-from torchtext import vocab
-from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
-from tqdm import tqdm
-import time, random
-import os
-from torch.autograd import Variable
-import torch.optim as optim
-import time
-#import spacy
-from itertools import *
-import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
-import pandas as pd
-import dill as pickle
-
-pd.options.display.max_colwidth = 500
-DEVICE = -1
-#-------------------------main code --------------------------
-DATASET_ITERATOR_UNL = None
-DATASET_ITERATOR = None
-#--------Get varaiables from previous tasks--------
-if 'variables' in locals():
-    if variables.get("MODEL_PATH") is not None:
-        MODEL_PATH = variables.get("MODEL_PATH")
-    if variables.get("LOSS_FUNCTION") is not None:
-        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = variables.get("BATCH_SIZE")
-    if variables.get("USE_GPU") is not None:
-        USE_GPU = variables.get("USE_GPU")
-    if variables.get("DEVICE") is not None:
-        DEVICE = variables.get("DEVICE") 
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if variables.get("vocab_size") is not None:
-        vocab_size = variables.get("vocab_size")
-    if variables.get("label_size") is not None:
-        label_size = variables.get("label_size")
-    if variables.get("BATCH_SIZE") is not None:
-        label_size = variables.get("BATCH_SIZE")
-    if variables.get("MODEL_CLASS") is not None:
-        MODEL_CLASS = variables.get("MODEL_CLASS")
-    if variables.get("MODEL_DEF") is not None:
-        MODEL_DEF = variables.get("MODEL_DEF")
-
-
-#--------Load Dataset--------
-
-if 'variables' in locals():
-    if variables.get("DATASET_PATH") is not None:
-        DATASET_PATH = variables.get("DATASET_PATH")
-    if variables.get("DATASET_ITERATOR") is not None:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR)
-    if variables.get("DATASET_ITERATOR_UNL") is not None:
-        DATASET_ITERATOR_UNL = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR_UNL)
-    #Load model files
-    if variables.get("LABELS_PATH") is not None:
-        LABELS_PATH = variables.get("LABELS_PATH")
-    if variables.get("TEXT_PATH") is not None:
-        TEXT_PATH = variables.get("TEXT_PATH")
-   
-#-------Main--------
-def evaluate(model, test, data_iter, label_field, loss_function, name):
-    model.eval()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    i=0
-    acc = 0
-    pd.options.display.max_colwidth = 500
-    result =  pd.DataFrame(columns=['text','prediction','label'])
-    for batch in data_iter:
-        i=i+1
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = len(test)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        for i in range(model.batch_size):
-            test_fields = vars(test[i])
-            test_text = test_fields["text"]
-            test_label = test_fields["label"]
-            prede_label = pred_label[i]
-            gd_label = label[i]
-            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
-        pred_res += [x for x in pred_label]
-        if name is 'test_labeled':
-            loss = loss_function(pred, label)
-            avg_loss += loss.data[0]
-    if name is 'test_labeled':
-        avg_loss /= len(test)
-        acc = get_accuracy(truth_res, pred_res)
-        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
-    return acc, result
-    
-def get_accuracy(truth, pred):
-     assert len(truth)==len(pred)
-     right = 0
-     for i in range(len(truth)):
-         if truth[i]==pred[i]:
-             right += 1.0
-     return right/len(truth)
-     
-LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
-
-exec(LOSS)
-
-
-label_field = pickle.load(open(LABELS_PATH,'rb'))
-text_field = pickle.load(open(TEXT_PATH,'rb'))
-exec(MODEL_CLASS)
-
-MODEL=torch.load(MODEL_PATH)
-if variables.get("DATASET_ITERATOR_UNL") is not None:
-    print('I am testing the unlabeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_unlabeled')
-else:
-    print('I am testing the labeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_labeled')
-
-#------plot results-----
-# Forward results for preview 
-try:
-    variables.put("PREDICT_DATA_JSON", results.to_json(orient='split'))
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END Prediction")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-    </task>
-    <task name="Export_Results">
-      <description>
-        <![CDATA[ Preview the predicted results ]]>
-      </description>
-      <variables>
-        <variable inherited="false" name="OUTPUT_FILE" value="HTML"/>
-        <variable inherited="true" name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
-        <variable inherited="true" name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
-        <variable inherited="true" name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Predict_Text_Model"/>
-      </depends>
-      <selection>
-        <script type="static">
-          <code language="javascript">
-            <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-from pprint import pprint
-import pandas as pd
-
-OUTPUT_DATA = variables.get("PREDICT_DATA_JSON")
-OUTPUT_FILE = variables.get("OUTPUT_FILE")
-
-if OUTPUT_DATA != None: 
-  prediction_result  = pd.read_json(OUTPUT_DATA, orient='split')   
-
-table = []
-pd.set_option('display.max_colwidth', -1)
-table.append("""<tr><td>{0}</td>""".format(prediction_result.to_html(columns=["text","prediction","label"])))
-    
-
-css_style="""
-table {
-  border: 1px solid #999999;
-  text-align: center;
-  border-collapse: collapse;
-  width: 100%;
-}
-td {
-  border: 1px solid #999999;         
-  padding: 3px 2px;
-  font-size: 13px;
-  border-bottom: 1px solid #999999;
-  #border-bottom: 1px solid #FF8C00;     
-}
-th {
-  font-size: 17px;
-  font-weight: bold;
-  color: #FFFFFF;
-  text-align: center;
-  background: #0B6FA4;
-  #background: #E7702A;       
-  #border-left: 2px solid #999999
-  border-bottom: 1px solid #999999;            
-}
-"""
-
-#html = """<table><th>Image</th><th>Reponse</th></tr>{0}</table>""".format("\n".join(table))
-html = """<table><th>Results</th></tr>{0}</table>""".format("\n".join(table))         
-
-html_container = """
-                  
-                  
-                  
-                  
-                  
-                  
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <meta name="description" content="Face API">
-                    <style>{0}</style>
-                  </head>
-                  <body>{1}</body></html>
-""".format(css_style, html)
-
-result = html_container.encode('utf-8')
-resultMetadata.put("file.extension", ".html")
-resultMetadata.put("file.name", "result.html")
-resultMetadata.put("content.type", "text/html")         
-print("BEGIN Export_Results")
-]]>
-                </code>
-              </script>
-            </scriptExecutable>
-            <controlFlow block="none"/>
-          </task>
-          <task name="Export_Model">
-            <description>
-              <![CDATA[ Export a trained model by a deep learning algorithm. ]]>
-            </description>
-            <variables>
-              <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-              <variable inherited="true" name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
-              <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-            </variables>
-            <genericInformation>
-              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png"/>
-            </genericInformation>
-            <depends>
-              <task ref="Train_Text_Model"/>
-            </depends>
-            <inputFiles>
-              <files accessMode="transferFromGlobalSpace" includes="text_models/**"/>
-            </inputFiles>
-            <selection>
-              <script type="static">
-                <code language="javascript">
-                  <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
-]]>
-                </code>
-              </script>
-            </selection>
-            <forkEnvironment javaHome="/usr">
-              <envScript>
-                <script>
-                  <code language="python">
-                    <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-                  </code>
-                </script>
-              </envScript>
-            </forkEnvironment>
-            <scriptExecutable>
-              <script>
-                <code language="cpython">
-                  <![CDATA[
-print("BEGIN Export_Model")
-
-import os
-import uuid
-import zipfile
-from os.path import exists, join, isfile
-import shutil
-
-
-if 'variables' in locals():
-  MODEL_PATH  = variables.get("MODEL_PATH")
-  LABELS_PATH = variables.get("LABELS_PATH")
-  TEXT_PATH = variables.get("TEXT_PATH")
-
-#assert isfile(MODEL_PATH) == True
-#assert isfile(LABELS_PATH) == True
-#assert isfile(TEXT_PATH) == True
-
-'''
-assert MODEL_DIR_PATH is not None
-assert exists(MODEL_DIR_PATH) == True
-
-def zipdir(_path, _ziph):
-  # ziph is zipfile handle
-  for root, dirs, files in os.walk(_path):
-    for file in files:
-      _ziph.write(join(root, file))
-
-zipf = zipfile.ZipFile('model.zip', 'w', zipfile.ZIP_DEFLATED)
-zipdir(MODEL_DIR_PATH, zipf)
-zipf.close()
-'''
-MODEL_FOLDER = 'text_models/'
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-FILE_NAME = ID + '.zip'
-FILE_PATH = join(MODEL_FOLDER, FILE_NAME)
-print("FILE_PATH: " + FILE_PATH)
-
-zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
-zipf.write(MODEL_PATH)
-zipf.write(LABELS_PATH)
-zipf.write(TEXT_PATH)
-zipf.close()
-
-assert isfile(FILE_PATH) == True
-
-# Read the whole file at once
-FILE_BIN = None
-with open(FILE_PATH, "rb") as binary_file:
-  FILE_BIN = binary_file.read()
-assert FILE_BIN is not None
-
-if 'variables' in locals():
-  result = FILE_BIN
-  resultMetadata.put("file.extension", ".zip")
-  resultMetadata.put("file.name", "model.zip")
-  resultMetadata.put("content.type", "application/octet-stream")
-
-print("END Export_Model")
-]]>
-                </code>
-              </script>
-            </scriptExecutable>
-            <controlFlow block="none"/>
-          </task>
-          <task name="Import_Text_Dataset">
-            <description>
-              <![CDATA[ Import a text dataset from the location given by $DATASET_URL. If it is a zip file, it will be automatically extracted.
+        <![CDATA[ Import a text dataset from the location given by $DATASET_URL. If it is a zip file, it will be automatically extracted.
 Split the dataset into train, test and validation sets. If $TOY_MODE is activated, it will only extract a small subset of the dataset.
 The text is tokenized using $TOKENIZER ]]>
-            </description>
-            <variables>
-              <variable inherited="false" name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/IMDB.zip"/>
-              <variable inherited="false" name="TRAIN_SPLIT" value="0.6"/>
-              <variable inherited="false" name="TEST_SPLIT" value="0.3"/>
-              <variable inherited="false" name="VALIDATION_SPLIT" value="0.1"/>
-              <variable inherited="false" model="PA:BOOLEAN" name="TOY_MODE" value="True"/>
-              <variable inherited="false" model="PA:LIST(str.split,moses,spacy,revtok,subword)" name="TOKENIZER" value="str.split"/>
-              <variable inherited="false" name="SENTENCE_SEPARATOR" value="\r"/>
-              <variable inherited="false" name="CHARSET" value="utf-8"/>
-              <variable inherited="true" model="PA:BOOLEAN" name="GPU_NODES_ONLY" value="False"/>
-              <variable inherited="true" name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
-              <variable inherited="true" model="PA:BOOLEAN" name="DOCKER_ENABLED" value="True"/>
-              <variable inherited="false" model="PA:BOOLEAN" name="IS_LABELED_DATA" value="True"/>
-            </variables>
-            <genericInformation>
-              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png"/>
-            </genericInformation>
-            <selection>
-              <script type="static">
-                <code language="javascript">
-                  <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+      </description>
+      <variables>
+        <variable name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/IMDB.zip" inherited="false" />
+        <variable name="TRAIN_SPLIT" value="0.6" inherited="false" />
+        <variable name="TEST_SPLIT" value="0.3" inherited="false" />
+        <variable name="VALIDATION_SPLIT" value="0.1" inherited="false" />
+        <variable name="TOY_MODE" value="True" inherited="false" model="PA:BOOLEAN"/>
+        <variable name="TOKENIZER" value="str.split" inherited="false" model="PA:LIST(str.split,moses,spacy,revtok,subword)"/>
+        <variable name="SENTENCE_SEPARATOR" value="\r" inherited="false" />
+        <variable name="CHARSET" value="utf-8" inherited="false" />
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="IS_LABELED_DATA" value="True" inherited="false" model="PA:BOOLEAN"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_import_text_dataset"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
 ]]>
-                </code>
-              </script>
-            </selection>
-            <forkEnvironment javaHome="/usr">
-              <envScript>
-                <script>
-                  <code language="python">
-                    <![CDATA[
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
   # Prepare Docker parameters 
@@ -693,14 +97,14 @@ if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
 else:
   print("Fork environment disabled")
 ]]>
-                  </code>
-                </script>
-              </envScript>
-            </forkEnvironment>
-            <scriptExecutable>
-              <script>
-                <code language="cpython">
-                  <![CDATA[
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
 print("BEGIN Import_Text_Dataset")
 
 import os
@@ -901,55 +305,69 @@ if 'variables' in locals():
     variables.put("IS_LABELED_DATA",IS_LABELED_DATA)
 print("END Import_Text_Dataset")
 ]]>
-                </code>
-              </script>
-            </scriptExecutable>
-            <controlFlow block="none"/>
-            <outputFiles>
-              <files accessMode="transferToGlobalSpace" includes="text_data/**"/>
-            </outputFiles>
-          </task>
-          <task name="Train_Text_Model">
-            <description>
-              <![CDATA[ Train a text-oriented model using deep learning architectures ]]>
-            </description>
-            <variables>
-              <variable inherited="false" name="LEARNING_RATE" value="0.001"/>
-              <variable inherited="false" model="PA:List(Adam,RMS, SGD, Adagrad, Adadelta)" name="OPTIMIZER" value="Adam"/>
-              <variable inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" name="LOSS_FUNCTION" value="NLLLoss"/>
-              <variable inherited="false" model="PA:Integer" name="EPOCHS" value="10"/>
-              <variable inherited="false" model="PA:Boolean" name="TRAINABLE" value="False"/>
-              <variable inherited="false" model="PA:List(42B, 840B, twitter.27B,6B)" name="GLOVE" value="6B"/>
-              <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-              <variable inherited="true" name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
-              <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-              <variable inherited="false" model="PA:Boolean" name="USE_GPU" value="False"/>
-            </variables>
-            <genericInformation>
-              <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-            </genericInformation>
-            <depends>
-              <task ref="Import_Text_Dataset"/>
-              <task ref="RNN"/>
-            </depends>
-            <inputFiles>
-              <files accessMode="transferFromGlobalSpace" includes="text_data/**"/>
-              <files accessMode="transferFromGlobalSpace" includes=".vector_cache/**"/>
-            </inputFiles>
-            <selection>
-              <script type="static">
-                <code language="javascript">
-                  <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="$DATASET_PATH/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            445.10418701171875
+        </positionTop>
+        <positionLeft>
+            1208.0556640625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="RNN" >
+      <description>
+        <![CDATA[ Simple RNN Model ]]>
+      </description>
+      <variables>
+        <variable name="EMBEDDING_DIM" value="50" inherited="false" />
+        <variable name="HIDDEN_DIM" value="40" inherited="false" />
+        <variable name="BATCH_SIZE" value="2" inherited="false" />
+        <variable name="DROPOUT" value="0.5" inherited="false" />
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_rnn"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
 ]]>
-                </code>
-              </script>
-            </selection>
-            <forkEnvironment javaHome="/usr">
-              <envScript>
-                <script>
-                  <code language="python">
-                    <![CDATA[
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
   # Prepare Docker parameters 
@@ -971,15 +389,176 @@ if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
 else:
   print("Fork environment disabled")
 ]]>
-                  </code>
-                </script>
-              </envScript>
-            </forkEnvironment>
-            <scriptExecutable>
-              <script>
-                <code language="cpython">
-                  <![CDATA[
-print("BEGIN Model training")
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Create a RNN model")
+import torch
+from torch.autograd import Variable
+import torch.nn as nn
+import torch.nn.functional as F
+
+BATCH_SIZE=2
+HIDDEN_DIM=50
+EMBEDDING_DIM=50
+DROPOUT=0.5
+
+if 'variables' in locals():  
+  if variables.get("BATCH_SIZE") is not None:
+    BATCH_SIZE = variables.get("BATCH_SIZE")
+  else:
+    print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
+  if variables.get("HIDDEN_DIM") is not None:
+    HIDDEN_DIM = variables.get("HIDDEN_DIM")
+  else:
+    print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
+  if variables.get("EMBEDDING_DIM") is not None:
+    EMBEDDING_DIM = variables.get("EMBEDDING_DIM")
+  else:
+    print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
+  if variables.get("DROPOUT") is not None:
+    DROPOUT = variables.get("DROPOUT")
+  else:
+    print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
+
+
+MODEL_TYPE = 'RNN'
+MODEL_CLASS = """
+class RNN(nn.Module):
+
+    def __init__(self, embedding_dim, hidden_dim, vocab_size, label_size, use_gpu, batch_size, dropout=0.5):
+        super(RNN, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.use_gpu = use_gpu
+        self.batch_size = batch_size
+        self.dropout = dropout
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.RNN = nn.RNN(input_size=embedding_dim, hidden_size=hidden_dim)
+        self.hidden2label = nn.Linear(hidden_dim, label_size)
+        self.hidden = self.init_hidden()
+
+    def init_hidden(self):
+        if self.use_gpu:
+            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
+        else:
+            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
+
+    def forward(self, sentence):
+        x = self.embeddings(sentence).view(len(sentence), self.batch_size, -1)
+        rnn_out, self.hidden = self.RNN(x, self.hidden)
+        y = self.hidden2label(rnn_out[-1])
+        log_probs = F.log_softmax(y)
+        return log_probs"""
+    
+MODEL_DEF = """
+MODEL = RNN(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=BATCH_SIZE)
+"""
+print(MODEL_DEF)
+
+# Forward model
+try:
+    variables.put("MODEL_CLASS", MODEL_CLASS)
+    variables.put("MODEL_DEF", MODEL_DEF)
+    variables.put("BATCH_SIZE", BATCH_SIZE)
+    variables.put("HIDDEN_DIM", HIDDEN_DIM)
+    variables.put("EMBEDDING_DIM", EMBEDDING_DIM)
+    variables.put("DROPOUT", DROPOUT)
+except NameError as err:
+    print("{0}".format(err))
+    print("Warning: this script is running outside from ProActive.")
+    pass
+
+print("END RNN model built")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            445.10418701171875
+        </positionTop>
+        <positionLeft>
+            1359.5660400390625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Train_Text_Classification_Model" >
+      <description>
+        <![CDATA[ Train a text-oriented model using deep learning architectures ]]>
+      </description>
+      <variables>
+        <variable name="LEARNING_RATE" value="0.001" inherited="false" />
+        <variable name="OPTIMIZER" value="Adam" inherited="false" model="PA:List(Adam,RMS, SGD, Adagrad, Adadelta)"/>
+        <variable name="LOSS_FUNCTION" value="NLLLoss" inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)"/>
+        <variable name="EPOCHS" value="10" inherited="false" model="PA:Integer"/>
+        <variable name="TRAINABLE" value="False" inherited="false" model="PA:Boolean"/>
+        <variable name="GLOVE" value="6B" inherited="false" model="PA:List(42B, 840B, twitter.27B,6B)"/>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="USE_GPU" value="False" inherited="false" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="RNN"/>
+        <task ref="Import_Text_Dataset"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
+        <files  includes=".vector_cache/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="javascript">
+            <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Train_Text_Classification_Model")
 
 from torchtext import data
 from torchtext import datasets
@@ -1000,6 +579,7 @@ import torch.nn.functional as F
 import pandas as pd
 import os
 import shutil
+import numpy as np
 
 #-------------------------evaluate function definition--------------------------
 def evaluate(model, test, data_iter, label_field, loss_function, name):
@@ -1033,6 +613,7 @@ def evaluate(model, test, data_iter, label_field, loss_function, name):
             avg_loss += loss.data[0]
     if name is 'test_labeled':
         avg_loss /= len(test)
+        pred_res = torch.LongTensor(pred_res)
         acc = get_accuracy(truth_res, pred_res)
         print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
     return acc, result
@@ -1042,8 +623,8 @@ def get_accuracy(truth, pred):
      assert len(truth)==len(pred)
      right = 0
      for i in range(len(truth)):
-         if truth[i]==pred[i]:
-             right += 1.0
+        if truth[i]==pred[i]:
+            right += 1.0
      return right/len(truth)
      
 #-------------------------train function definition--------------------------     
@@ -1061,7 +642,7 @@ def train_epoch_progress(model, train_iter, train, loss_function, optimizer, tex
         model.hidden = model.init_hidden()
         pred = model(sent)
         pred_label = pred.data.max(1)[1].numpy()
-        pred_res += [x for x in pred_label]
+        pred_res += [np.float64(x) for x in pred_label]
         model.zero_grad()
         loss = loss_function(pred, label)
         avg_loss += loss.data[0]
@@ -1069,6 +650,7 @@ def train_epoch_progress(model, train_iter, train, loss_function, optimizer, tex
         loss.backward()
         optimizer.step()
     avg_loss /= len(train)
+    pred_res = torch.LongTensor(pred_res)
     acc = get_accuracy(truth_res, pred_res)
     return avg_loss, acc
 
@@ -1232,6 +814,7 @@ for epoch in range(EPOCHS):
 # Get an unique ID
 file_id = str(uuid.uuid4())
 MODEL_FOLDER = 'text_models/'
+MODEL_FOLDER =  os.path.join(MODEL_FOLDER, file_id)
 if os.path.exists(MODEL_FOLDER):
   shutil.rmtree(MODEL_FOLDER)
 os.makedirs(MODEL_FOLDER)
@@ -1280,17 +863,607 @@ except NameError as err:
     print("Warning: this script is running outside from ProActive.")
     pass
   
-print("END Model training")
+print("END Train_Text_Classification_Model")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="$MODEL_FOLDER/**" accessMode="transferToGlobalSpace"/>
+        <files  includes=".vector_cache/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            573.125
+        </positionTop>
+        <positionLeft>
+            1283.8194580078125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Predict_Text_Classification_Model" >
+      <description>
+        <![CDATA[ Predict results based on new data ]]>
+      </description>
+      <variables>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="LOSS_FUNCTION" value="NLLLoss" inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Train_Text_Classification_Model"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$MODEL_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="javascript">
+            <![CDATA[
+selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Predict_Text_Classification_Model")
+
+from torchtext import data
+from torchtext import datasets
+from torchtext import vocab
+from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
+from tqdm import tqdm
+import time, random
+import os
+from torch.autograd import Variable
+import torch.optim as optim
+import time
+#import spacy
+from itertools import *
+import torch
+from torch.autograd import Variable
+import torch.nn as nn
+import torch.nn.functional as F
+import pandas as pd
+import dill as pickle
+
+pd.options.display.max_colwidth = 500
+DEVICE = -1
+#-------------------------main code --------------------------
+DATASET_ITERATOR_UNL = None
+DATASET_ITERATOR = None
+#--------Get varaiables from previous tasks--------
+if 'variables' in locals():
+    if variables.get("MODEL_PATH") is not None:
+        MODEL_PATH = variables.get("MODEL_PATH")
+    if variables.get("LOSS_FUNCTION") is not None:
+        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
+    if variables.get("BATCH_SIZE") is not None:
+        BATCH_SIZE = variables.get("BATCH_SIZE")
+    if variables.get("USE_GPU") is not None:
+        USE_GPU = variables.get("USE_GPU")
+    if variables.get("DEVICE") is not None:
+        DEVICE = variables.get("DEVICE") 
+    if variables.get("IS_LABELED_DATA") is not None:
+        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
+    if variables.get("vocab_size") is not None:
+        vocab_size = variables.get("vocab_size")
+    if variables.get("label_size") is not None:
+        label_size = variables.get("label_size")
+    if variables.get("BATCH_SIZE") is not None:
+        label_size = variables.get("BATCH_SIZE")
+    if variables.get("MODEL_CLASS") is not None:
+        MODEL_CLASS = variables.get("MODEL_CLASS")
+    if variables.get("MODEL_DEF") is not None:
+        MODEL_DEF = variables.get("MODEL_DEF")
+
+
+#--------Load Dataset--------
+
+if 'variables' in locals():
+    if variables.get("DATASET_PATH") is not None:
+        DATASET_PATH = variables.get("DATASET_PATH")
+    if variables.get("DATASET_ITERATOR") is not None:
+        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
+        DATASET_PATH = variables.get("DATASET_PATH")
+        exec(DATASET_ITERATOR)
+    if variables.get("DATASET_ITERATOR_UNL") is not None:
+        DATASET_ITERATOR_UNL = variables.get("DATASET_ITERATOR_UNL")
+        DATASET_PATH = variables.get("DATASET_PATH")
+        exec(DATASET_ITERATOR_UNL)
+    #Load model files
+    if variables.get("LABELS_PATH") is not None:
+        LABELS_PATH = variables.get("LABELS_PATH")
+    if variables.get("TEXT_PATH") is not None:
+        TEXT_PATH = variables.get("TEXT_PATH")
+   
+#-------Main--------
+def evaluate(model, test, data_iter, label_field, loss_function, name):
+    model.eval()
+    avg_loss = 0.0
+    truth_res = []
+    pred_res = []
+    i=0
+    acc = 0
+    pd.options.display.max_colwidth = 500
+    result =  pd.DataFrame(columns=['text','Predictions','Targets'])
+    for batch in data_iter:
+        i=i+1
+        sent, label = batch.text, batch.label
+        label.data.sub_(1)
+        truth_res += list(label.data)
+        model.batch_size = len(test)
+        model.hidden = model.init_hidden()
+        pred = model(sent)
+        pred_label = pred.data.max(1)[1].numpy()
+        for i in range(model.batch_size):
+            test_fields = vars(test[i])
+            test_text = test_fields["text"]
+            test_label = test_fields["label"]
+            prede_label = pred_label[i]
+            gd_label = label[i]
+            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
+        pred_res += [x for x in pred_label]
+        if name is 'test_labeled':
+            loss = loss_function(pred, label)
+            avg_loss += loss.data[0]
+    if name is 'test_labeled':
+        avg_loss /= len(test)
+        pred_res = torch.LongTensor(pred_res)
+        acc = get_accuracy(truth_res, pred_res)
+        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
+    return acc, result
+    
+def get_accuracy(truth, pred):
+     assert len(truth)==len(pred)
+     right = 0
+     for i in range(len(truth)):
+         if truth[i]==pred[i]:
+             right += 1.0
+     return right/len(truth)
+     
+LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
+
+exec(LOSS)
+
+
+label_field = pickle.load(open(LABELS_PATH,'rb'))
+text_field = pickle.load(open(TEXT_PATH,'rb'))
+exec(MODEL_CLASS)
+
+MODEL=torch.load(MODEL_PATH)
+if variables.get("DATASET_ITERATOR_UNL") is not None:
+    print('I am testing the unlabeled dataset')
+    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_unlabeled')
+else:
+    print('I am testing the labeled dataset')
+    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_labeled')
+
+#------plot results-----
+# Forward results for preview 
+try:
+    variables.put("PREDICT_DATA_JSON", results.to_json(orient='split'))
+except NameError as err:
+    print("{0}".format(err))
+    print("Warning: this script is running outside from ProActive.")
+    pass
+
+print("END Predict_Text_Classification_Model")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            701.1284790039062
+        </positionTop>
+        <positionLeft>
+            1192.8125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Export_Results" >
+      <description>
+        <![CDATA[ Preview the predicted results ]]>
+      </description>
+      <variables>
+        <variable name="OUTPUT_FILE" value="HTML" inherited="true" />
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png"/>
+        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_results"/>
+      </genericInformation>
+      <depends>
+        <task ref="Predict_Text_Classification_Model"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$OUTPUT_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Export_Results")
+
+import base64
+import pandas as pd
+from PIL import Image
+from io import BytesIO
+
+if 'variables' in locals():
+  PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
+  OUTPUT_FILE = variables.get("OUTPUT_FILE")
+
+assert PREDICT_DATA is not None
+df = pd.read_json(PREDICT_DATA, orient='split')  
+
+# check the predictions
+if {'Predictions','Targets'}.issubset(df.columns):
+	pred_result =[]
+	for indice in range(len(df)):
+		if df['Predictions'][indice] == df['Targets'][indice]:
+			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/tick_green.png?raw=true'
+			pred_result.append(result)
+		else:
+			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/close_red.png?raw=true'
+			pred_result.append(result)
+	df_pred_image_url = pd.DataFrame(pred_result)
+	df['Results'] = df_pred_image_url
+ 
+def get_thumbnail(path):
+  i = Image.open(path)
+  extension = i.format
+  i.thumbnail((200, 200), Image.LANCZOS)
+  return i, extension
+
+def image_base64(im):
+  if isinstance(im, str):
+    im, extension = get_thumbnail(im)
+  with BytesIO() as buffer:
+    im.save(buffer, extension)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+def image_formatter(im):
+  extension = im.format
+  return f'<img src="data:image/extension;base64,{image_base64(im)}" height="200" width="200">'
+
+def image_formatter_url(im_url):
+  return """<img src="{0}" height="50" width="50"/>""".format(im_url)
+  
+
+result = ''
+with pd.option_context('display.max_colwidth', -1):
+  result = df.to_html(escape=False, formatters=dict(Images=image_formatter, Outputs=image_formatter, Results=image_formatter_url))
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+               
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <style>{0}</style>
+                </head>
+                <body>{1}</body></html>
+""".format(css_style, result)
+
+if OUTPUT_FILE == 'HTML':  
+    result = result.encode('utf-8')
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "result.html")
+    resultMetadata.put("content.type", "text/html")
+    print("END Export_Results")
+elif OUTPUT_FILE == 'CSV':
+    if 'Images' in df.columns:
+        df.pop('Images')
+    if 'Results' in df.columns:        
+        df.pop('Results')  
+    if 'Outputs' in df.columns:        
+        df.pop('Outputs') 
+    result = df.to_csv()    
+    resultMetadata.put("file.extension", ".csv")
+    resultMetadata.put("file.name", "result.csv")
+    resultMetadata.put("content.type", "text/csv") 
+    print("END Export_Results")
+else:
+  print('It is not possible to export the data')
+]]>
+              </code>
+            </script>
+          </scriptExecutable>
+          <controlFlow block="none"></controlFlow>
+          <metadata>
+            <positionTop>
+            829.1666870117188
+        </positionTop>
+            <positionLeft>
+            1192.8125
+        </positionLeft>
+          </metadata>
+        </task>
+        <task name="Export_Model" >
+          <description>
+            <![CDATA[ Export a trained model by a deep learning algorithm. ]]>
+          </description>
+          <variables>
+            <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+            <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+          </variables>
+          <genericInformation>
+            <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png"/>
+            <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_model"/>
+          </genericInformation>
+          <depends>
+            <task ref="Train_Text_Classification_Model"/>
+          </depends>
+          <inputFiles>
+            <files  includes="$MODEL_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+          </inputFiles>
+          <selection>
+            <script type="static">
+              <code language="python">
+                <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+              </code>
+            </script>
+          </selection>
+          <forkEnvironment javaHome="/usr" >
+            <envScript>
+              <script>
+                <code language="python">
+                  <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
 ]]>
                 </code>
               </script>
-            </scriptExecutable>
-            <controlFlow block="none"/>
-            <outputFiles>
-              <files accessMode="transferToGlobalSpace" includes="text_data/**"/>
-              <files accessMode="transferToGlobalSpace" includes=".vector_cache/**"/>
-              <files accessMode="transferToGlobalSpace" includes="text_models/**"/>
-            </outputFiles>
-          </task>
-        </taskFlow>
-      </job>
+            </envScript>
+          </forkEnvironment>
+          <scriptExecutable>
+            <script>
+              <code language="cpython">
+                <![CDATA[
+print("BEGIN Export_Model")
+
+import os
+import uuid
+import zipfile
+import shutil
+
+from os import remove, listdir, makedirs
+from os.path import exists, join, isfile
+
+if 'variables' in locals():
+  MODEL_PATH  = variables.get("MODEL_PATH")
+  LABELS_PATH = variables.get("LABELS_PATH")
+  TEXT_PATH   = variables.get("TEXT_PATH")
+
+assert MODEL_PATH is not None
+
+'''
+assert MODEL_DIR_PATH is not None
+assert exists(MODEL_DIR_PATH) == True
+
+def zipdir(_path, _ziph):
+  # ziph is zipfile handle
+  for root, dirs, files in os.walk(_path):
+    for file in files:
+      _ziph.write(join(root, file))
+
+zipf = zipfile.ZipFile('model.zip', 'w', zipfile.ZIP_DEFLATED)
+zipdir(MODEL_DIR_PATH, zipf)
+zipf.close()
+'''
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+FILE_NAME = ID + '.zip'
+
+zipf = zipfile.ZipFile(FILE_NAME, 'w', zipfile.ZIP_DEFLATED)
+zipf.write(MODEL_PATH)
+if LABELS_PATH is not None:
+  zipf.write(LABELS_PATH)
+if TEXT_PATH is not None:
+  zipf.write(TEXT_PATH)  
+zipf.close()
+
+assert isfile(FILE_NAME) == True
+
+# Read the whole file at once
+FILE_BIN = None
+with open(FILE_NAME, "rb") as binary_file:
+  FILE_BIN = binary_file.read()
+assert FILE_BIN is not None
+
+if 'variables' in locals():
+  result = FILE_BIN
+  resultMetadata.put("file.extension", ".zip")
+  resultMetadata.put("file.name", "model.zip")
+  resultMetadata.put("content.type", "application/octet-stream")
+
+print("END Export_Model")
+]]>
+              </code>
+            </script>
+          </scriptExecutable>
+          <controlFlow block="none"></controlFlow>
+          <metadata>
+            <positionTop>
+            701.1284790039062
+        </positionTop>
+            <positionLeft>
+            1374.826416015625
+        </positionLeft>
+          </metadata>
+        </task>
+      </taskFlow>
+    </job>
