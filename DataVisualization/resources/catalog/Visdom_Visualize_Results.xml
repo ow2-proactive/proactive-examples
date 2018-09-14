@@ -1,31 +1,40 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Visdom_Visualize_Results" onTaskError="continueJobExecution" priority="normal" projectName="1. Visdom" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
+    name="Visdom_Visualize_Results" projectName="1. Visdom"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
   <variables>
-    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
   </variables>
   <description>
     <![CDATA[ Plot the different results obtained by a predictive model using Visdom ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="data-visualization"/>
-<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
-<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_visdom_visualize_results"/>
-<info name="group" value="public-objects"/>
-</genericInformation>
+    <info name="bucketName" value="data-visualization"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_visdom_visualize_results"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
   <taskFlow>
-    <task name="Visdom_Visualize_Results">
+    <task name="Visdom_Visualize_Results" >
       <description>
         <![CDATA[ Plot the different results obtained by a predictive model using Visdom ]]>
       </description>
       <variables>
-        <variable inherited="false" name="TARGETED_CLASS" value=""/>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" />
+        <variable name="TARGET_CLASS" value="" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
         <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_visdom_visualize_results"/>
       </genericInformation>
-      <forkEnvironment javaHome="/usr">
+      <forkEnvironment javaHome="/usr" >
         <envScript>
           <script>
             <code language="python">
@@ -33,7 +42,7 @@
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
   # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
+  containerName = variables.get("DOCKER_IMAGE") 
   dockerRunCommand =  'docker run ' 
   dockerParameters = '--rm ' 
   # Prepare ProActive home volume 
@@ -59,19 +68,73 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("--- BEGIN Visdom_Visualize_Results ---")
+__file__ = variables.get("PA_TASK_NAME")
 
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid, json
 import pandas as pd
 import numpy as np
+
 from visdom import Visdom
-from sklearn.metrics import confusion_matrix
-from sklearn import metrics
 from sklearn.metrics import *
 
-DATA_TEST_DF_JSON = variables.get("DATA_TEST_DF_JSON")
-PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
-IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-TARGETED_CLASS = str(variables.get("TARGETED_CLASS"))
+input_variables = {
+  'task.dataframe_id': None, 
+  'task.dataframe_id_test': None,
+  'task.algorithm_json': None,
+  'task.label_column': None,
+}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
+
+dataframe_id = None
+if input_variables['task.dataframe_id'] is not None:
+  dataframe_id = input_variables['task.dataframe_id']
+if input_variables['task.dataframe_id_test'] is not None:
+  dataframe_id = input_variables['task.dataframe_id_test']
+print("dataframe id (in): ", dataframe_id)
+
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
+
+dataframe = pd.read_json(dataframe_json, orient='split')
+
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+  is_labeled_data = True
+else:
+  LABEL_COLUMN = input_variables['task.label_column']
+  if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+    is_labeled_data = True
+
+TARGET_CLASS = variables.get("TARGET_CLASS")
+assert TARGET_CLASS is not None, 'The variable TARGET_CLASS is mandatory'
+TARGET_CLASS = str(TARGET_CLASS)
+
+algorithm_json = input_variables['task.algorithm_json']
+assert algorithm_json is not None
+algorithm = json.loads(algorithm_json)
+#-------------------------------------------------------------
+class obj(object):
+  def __init__(self, d):
+    for a, b in d.items():
+      if isinstance(b, (list, tuple)):
+        setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+      else:
+        setattr(self, a, obj(b) if isinstance(b, dict) else b)
+#-------------------------------------------------------------
+alg = obj(algorithm)
 
 visdom_endpoint = variables.get("visdom_endpoint")
 if visdom_endpoint is not None:
@@ -81,123 +144,149 @@ print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
 vis = Visdom(server="http://"+VISDOM_HOST,port=int(VISDOM_PORT))
 assert vis.check_connection()
 
-data_test  = pd.read_json(DATA_TEST_DF_JSON, orient='split')   
-predict_data_df  = pd.read_json(PREDICT_DATA, orient='split')  
-idx_test_df = data_test.index.values
-data_test_df_columns = list(data_test.columns.values)
-data_test_df = data_test.values
-nb_columns = data_test_df.shape[1]
-PREDICTION_LIMIT = data_test_df.shape[0]
-predict_df = predict_data_df.iloc[:,-1]
-predict_data = [str(predict_df[x]) for x in range(PREDICTION_LIMIT)]
-
-try:
-  is_classification_algorithm = variables.get("CLASSIFICATION_MEASURE")
-except NameError:
-  is_classification_algorithm = 'False'
-
-if is_classification_algorithm == 'True':
-  LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
-  label_test_df = pd.read_json(LABEL_TEST_DF_JSON, orient='split')
-  df_classes = label_test_df.iloc[:,-1].unique()
+columns = []
+if alg.type == 'classification':
+  columns = [LABEL_COLUMN, "predictions","accuracy"]
+elif alg.type == 'regression':
+  columns = [LABEL_COLUMN, "predictions","absolute_error"]
+elif alg.type == 'clustering' and is_labeled_data:
+  columns = [LABEL_COLUMN, "predictions","accuracy"]
 else:
-  df_classes = predict_data_df.iloc[:,-1].unique()
+  columns = ["predictions","accuracy"]
 
-classes = [str(df_classes[x]) for x in range(0,len(df_classes))]
-classes.sort()
-classes_stats = [0]*len(classes)
+dataframe_idx_values = dataframe.index.values
+dataframe_features = dataframe.drop(columns, axis=1, inplace=False)
 
-# REGRESSION PLOTS
-try:
-  is_regression_algorithm = variables.get("REGRESSION_MEASURE")
-except NameError:
-  is_regression_algorithm = 'False'
+dataframe_features_values = dataframe_features.values
+dataframe_features_values_columns = list(dataframe_features.columns.values)
 
-if is_regression_algorithm == 'True':
-  list_detected_simples_text = vis.text("List of detected samples in class "+TARGETED_CLASS+" :\n", opts = dict(title = 'List of indexes'))
-  targeted_class_line = vis.line(Y = np.array([0]), X = np.array([0]), opts = dict(xlabel = 'Index', ylabel = 'Targeted Class', title = "Detected samples in class "+TARGETED_CLASS+" \n"))
-  features_line = vis.line(X=np.column_stack(([0]*nb_columns)), Y=np.column_stack(np.asarray(data_test_df[0][:])), opts=dict(legend=data_test_df_columns,xlabel = 'Index', ylabel = 'Feature Value', title = 'Values of extracted features for each sample'))
-  count = 0 
-  for x in range(PREDICTION_LIMIT):
-    if int(float(predict_data[x]))==int(float(TARGETED_CLASS)):
-      message = "%s\n"%(idx_test_df[x])
-      vis.text(message, win=list_detected_simples_text, append=True)
-      vis.line(Y = np.array([1]), X = np.array([count]), win = targeted_class_line, update = 'append')
+nb_rows = dataframe_features_values.shape[0]
+nb_columns = dataframe_features_values.shape[1]
+
+dataframe_predictions = dataframe["predictions"]
+dataframe_predictions_values = dataframe_predictions.values.ravel()
+dataframe_predictions_values_str = [str(dataframe_predictions[x]) for x in range(nb_rows)]
+
+if is_labeled_data:
+  dataframe_labels = dataframe[LABEL_COLUMN]
+  dataframe_labels_values = dataframe_labels.values.ravel()
+
+if is_labeled_data and alg.type == 'regression':
+  dataframe_predictions_values_float = [float(dataframe_predictions_values[x]) for x in range(nb_rows)]
+  model_mse = mean_squared_error(dataframe_labels_values, dataframe_predictions_values_float)
+  model_mae = mean_absolute_error(dataframe_labels_values, dataframe_predictions_values_float)
+  model_r2s = r2_score(dataframe_labels_values, dataframe_predictions_values_float)
+
+if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'):
+  dataframe_classes = dataframe_labels.unique()
+  classes = [str(dataframe_classes[x]) for x in range(0, len(dataframe_classes))]
+  classes.sort()
+  classes_stats = [0]*len(classes)
+  model_cm = confusion_matrix(dataframe_labels_values, dataframe_predictions_values)
+  model_as = accuracy_score(dataframe_labels_values, dataframe_predictions_values)
+  model_ps = precision_score(dataframe_labels_values, dataframe_predictions_values, average='micro')
+  model_fpr, model_tpr, _ = roc_curve(dataframe_labels_values, dataframe_predictions_values)
+
+#-------------------------------------------------------------
+# VISDOM PLOTS
+#-------------------------------------------------------------
+
+list_detected_samples_text = vis.text("List of detected samples in class " + TARGET_CLASS, opts=dict(title='List of indexes'))
+
+target_class_line = vis.line(
+  Y=np.array([0]), 
+  X=np.array([0]), 
+  opts=dict(
+    xlabel='Index', 
+    ylabel='Targeted Class', 
+    title="Detected samples in class " + TARGET_CLASS
+    )
+  )
+
+features_line = vis.line(
+  X=np.column_stack([0]*nb_columns), 
+  Y=np.column_stack(dataframe_features_values[0][:]), 
+  opts=dict(
+    legend=dataframe_features_values_columns, 
+    xlabel='Index', 
+    ylabel='Feature Value', 
+    title='Values of extracted features for each sample'
+    )
+  )
+
+if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'):
+  statistic_pie = vis.pie(X=classes_stats, opts=dict(legend=classes, title='Classification results'))
+
+#-------------------------------------------------------------
+count = 0
+for x in range(nb_rows):
+  vis.line(
+    X=np.column_stack([count]*nb_columns), 
+    Y=np.column_stack(dataframe_features_values[x][:]), 
+    win=features_line, 
+    update='append'
+  )
+
+  if alg.type == 'regression':
+    match = (int(float(dataframe_predictions_values[x])) == int(float(TARGET_CLASS)))
+    if match:
+      message = "%s\n"%(dataframe_idx_values[x])
+      vis.text(message, win=list_detected_samples_text, append=True)
+      vis.line(Y=np.array([1]), X=np.array([count]), win=target_class_line, update='append')
     else:
-      vis.line(Y = np.array([0]), X = np.array([count]), win = targeted_class_line, update = 'append')
-      count += 1
-    vis.line(X=np.column_stack(([count]*nb_columns)), Y=np.column_stack((np.asarray(data_test_df[x][:]))), win=features_line, update='append')
-else:
-  list_detected_simples_text = vis.text("List of detected samples in class "+TARGETED_CLASS+" :\n", opts = dict(title = 'List of indexes'))
-  targeted_class_line = vis.line(Y = np.array([0]), X = np.array([0]), opts = dict(xlabel = 'Index', ylabel = 'Targeted Class', title = "Detected samples in class "+TARGETED_CLASS+" \n"))
-  statistic_pie = vis.pie(X=classes_stats, opts=dict(legend=classes,  title = 'Detected classes',))
-  features_line = vis.line(X=np.column_stack(([0]*nb_columns)), Y=np.column_stack(np.asarray(data_test_df[0][:])), opts=dict(legend=data_test_df_columns,xlabel = 'Index', ylabel = 'Feature Value', title = 'Values of extracted features for each sample'))
-  count = 0
-  for x in range(PREDICTION_LIMIT):
-    i=0
-    while i<len(classes):
-      if predict_data[x] == classes[i]:
+      vis.line(Y=np.array([0]), X=np.array([count]), win=target_class_line, update='append')
+
+  if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'):
+    for i in range(len(classes)):
+      if dataframe_predictions_values_str[x] == classes[i]:
         classes_stats[i] += 1
-        if classes[i]== TARGETED_CLASS:
-          message = "%s\n"%(idx_test_df[x])
-          vis.text(message, win=list_detected_simples_text, append=True)
-          vis.line(Y = np.array([1]), X = np.array([count]), win = targeted_class_line, update = 'append')
+        vis.pie(X=classes_stats, win=statistic_pie, opts=dict(legend=classes, title='Classification results'))
+
+        match = (classes[i] == TARGET_CLASS)
+        if match:
+          message = "%s\n"%(dataframe_idx_values[x])
+          vis.text(message, win=list_detected_samples_text, append=True)
+          vis.line(Y=np.array([1]), X=np.array([count]), win=target_class_line, update='append')
         else:
-          vis.line(Y = np.array([0]), X = np.array([count]), win = targeted_class_line, update = 'append')
-        count += 1
-        vis.pie(X = classes_stats, win = statistic_pie, opts=dict(legend=classes,  title = 'Classification results'))
-        i = len(classes)
-      i+= 1
-    vis.line(X=np.column_stack(([count]*nb_columns)), Y=np.column_stack((np.asarray(data_test_df[x][:]))), win=features_line, update='append')
+          vis.line(Y=np.array([0]), X=np.array([count]), win=target_class_line, update='append')
+  count += 1
+#-------------------------------------------------------------
 
-try:
-  is_clustering_algorithm = variables.get("CLUSTERING_MEASURE")
-except NameError:
-  is_clustering_algorithm = 'False' 
-  
-if IS_LABELED_DATA == 'True' and not(is_clustering_algorithm == 'True'):
-  LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
-  label_test_df = pd.read_json(LABEL_TEST_DF_JSON, orient='split') 
-  score_text = vis.text("Model scoring:\n")
-  if len(classes)==2:
-    fpr, tpr, thresholds = metrics.roc_curve(np.asarray(label_test_df), np.asarray(predict_data_df))
-    vis.line(X=fpr, Y=tpr, opts=dict(xlabel = 'False Positive Rate', ylabel = 'True Positive Rate', title = 'ROC Curve'))
-  # CLASSIFICATION MEASURES
-  try:
-    is_classification_algorithm = variables.get("CLASSIFICATION_MEASURE")
-    if is_classification_algorithm == 'True':
-      X_matrix = confusion_matrix(label_test_df, predict_data_df)
-      confusion_bar = vis.bar(X = X_matrix, opts=dict(stacked=True, legend=classes, rownames=classes, title = 'Predictive model performance'))
-      vis.text("CLASSIFICATION MEASURES", win=score_text, append=True)
-      vis.text("ACCURACY SCORE:", win=score_text, append=True)
-      vis.text(str(accuracy_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-      vis.text("PRECISION SCORE:", win=score_text, append=True)
-      vis.text(str(precision_score(label_test_df.values.ravel(), predict_data_df, average='micro')), win=score_text, append=True)
-      vis.text("CONFUSION MATRIX:", win=score_text, append=True)
-      vis.text(str(confusion_matrix(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-  except NameError:
-    classification_algorithm = None
+score_text = vis.text("Model scoring")
+if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'):
+  vis.bar(X=model_cm, opts=dict(stacked=True, legend=classes, rownames=classes, title='Predictive model performance'))
+  vis.line(X=model_fpr, Y=model_tpr, opts=dict(xlabel='False Positive Rate', ylabel='True Positive Rate', title='ROC Curve'))
+  vis.text("Classification scores", win=score_text, append=True)
+  vis.text("Accuracy score:", win=score_text, append=True)
+  vis.text(str(model_as), win=score_text, append=True)
+  vis.text("Precision score:", win=score_text, append=True)
+  vis.text(str(model_ps), win=score_text, append=True)
+  vis.text("Confusion matrix:", win=score_text, append=True)
+  vis.text(str(model_cm), win=score_text, append=True)
 
-  # REGRESSION MEASURES
-  try:
-    is_regression_algorithm = variables.get("REGRESSION_MEASURE")
-    if is_regression_algorithm == 'True':
-      vis.text("REGRESSION MEASURES", win=score_text, append=True)
-      vis.text("MEAN SQUARED ERROR:", win=score_text, append=True)
-      vis.text(str(mean_squared_error(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-      vis.text("MEAN ABSOLUTE ERROR:", win=score_text, append=True)
-      vis.text(str(mean_absolute_error(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-      vis.text("COEFFICIENT DE DETERMINATION:", win=score_text, append=True)
-      vis.text(str(r2_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-  except NameError:        
-    is_regression_algorithm = None
+if is_labeled_data and alg.type == 'regression':
+  vis.text("Regression scores", win=score_text, append=True)
+  vis.text("Mean squared error:", win=score_text, append=True)
+  vis.text(str(model_mse), win=score_text, append=True)
+  vis.text("Mean absolute error:", win=score_text, append=True)
+  vis.text(str(model_mae), win=score_text, append=True)
+  vis.text("Coefficient of determination:", win=score_text, append=True)
+  vis.text(str(model_r2s), win=score_text, append=True)
 
-print("--- END Visdom_Visualize_Results ---")
+print("END " + __file__)
 ]]>
           </code>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"/>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            386
+        </positionTop>
+        <positionLeft>
+            940.63330078125
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
 </job>
