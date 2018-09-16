@@ -8,11 +8,11 @@
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
-    <variable name="ACTION" value="Finish_MySQL" model="PA:LIST(Pause_MySQL, Resume_MySQL, Finish_MySQL)"/>
-    <variable name="MYSQL_DATABASE" value="activeeon" />
     <variable name="MYSQL_INSTANCE_NAME" value="mysql-server" model="PA:SPEL( (variables[MYSQL_INSTANCE_NAME] = &quot;mysql-server-&quot;+(T(java.lang.Math).random()*1000).intValue()) instanceof T(String) )"/>
+    <variable name="MYSQL_USER" value="demo" />
     <variable name="MYSQL_PASSWORD" value="proactive" />
-    <variable name="MYSQL_USER" value="mlos" />
+    <variable name="MYSQL_DATABASE" value="activeeon" />
+    <variable name="ACTION" value="Finish_MySQL" model="PA:LIST(Pause_MySQL, Resume_MySQL, Finish_MySQL)"/>
   </variables>
   <description>
     <![CDATA[ This workflow shows how to use PCA to ease deployment of service dependencies and interact with a MySQL database. It is a complete example putting together the use of
@@ -29,11 +29,12 @@
     <task name="Import_from_MySQL">
       <description>
         <![CDATA[ This task allows to import data from MySQL database.
-It requires the following third-party credentials: MYSQL_USERNAME and MYSQL_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
-It uses the following variables: 
+It requires the following third-party credential:  {key: mysql://<username>@<host>:<port>, value: MYSQL_PASSWORD}. Please refer to the User documentation to learn how to add third-party credentials.
+It uses the following variables:
 $LABEL (optional) used when the imported data is labeled. Then, the user can specify the label column name.
 $MYSQL_QUERY (required) is the user's sql query.
-$OUTPUT_FILE (optional) is a relative path in the data space used to save the results in a CSV file. 
+$OUTPUT_FILE (optional) is a relative path in the data space used to save the results in a CSV file.
+$OUTPUT_TYPE (optional) if set to HTML, it allows to preview the results in Scheduler Portal in an HTML format. Default is CSV
 This task uses also the task variable RMDB_DRIVER as a driver to connect to the database. The specified default driver "mysqlconnector" as well as "pymysql" are already provided for this task. To use another driver, make sure you have it properly installed before.
 The imported data is exported in a JSON format using the variable $DATAFRAME_JSON. ]]>
       </description>
@@ -42,6 +43,7 @@ The imported data is exported in a JSON format using the variable $DATAFRAME_JSO
         <variable name="MYSQL_QUERY" value="SELECT * FROM diabetes" inherited="false" />
         <variable name="RDBMS_DRIVER" value="mysqlconnector" inherited="false" />
         <variable name="OUTPUT_FILE" value="output-mysql.csv" inherited="false" />
+        <variable name="OUTPUT_TYPE" value="HTML" inherited="false" model="PA:List(CSV,HTML)"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mysql.png"/>
@@ -55,22 +57,23 @@ The imported data is exported in a JSON format using the variable $DATAFRAME_JSO
           <script>
             <code language="python">
               <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
 #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters 
+# Prepare Docker parameters
 containerName = 'activeeon/dlm3'
-dockerRunCommand =  'docker run ' 
-dockerParameters = '--rm ' 
-# Prepare ProActive home volume 
-paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-# Prepare working directory (For Dataspaces and serialized task file) 
-workspaceHost = localspace 
-workspaceContainer = localspace 
-workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-# Prepare container working directory 
-containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+dockerRunCommand = 'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
 preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 ]]>
             </code>
@@ -87,60 +90,60 @@ from sqlalchemy import create_engine
 import sys
 
 RDBMS_NAME = 'mysql'
-HOSTNAME = variables.get("MYSQL_HOSTNAME")
+RDBMS_DRIVER = variables.get("RDBMS_DRIVER")
+MYSQL_URL_KEY = "mysql://<username>@<host>:<port>"
+
+HOST = variables.get("MYSQL_HOST")
 PORT = int(variables.get("MYSQL_PORT"))
 DATABASE = variables.get("MYSQL_DATABASE")
-MYSQL_USER = variables.get("MYSQL_USER")
-RDBMS_DRIVER = variables.get("RDBMS_DRIVER")
-MYSQL_URL_KEY = "mysql://<username>@<hostname>:<port>"
-# This key is used for getting the password from 3rd party credentials.
-MYSQL_PASSWORD_KEY = "mysql://" + MYSQL_USER + "@" + HOSTNAME + ":" + str(PORT)
-MYSQL_PASSWORD=credentials.get(MYSQL_PASSWORD_KEY)
-OUTPUT_FILE = variables.get("OUTPUT_FILE")
-SQL_QUERY = variables.get("MYSQL_QUERY")
+USER = variables.get("MYSQL_USER")
 
-if not HOSTNAME:
-    print("ERROR: The MYSQL_HOSTNAME variable is not provided by the user.")
+# This key is used for getting the password from 3rd party credentials.
+MYSQL_PASSWORD_KEY = "mysql://" + USER + "@" + HOST + ":" + str(PORT)
+MYSQL_PASSWORD=credentials.get(MYSQL_PASSWORD_KEY)
+
+SQL_QUERY = variables.get("MYSQL_QUERY")
+OUTPUT_FILE = variables.get("OUTPUT_FILE")
+OUTPUT_TYPE = variables.get("OUTPUT_TYPE")
+
+if not HOST:
+    print("ERROR: MYSQL_HOST variable is not provided by the user.")
     sys.exit(1)
 if not PORT:
-    print("ERROR: The MYSQL_PORT variable is not provided by the user. Using the default value:", PORT)
     PORT = 3360
+    print("WARNING: MYSQL_PORT variable is not provided by the user. Using the default value:", PORT)
 if not DATABASE:
-    print("ERROR: The MYSQL_DATABASE variable is not provided by the user.")
+    print("ERROR: MYSQL_DATABASE variable is not provided by the user.")
     sys.exit(1)
-if not MYSQL_USER:
-    print("ERROR: The MYSQL_USER is not provided by the user.")
+if not USER:
+    print("ERROR: MYSQL_USER variable is not provided by the user.")
     sys.exit(1)
 if not MYSQL_PASSWORD:
     print("ERROR: Please add your mysql password to 3rd-party credentials in the scheduler-portal under the key :\"" + MYSQL_URL_KEY + "\"")
     sys.exit(1)
 if not SQL_QUERY:
-    print("ERROR: The MYSQL_QUERY is not provided by the user.")
+    print("ERROR: MYSQL_QUERY variable is not provided by the user.")
     sys.exit(1)
-    
-IS_LABELED_DATA = 'False'
 
-try:
-    LABEL = variables.get("LABEL")
-    if LABEL:
-        IS_LABELED_DATA='True'
-except NameError:
-    pass
+IS_LABELED_DATA = 'False'
+LABEL = variables.get("LABEL")
+if LABEL:
+    IS_LABELED_DATA='True'
 
 # Please refer to SQLAlchemy doc for more info about database urls.
 # http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls
 # Never print this to avoid displaying your credentials in the logs
 print("BEGIN Import_Data from " + RDBMS_NAME + " database using " + variables.get("RDBMS_DRIVER") + " connector")
 print("EXECUTING QUERY...")
-print('MYSQL_HOSTNAME=' + HOSTNAME)
-print('MYSQL_USER=' + MYSQL_USER)
-print('MYSQL_PORT=', PORT)
-print('MYSQL_DATABASE=' + DATABASE)
-print('MYSQL_QUERY=' + SQL_QUERY)
+print('MYSQL_HOST=' , HOST)
+print('MYSQL_PORT=' , PORT)
+print('MYSQL_USER=' , USER)
+print('MYSQL_DATABASE=' , DATABASE)
+print('MYSQL_QUERY=' , SQL_QUERY)
 if OUTPUT_FILE:
-    print('OUTPUT_FILE=' + OUTPUT_FILE)
+    print('OUTPUT_FILE=' , OUTPUT_FILE)
 
-database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(RDBMS_NAME,RDBMS_DRIVER,MYSQL_USER,MYSQL_PASSWORD,HOSTNAME,PORT,DATABASE)
+database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(RDBMS_NAME,RDBMS_DRIVER,USER,MYSQL_PASSWORD,HOST,PORT,DATABASE)
 engine = create_engine(database_url)
 
 with engine.connect() as conn, conn.begin():
@@ -151,19 +154,18 @@ columns_name = dataframe.columns
 columns_number = len(columns_name)
 
 if IS_LABELED_DATA == 'True':
-  label_index= dataframe.columns.get_loc(LABEL)
-  data_indices=[x for i,x in enumerate(range(columns_number)) if i!=label_index]
-  data  = dataframe.values[:,data_indices]
-  label = dataframe.values[:,label_index]
-  data_df = pd.DataFrame(data=data,columns=columns_name[data_indices])
-  label_df = pd.DataFrame(data=label,columns=[columns_name[label_index]])
-  LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
-  LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
-  
+    label_index= dataframe.columns.get_loc(LABEL)
+    data_indices=[x for i,x in enumerate(range(columns_number)) if i!=label_index]
+    data  = dataframe.values[:,data_indices]
+    label = dataframe.values[:,label_index]
+    data_df = pd.DataFrame(data=data,columns=columns_name[data_indices])
+    label_df = pd.DataFrame(data=label,columns=[columns_name[label_index]])
+    LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
+    LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
 elif IS_LABELED_DATA == 'False':
-  data = dataframe.values
-  data_df = pd.DataFrame(data=data,columns=columns_name)
-  
+    data = dataframe.values
+    data_df = pd.DataFrame(data=data,columns=columns_name)
+
 DATAFRAME_JSON = dataframe.to_json(orient='split')
 COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
 DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
@@ -173,18 +175,40 @@ if IS_LABELED_DATA == 'True':
     variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
     variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
     dataframe=data_df.join(label_df)
-    
+
 variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
 variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
 variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
 variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
 variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
 
-# Write results to the task result in CSV format
-result = dataframe.to_csv(index=False).encode('utf-8')
-resultMetadata.put("file.extension", ".csv")
-resultMetadata.put("file.name", "result.csv")
-resultMetadata.put("content.type", "text/csv")
+#***************# HTML PREVIEW STYLING #***************#
+styles = [
+    dict(selector="th", props=[("font-weight", "bold"),
+                               ("text-align", "center"),
+                               ("background", "#0B6FA4"),
+                               ("color", "white")]),
+    dict(selector="td", props=[("text-align", "right"),
+                               ("padding", "3px 5px"),
+                               ("border-bottom", "1px solid #999999")]),
+    dict(selector="table", props=[("border", "1px solid #999999"),
+                                  ("text-align", "center"),
+                                  ("width", "100%"),
+                                  ("border", "1px solid #999999")])
+]
+#******************************************************#
+
+if OUTPUT_TYPE == "HTML":
+    result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "output.html")
+    resultMetadata.put("content.type", "text/html")
+else:
+    # Write results to the task result in CSV format
+    result = dataframe.to_csv(index=False).encode('utf-8')
+    resultMetadata.put("file.extension", ".csv")
+    resultMetadata.put("file.name", "result.csv")
+    resultMetadata.put("content.type", "text/csv")
 
 # If an OUTPUT_FILE path in the dataspace is designated, then write to this file.
 if OUTPUT_FILE:
@@ -202,14 +226,14 @@ print("END Import_Data")
     <task name="Export_to_MySQL">
       <description>
         <![CDATA[ This task allows to export data to MySQL database.
-It requires the following third-party credentials: MYSQL_USERNAME and MYSQL_PASSWORD. Please refer to the User documentation to learn how to add third-party credentials.
-It uses the following variables: 
+It requires the following third-party credential: {key: mysql://<username>@<host>:<port>, value: MYSQL_PASSWORD}. Please refer to the User documentation to learn how to add third-party credentials.
+It uses the following variables:
 $MYSQL_TABLE (required) is the table name.
-$INSERT_MODE (required) indicates the behavior to follow when the table exists in the database amongst: 
+$INSERT_MODE (required) indicates the behavior to follow when the table exists in the database amongst:
 . fail: If table exists, do nothing.
 . replace: If table exists, drop it, recreate it, and insert data.
 . append: (default) If table exists, insert data. Create if does not exist.
-$INPUT_FILE (required) is the relative path in the data space of the CSV file that contains data to be imported. The string could also be a URL. Valid URL schemes include http, ftp, s3, and file. 
+$INPUT_FILE (required) is the relative path in the data space of the CSV file that contains data to be imported. The string could also be a URL. Valid URL schemes include http, ftp, s3, and file.
 This task uses also the task variable RMDB_DRIVER as a driver to connect to the database. The specified default driver "mysqlconnector" as well as "pymysql" are already provided for this task. To use another driver, make sure you have it properly installed before. ]]>
       </description>
       <variables>
@@ -233,22 +257,23 @@ This task uses also the task variable RMDB_DRIVER as a driver to connect to the 
           <script>
             <code language="python">
               <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
 #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-# Prepare Docker parameters 
+# Prepare Docker parameters
 containerName = 'activeeon/dlm3'
-dockerRunCommand =  'docker run ' 
-dockerParameters = '--rm ' 
-# Prepare ProActive home volume 
-paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-# Prepare working directory (For Dataspaces and serialized task file) 
-workspaceHost = localspace 
-workspaceContainer = localspace 
-workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-# Prepare container working directory 
-containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+dockerRunCommand = 'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
 preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 ]]>
             </code>
@@ -265,43 +290,45 @@ from sqlalchemy import create_engine
 import sys
 
 RDBMS_NAME = 'mysql'
-HOSTNAME = variables.get("MYSQL_HOSTNAME")
+RDBMS_DRIVER = variables.get("RDBMS_DRIVER")
+MYSQL_URL_KEY = "mysql://<username>@<host>:<port>"
+
+HOST = variables.get("MYSQL_HOST")
 PORT = int(variables.get("MYSQL_PORT"))
 DATABASE = variables.get("MYSQL_DATABASE")
-MYSQL_USER = variables.get("MYSQL_USER")
-RDBMS_DRIVER = variables.get("RDBMS_DRIVER")
-MYSQL_URL_KEY = "mysql://<username>@<hostname>:<port>"
+USER = variables.get("MYSQL_USER")
+
 # This key is used for getting the password from 3rd party credentials.
-MYSQL_PASSWORD_KEY = "mysql://" + MYSQL_USER + "@" + HOSTNAME + ":" + str(PORT)
+MYSQL_PASSWORD_KEY = "mysql://" + USER + "@" + HOST + ":" + str(PORT)
 MYSQL_PASSWORD=credentials.get(MYSQL_PASSWORD_KEY)
-INPUT_FILE = variables.get("INPUT_FILE")
+
 SQL_TABLE = variables.get("MYSQL_TABLE")
+INPUT_FILE = variables.get("INPUT_FILE")
 INSERT_MODE = variables.get("INSERT_MODE")
 
-if not HOSTNAME:
-    print("ERROR: The MYSQL_HOSTNAME variable is not provided by the user.")
+if not HOST:
+    print("ERROR: MYSQL_HOST variable is not provided by the user.")
     sys.exit(1)
 if not PORT:
-    print("ERROR: The MYSQL_PORT variable is not provided by the user. Using the default value:", PORT)
     PORT = 3360
+    print("WARNING: MYSQL_PORT variable is not provided by the user. Using the default value: ", PORT)
 if not DATABASE:
-    print("ERROR: The MYSQL_DATABASE variable is not provided by the user.")
+    print("ERROR: MYSQL_DATABASE variable is not provided by the user.")
     sys.exit(1)
-if not MYSQL_USER:
-    print("ERROR: The MYSQL_USER is not provided by the user.")
+if not USER:
+    print("ERROR: MYSQL_USER variable is not provided by the user.")
     sys.exit(1)
 if not MYSQL_PASSWORD:
-    print("ERROR: Please add your mysql password to 3rd-party credentials in the scheduler-portal under the key :\"" + MYSQL_URL_KEY + "\"")
+    print("ERROR: Please add your MySQL password to 3rd-party credentials in the scheduler-portal under the key :\"" + MYSQL_URL_KEY + "\"")
     sys.exit(1)
 if not INPUT_FILE:
-    print("ERROR: The INPUT_FILE is not provided by the user.")
+    print("ERROR: INPUT_FILE variable is not provided by the user.")
     sys.exit(1)
 if not SQL_TABLE:
-    print("ERROR: The MYSQL_TABLE is not provided by the user.")
+    print("ERROR: MYSQL_TABLE variable is not provided by the user.")
     sys.exit(1)
 if not INSERT_MODE:
     INSERT_MODE = 'append'
-
 
 # Please refer to SQLAlchemy doc for more info about database urls.
 # http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls
@@ -309,17 +336,17 @@ if not INSERT_MODE:
 
 print("BEGIN Export_Data to " + RDBMS_NAME + " database using " + variables.get("RDBMS_DRIVER") + " connector")
 print("INSERTING DATA IN MYSQL...")
-print('MYSQL_HOSTNAME='+HOSTNAME)
-print('MYSQL_PORT=', PORT)
-print('MYSQL_USER=', MYSQL_USER)
-print('MYSQL_DATABASE='+DATABASE)
-print('MYSQL_TABLE='+SQL_TABLE)
-database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(RDBMS_NAME,RDBMS_DRIVER,MYSQL_USER,MYSQL_PASSWORD,HOSTNAME,PORT,DATABASE)
+print('MYSQL_HOST=' , HOST)
+print('MYSQL_PORT=' , PORT)
+print('MYSQL_USER=' , USER)
+print('MYSQL_DATABASE=' , DATABASE)
+print('MYSQL_TABLE=' , SQL_TABLE)
+database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(RDBMS_NAME,RDBMS_DRIVER,USER,MYSQL_PASSWORD,HOST,PORT,DATABASE)
 engine = create_engine(database_url)
 dataframe = pd.read_csv(INPUT_FILE, sep='\s+|;|,',index_col=None, engine='python')
 with engine.connect() as conn, conn.begin():
      dataframe.to_sql(SQL_TABLE, conn, schema=None, if_exists=INSERT_MODE, index=True, index_label=None, chunksize=None, dtype=None)
-            
+
 print("END Export_Data")
 ]]>
           </code>
@@ -329,7 +356,7 @@ print("END Export_Data")
     </task>
     <task name="Parse_Endpoint">
       <description>
-        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOSTNAME and a PORT number to use them as an input in the data connector tasks. ]]>
+        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOST and a PORT number to use them as an input in the data connector tasks. ]]>
       </description>
       <depends>
         <task ref="Start_MySQL"/>
@@ -338,30 +365,17 @@ print("END Export_Data")
         <script>
           <code language="groovy">
             <![CDATA[
-def mysqlEndpoint = variables.get("ENDPOINT")
-def mysqlHost
-def mysqlPort
-
-if (mysqlEndpoint != null){
-  mysqlEndpoint = mysqlEndpoint.replace("http://", "")
-  mysqlHost = mysqlEndpoint.split(":")[0]
-  variables.put("MYSQL_HOSTNAME", mysqlHost)
-  mysqlPort = mysqlEndpoint.split(":")[1]
-  variables.put("MYSQL_PORT", mysqlPort)
-  sleep(3000)
-}
-else{
-  throw new IOException("[ERROR] MySQL endpoint not found")
-}
+def endpoint = new URL(variables.get("ENDPOINT" ))
+variables.put("MYSQL_HOST",endpoint.getHost())
+variables.put("MYSQL_PORT",endpoint.getPort())
+// Wait for database sever to be up and fully running.
+sleep(3000)
 ]]>
           </code>
         </script>
       </scriptExecutable>
     </task>
-    <task name="Start_MySQL"
-    
-    
-    onTaskError="cancelJob" >
+    <task name="Start_MySQL" onTaskError="cancelJob" >
       <description>
         <![CDATA[ Start the MySQL server as a service. ]]>
       </description>
