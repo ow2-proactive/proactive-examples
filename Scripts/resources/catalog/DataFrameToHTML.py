@@ -1,3 +1,11 @@
+"""
+import numpy as np
+df = pd.DataFrame(np.random.randn(50, 4), columns=list('ABCD'))
+print(df.head())
+
+df_html = dataframe2html(df)
+print(df_html)
+"""
 import pandas as pd
 
 def dataframe2html(dataframe):
@@ -10,15 +18,15 @@ def dataframe2html(dataframe):
       border: 1px solid #999999;
       text-align: center;
       border-collapse: collapse;
-      width: 100%;
+      width: 100%; 
     }
     td {
-      border: 1px solid #999999;
+      border: 1px solid #999999;         
       padding: 3px 2px;
       font-size: 13px;
       border-bottom: 1px solid #999999;
-      #border-bottom: 1px solid #FF8C00;
-      border-bottom: 1px solid #0B6FA4;
+      #border-bottom: 1px solid #FF8C00;  
+      border-bottom: 1px solid #0B6FA4;   
     }
     th {
       font-size: 17px;
@@ -26,9 +34,9 @@ def dataframe2html(dataframe):
       color: #FFFFFF;
       text-align: center;
       background: #0B6FA4;
-      #background: #E7702A;
+      #background: #E7702A;       
       #border-left: 2px solid #999999
-      border-bottom: 1px solid #FF8C00;
+      border-bottom: 1px solid #FF8C00;            
     }
     """
     result = """
