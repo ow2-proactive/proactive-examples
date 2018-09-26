@@ -1,3 +1,10 @@
+"""
+input_variables = {'task.dataframe_id': None}
+fill_input_variables(input_variables)
+
+dataframe_id = input_variables['task.dataframe_id']
+print("dataframe id: ", dataframe_id)
+"""
 def fill_input_variables(input_variables):
   for key in input_variables.keys():
     for res in results:
@@ -5,4 +12,3 @@ def fill_input_variables(input_variables):
       if value is not None:
         input_variables[key] = value
         break
-  return input_variables
