@@ -47,14 +47,15 @@ public class WorkflowsTest {
 
     private final static String BOOLEAN_MODEL = "PA:Boolean";
 
+    private final static String PCW_RULE_NAME = "rule";
+
     private final String filePath;
 
     private TaskFlowJob job = null;
 
     private static boolean isPackageDirIncludingCatalogObjects(Path packagePath) {
-        return Files.isDirectory(packagePath) &&
-                Files.exists(Paths.get(packagePath.toString(), METADATA_JSON_FILE)) &&
-                Files.exists(Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH));
+        return Files.isDirectory(packagePath) && Files.exists(Paths.get(packagePath.toString(), METADATA_JSON_FILE)) &&
+               Files.exists(Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH));
     }
 
     public WorkflowsTest(String filePath) {
@@ -70,18 +71,19 @@ public class WorkflowsTest {
     @Parameterized.Parameters(name = "{index}: testing workflow - {0}")
     public static Collection<String> data() throws IOException {
         return Files.list(Paths.get(""))
-                                  .filter(packagePath -> isPackageDirIncludingCatalogObjects(packagePath))
-                                  .map(packagePath -> Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH))
-                                  .flatMap(resourcesPath -> {
-                                      try {
-                                          return Files.list(resourcesPath)
-                                                      .filter(file -> file.toString().endsWith(".xml")).filter(file -> !file.toString().toLowerCase().contains("rule"));
-                                      } catch (IOException e) {
-                                          throw new RuntimeException(e);
-                                      }
-                                  })
-                                  .map(workflowPath -> workflowPath.toString())
-                .collect(Collectors.toList());
+                    .filter(packagePath -> isPackageDirIncludingCatalogObjects(packagePath))
+                    .map(packagePath -> Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH))
+                    .flatMap(resourcesPath -> {
+                        try {
+                            return Files.list(resourcesPath)
+                                        .filter(file -> file.toString().endsWith(".xml"))
+                                        .filter(file -> !file.toString().toLowerCase().contains(PCW_RULE_NAME));
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
+                    .map(workflowPath -> workflowPath.toString())
+                    .collect(Collectors.toList());
     }
 
     @Test
