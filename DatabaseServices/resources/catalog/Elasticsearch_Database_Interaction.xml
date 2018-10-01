@@ -8,7 +8,7 @@
     onTaskError="continueJobExecution"
      maxNumberOfExecution="2">
   <variables>
-    <variable name="ACTION" value="Finish_Elasticsearch" model="PA:LIST(Stop_Elasticsearch, Resume_Elasticsearch, Finish_Elasticsearch)"/>
+    <variable name="ACTION" value="Finish_Elasticsearch" model="PA:LIST(Pause_Elasticsearch, Resume_Elasticsearch, Finish_Elasticsearch)"/>
     <variable name="ELASTICSEARCH_INSTANCE_NAME" value="elasticsearch-server" model="PA:SPEL( (variables[ELASTICSEARCH_INSTANCE_NAME] = &quot;elasticsearch-server-&quot;+(T(java.lang.Math).random()*1000).intValue()) instanceof T(String) )"/>
   </variables>
   <description>
@@ -25,7 +25,7 @@
   <taskFlow>
     <task name="Parse_Endpoint">
       <description>
-        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOSTNAME and a PORT number to use them as an input in the data connector tasks.]]>
+        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOST and a PORT number to use them as an input in the data connector tasks.]]>
       </description>
       <depends>
         <task ref="Start_Elasticsearch"/>
@@ -34,21 +34,11 @@
         <script>
           <code language="groovy">
             <![CDATA[
-def elasticsearchEndpoint = variables.get("ENDPOINT")
-def elasticsearchHost
-def elasticsearchPort
-
-if (elasticsearchEndpoint != null){
-  elasticsearchEndpoint = elasticsearchEndpoint.replace("http://", "")
-  elasticsearchHost = elasticsearchEndpoint.split(":")[0]
-  variables.put("ELASTICSEARCH_HOSTNAME", elasticsearchHost)
-  elasticsearchPort = elasticsearchEndpoint.split(":")[1]
-  variables.put("ELASTICSEARCH_PORT", elasticsearchPort)
-
-}
-else{
-  throw new IOException("[ERROR] Elasticsearch endpoint not found")
-}
+def endpoint = new URL(variables.get("ENDPOINT" ))
+variables.put("ELASTICSEARCH_HOST",endpoint.getHost())
+variables.put("ELASTICSEARCH_PORT",endpoint.getPort())
+// Wait for database sever to be up and fully running.
+sleep(3000)
 ]]>
           </code>
         </script>
@@ -184,7 +174,7 @@ println("--- END " + variables.get("PA_TASK_NAME") + " ---")
     <task name="Import_from_Elasticsearch">
       <description>
         <![CDATA[ Load data from Elasticsearch.
-If your server requires authentification, then use the $ELASTICSEARCH_USER variable then add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT>
+If your server requires authentification, then use the $ELASTICSEARCH_USER variable then add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOST>:<ELASTICSEARCH_PORT>
 It also requires a $QUERY and an $INDEX to fetch data.
 The imported data is exported in a JSON format. ]]>
       </description>
@@ -237,14 +227,14 @@ from elasticsearch import Elasticsearch
 
 print("BEGIN Import Data from Elasticsearch")
 
-HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
+HOST = variables.get("ELASTICSEARCH_HOST")
 PORT = int(variables.get("ELASTICSEARCH_PORT"))
 INDEX = variables.get("ELASTICSEARCH_INDEX")
 USER = variables.get("ELASTICSEARCH_USER")
 PASSWORD = None
 
-if not HOSTNAME:
-    print("[ERROR] ELASTICSEARCH_HOSTNAME not defined by the user.")
+if not HOST:
+    print("[ERROR] ELASTICSEARCH_HOST not defined by the user.")
     sys.exit(1)
 if not PORT:
     PORT = 9200
@@ -254,7 +244,7 @@ if not INDEX:
     print("[WARNING] ELASTICSEARCH_INDEX not defined by the user. Searching in all indices.")
 if USER:
     # This key is used for getting the password from 3rd party credentials.
-    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOSTNAME + ":" + str(PORT)
+    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOST + ":" + str(PORT)
     PASSWORD = credentials.get(ELASTICSEARCH_PASSWORD_KEY)
     if not PASSWORD:
         print("[ERROR] The ELASTICSEARCH_USER is used in junction with a password. Please add the corresponding password to 3rd-party credentials in the scheduler-portal under the key :\"" + ELASTICSEARCH_URL_KEY + "\"")
@@ -296,13 +286,13 @@ def read_elasticsearch(index, query, host, port, username, password):
     return res
 
 print("EXECUTING QUERY...")
-print('ELASTICSEARCH_HOSTNAME=', HOSTNAME)
+print('ELASTICSEARCH_HOST=', HOST)
 print('ELASTICSEARCH_PORT=', PORT)
 print('ELASTICSEARCH_USER=', USER)
 print('ELASTICSEARCH_INDEX=', INDEX)
 print('ELASTICSEARCH_QUERY=', json.dumps(QUERY))
 
-query_results= read_elasticsearch(INDEX, QUERY, HOSTNAME,  PORT,  USER,  PASSWORD)
+query_results= read_elasticsearch(INDEX, QUERY, HOST,  PORT,  USER,  PASSWORD)
 
 #**************Preview Data*********************
 result = json.dumps(query_results).encode('utf-8')
@@ -320,7 +310,7 @@ print("END Import Data from Elasticsearch")
       <description>
         <![CDATA[ This task allows exporting data to ElasticSearch.
 It uses the following variables:
-$ELASTICSEARCH_USER (optional) If your server requires authentification, then please add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOSTNAME>:<ELASTICSEARCH_PORT>
+$ELASTICSEARCH_USER (optional) If your server requires authentification, then please add the corresponding password to 3rd party credentials under the key: elasticsearch://<ELASTICSEARCH_USER>@<ELASTICSEARCH_HOST>:<ELASTICSEARCH_PORT>
 $ELASTICSEARCH_INDEX (required) the index to use. It is created if it does not exist
 $ELASTICSEARCH_DOC_TYPE (required) the documents type.
 $ELASTICSEARCH_INPUT (required) A JSON Object/Array to be indexed in ElasticSearch. This variable can:
@@ -433,7 +423,7 @@ def write_elasticsearch(index, inputs, doc_type, host, port, username, password)
             print("Failed to insert document.")
             return 'False'
 
-HOSTNAME = variables.get("ELASTICSEARCH_HOSTNAME")
+HOST = variables.get("ELASTICSEARCH_HOST")
 PORT = int(variables.get("ELASTICSEARCH_PORT"))
 INDEX = variables.get("ELASTICSEARCH_INDEX")
 DOC_TYPE = variables.get("ELASTICSEARCH_DOC_TYPE")
@@ -441,8 +431,8 @@ INPUT = get_input_json(variables.get("ELASTICSEARCH_INPUT"))
 USER = variables.get("ELASTICSEARCH_USER")
 PASSWORD= None
 
-if not HOSTNAME:
-    print("[ERROR] ELASTICSEARCH_HOSTNAME not defined by the user.")
+if not HOST:
+    print("[ERROR] ELASTICSEARCH_HOST not defined by the user.")
     sys.exit(1)
 if not PORT:
     PORT = 9200
@@ -455,20 +445,20 @@ if not DOC_TYPE:
     sys.exit(1)
 if USER:
     # This key is used for getting the password from 3rd party credentials.
-    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOSTNAME + ":" + str(PORT)
+    ELASTICSEARCH_PASSWORD_KEY = "elasticsearch://" + USER + "@" + HOST + ":" + str(PORT)
     PASSWORD = credentials.get(ELASTICSEARCH_PASSWORD_KEY)
     if not PASSWORD:
         print("[ERROR] The ELASTICSEARCH_USER is used in junction with a password. Please add the corresponding password to 3rd-party credentials in the scheduler-portal under the key :\"" + ELASTICSEARCH_URL_KEY + "\"")
         sys.exit(1)
 
 print('BEGIN Export Data to Elasticsearch')
-print('ELASTICSEARCH_HOSTNAME=', HOSTNAME)
+print('ELASTICSEARCH_HOST=', HOST)
 print('ELASTICSEARCH_PORT=', PORT)
 print('ELASTICSEARCH_USER=', USER)
 print('ELASTICSEARCH_INDEX=', INDEX)
 
 # Insert INPUT in Elasticsearch
-write_elasticsearch(INDEX, INPUT, DOC_TYPE, HOSTNAME,  PORT,  USER,  PASSWORD)
+write_elasticsearch(INDEX, INPUT, DOC_TYPE, HOST,  PORT,  USER,  PASSWORD)
 print("END Export Data to Elasticsearch")
 ]]>
           </code>
@@ -528,7 +518,7 @@ def instanceId = variables.get("INSTANCE_ID") as int
 println("INSTANCE_ID: " + instanceId)
 assert instanceId != null
 
-// Stop service
+// Execute action on service
 ServiceDescription service = new ServiceDescription()
 service.setBucketName("cloud-automation")
 service.setWorkflowName(variables.get("ACTION"))

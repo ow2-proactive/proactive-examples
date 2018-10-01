@@ -1,0 +1,388 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.11"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
+        name="stress_testing_Monte_Carlo_value_portfolio" projectName="Risk Valuation Workflows"
+        priority="normal"
+        onTaskError="continueJobExecution"
+>
+  <variables>
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
+    <variable name="nb_MC_per_ptf_value" value="10000" />
+    <variable name="nb_time_steps" value="255" />
+    <variable name="stress_horizon" value="1" />
+    <variable name="assets_params_file_path_from_dataspace" value="assets.txt" />
+    <variable name="assets_correlations_file_path_from_dataspace" value="assets_correlations.txt" />
+    <variable name="stressed_risk_free_rate_min_max_in_percent_and_steps" value="-10%,+10%,10" />
+    <variable name="stressed_volatility_min_max_in_percent_and_steps" value="-5%,+35%,10" />
+    <variable name="nb_replicated_tasks" value="4" />
+  </variables>
+  <description>
+    <![CDATA[ Portfolio Stress-Testing  according to user ranges of values. ]]>
+  </description>
+  <genericInformation>
+    <info name="workflow.icon"
+          value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png" />
+    <info name="Documentation"
+          value="http://activeeon.com/resources/montecarlo-value-risk-proactive-activeeon.pdf" />
+  </genericInformation>
+  <taskFlow>
+    <task name="plot_surface" >
+      <depends>
+        <task ref="merge_to_csv"/>
+      </depends>
+      <inputFiles>
+        <files  includes="stressed_PnLs.csv" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters
+  containerName = 'activeeon/dlm3'
+  dockerRunCommand =  'docker run '
+  dockerParameters = '--rm '
+  # Prepare ProActive home volume
+  paHomeHost = variables.get("PA_SCHEDULER_HOME")
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+  # Prepare working directory (For Dataspaces and serialized task file)
+  workspaceHost = localspace
+  workspaceContainer = localspace
+  workspaceVolume = '-v '+localspace +':'+localspace+' '
+  # Prepare container working directory
+  containerWorkingDirectory = '-w '+workspaceContainer+' '
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+# https://jakevdp.github.io/PythonDataScienceHandbook/04.12-three-dimensional-plotting.html
+
+import matplotlib as mpl
+mpl.use('Agg')
+from matplotlib import pyplot
+from mpl_toolkits.mplot3d import Axes3D
+import pandas as pd
+
+# Read data
+df = pd.read_csv('stressed_PnLs.csv', sep=' ')
+X = df['stressed_risk_free_rate_in_percent']
+Y = df['stressed_volatility_in_percent']
+Z = df['expected_PnL']
+
+ # Plot
+fig = pyplot.figure()
+ax = Axes3D(fig)
+ax.plot_trisurf(X, Y, Z, cmap='viridis', edgecolor='none');
+
+# Save the chart
+chart_file_name = 'stressed_PnLs.png'
+fig.savefig(chart_file_name)
+
+# Expose the chart
+with open(chart_file_name, "rb") as binary_file:
+    FILE_BIN = binary_file.read()
+result = FILE_BIN
+resultMetadata.put("file.name", chart_file_name)
+resultMetadata.put("content.type", "image/png")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+          756.5
+        </positionTop>
+        <positionLeft>
+          1126.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="init_stress_testing" >
+      <inputFiles>
+        <files  includes="$assets_params_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "init_stress_testing..."
+
+// Retrieve variables
+def stressed_risk_free_rate_min_max_in_percent_and_steps = variables.get("stressed_risk_free_rate_min_max_in_percent_and_steps")
+def stressed_volatility_min_max_in_percent_and_steps = variables.get("stressed_volatility_min_max_in_percent_and_steps")
+def nb_replicated_tasks = variables.get("nb_replicated_tasks") as Integer
+def assets_params_file_path_from_dataspace = variables.get("assets_params_file_path_from_dataspace")
+
+// Deduce other variables
+def stressed_risk_free_rate_min_max_in_percent_and_steps_arr = stressed_risk_free_rate_min_max_in_percent_and_steps.split(",")
+def stressed_risk_free_rate_min_in_percent = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[0].replaceAll("%", "") as Integer
+def stressed_risk_free_rate_max_in_percent = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[1].replaceAll("%", "") as Integer
+def stressed_risk_free_rate_steps = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[2] as Integer
+
+def stressed_volatility_min_max_in_percent_and_steps_arr = stressed_volatility_min_max_in_percent_and_steps.split(",")
+def stressed_volatility_min_in_percent = stressed_volatility_min_max_in_percent_and_steps_arr[0].replaceAll("%", "") as Integer
+def stressed_volatility_max_in_percent = stressed_volatility_min_max_in_percent_and_steps_arr[1].replaceAll("%", "") as Integer
+def stressed_volatility_steps = stressed_volatility_min_max_in_percent_and_steps_arr[2] as Integer
+
+def nb_assets = new File(localspace, assets_params_file_path_from_dataspace).text.split(System.getProperty("line.separator")).length
+variables["nb_assets"] = nb_assets
+
+// Check split params validity
+def total_nb_steps = stressed_risk_free_rate_steps * stressed_volatility_steps
+def nb_steps_per_task = total_nb_steps / nb_replicated_tasks
+if (total_nb_steps % nb_replicated_tasks != 0)
+	throw new Exception("total_nb_steps % nb_replicated_tasks != 0")
+
+// Compute ranges
+def stressed_risk_free_rate_step_size_in_percent = (stressed_risk_free_rate_max_in_percent - stressed_risk_free_rate_min_in_percent) / (stressed_risk_free_rate_steps - 1)
+def stressed_volatility_step_size_in_percent = (stressed_volatility_max_in_percent - stressed_volatility_min_in_percent) / (stressed_volatility_steps - 1)
+def i = 0, j = 0, step_id = 0, task_id = 0
+def steps_to_consider_per_task = []
+while (i < stressed_risk_free_rate_steps)
+{
+    // Compute current_stressed_risk_free_rate_in_percent
+    def current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_min_in_percent + i * stressed_risk_free_rate_step_size_in_percent
+    if (i == stressed_risk_free_rate_steps - 1)
+    	current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_max_in_percent
+
+    while (j < stressed_volatility_steps)
+    {
+        // Compute current_stressed_risk_free_rate_in_percent
+    	def current_stressed_volatility_in_percent = stressed_volatility_min_in_percent + j * stressed_volatility_step_size_in_percent
+    	if (j == stressed_volatility_steps - 1)
+    		current_stressed_volatility_in_percent = stressed_volatility_max_in_percent
+
+        // Add another step pair
+        steps_to_consider_per_task += [[current_stressed_risk_free_rate_in_percent, current_stressed_volatility_in_percent]]
+
+        // If we reach nb_steps_per_task
+        if (step_id == nb_steps_per_task - 1)
+        {
+            variables["steps_for_task_" + task_id] = steps_to_consider_per_task
+            //println step_id + " == " + (nb_steps_per_task - 1) + " => " + variables["steps_for_task_" + task_id]
+            steps_to_consider_per_task = []
+            task_id++
+            step_id = -1
+        }
+
+        // inc
+        j++
+        step_id++
+    }
+
+    // inc
+    i++
+    j = 0
+}
+
+println "... init_stress_testing"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_replicated_tasks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          372.5
+        </positionTop>
+        <positionLeft>
+          1126.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="simulate_ptf_PnLs" >
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="init_stress_testing"/>
+      </depends>
+      <inputFiles>
+        <files  includes="ptfPnLSimulations" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$assets_params_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$assets_correlations_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// FUNCTIONS //////////////////////////////
+
+
+void fromListToFile(stressed_assets_params_file_name, stressed_assets_params_list,stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+{
+    // Build the file content
+    def file_content = ""
+    stressed_assets_params_list.each {
+        file_content += it.join(",") + System.getProperty("line.separator")
+    }
+    file_content = file_content.substring(0, file_content.length() - 1)
+
+    // Write the content
+    new File(localspace, stressed_assets_params_file_name).text = file_content
+}
+
+void generate_stressed_assets_params_file(stressed_assets_params_file_name, assets_params_list, stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+{
+    def stressed_assets_params_list = []
+
+    assets_params_list.each {
+        // Stress current values
+        def current_risk_free_rate = it[1] as Double
+        def stressed_risk_free_rate = current_risk_free_rate * ( 1 + stressed_risk_free_rate_in_percent / 100)
+
+        def current_volatility = it[2] as Double
+        def stressed_volatility = current_volatility * ( 1 + stressed_volatility_in_percent / 100)
+
+        // Store stressed values
+        stressed_assets_params_list += [[it[0], stressed_risk_free_rate, stressed_volatility, it[3]]]
+    }
+
+    // Generate a file from the list
+    fromListToFile(stressed_assets_params_file_name, stressed_assets_params_list, stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+}
+
+
+// MAIN //////////////////////////////
+
+
+println "simulate_ptf_PnLs ..."
+
+// Retrieve variables
+def task_id = variables.get("PA_TASK_REPLICATION")
+def steps_to_consider = variables.get("steps_for_task_" + task_id)
+def nb_MC_per_ptf_value = variables.get("nb_MC_per_ptf_value")
+def nb_time_steps = variables.get("nb_time_steps")
+def stress_horizon = variables.get("stress_horizon")
+def nb_assets = variables.get("nb_assets")
+def assets_params_file_path_from_dataspace = variables.get("assets_params_file_path_from_dataspace")
+def assets_correlations_file_path_from_dataspace = variables.get("assets_correlations_file_path_from_dataspace")
+
+// Set executable permission
+def executable_file_path = new File(localspace, "ptfPnLSimulations").absolutePath
+["chmod","+x", executable_file_path].execute().waitForProcessOutput(System.out, System.err)
+
+// Stressed values from the assets params file and Execute the command
+def assets_params_file_content = new File(localspace, assets_params_file_path_from_dataspace).text
+def assets_params_file_lines = assets_params_file_content.split(System.getProperty("line.separator"))
+def assets_params_list = []
+assets_params_file_lines.each {
+    assets_params_list += it.split(",")
+}
+
+// For each stressed pair
+def stressed_PnLs = ""
+def assets_params_file_name = new File(localspace, assets_params_file_path_from_dataspace).name
+(steps_to_consider as List).each {
+    // Retrieve the stressed rates
+    def stressed_risk_free_rate_in_percent = it.get(0)
+    def stressed_volatility_in_percent = it.get(1)
+
+    // Generate a stressed assets params file
+    def stressed_assets_params_file_name = "stressed_" + stressed_risk_free_rate_in_percent + "_" + stressed_volatility_in_percent + "_" + assets_params_file_name
+    generate_stressed_assets_params_file(stressed_assets_params_file_name, assets_params_list, stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+
+    // Build the command and execute it
+    def cmd = ['/bin/sh', '-c', "docker run -v " + new File('.').absolutePath + ":/defaultglobal lballabio/quantlib:1.9-xenial /bin/bash -c 'cd defaultglobal; ./ptfPnLSimulations " + nb_MC_per_ptf_value + " " + nb_time_steps + " " + stress_horizon + " " + nb_assets + " " + stressed_assets_params_file_name + " " +  assets_correlations_file_path_from_dataspace + " " + task_id + "'"]
+    println cmd
+    def sout = new StringBuilder()
+    cmd.execute().waitForProcessOutput(sout, System.err)
+
+    def PnLs = sout.toString().split(" ")
+    def expected_PnL = 0
+    PnLs.each {
+        expected_PnL += it as Double
+    }
+    expected_PnL = expected_PnL / PnLs.size()
+    stressed_PnLs += stressed_risk_free_rate_in_percent + " " + stressed_volatility_in_percent + " " + expected_PnL + "\n"
+}
+stressed_PnLs = stressed_PnLs.substring(0, stressed_PnLs.length() - 1)
+
+// Write results into a file
+def file_name = "stressed_PnLs_" + task_id + ".txt"
+new File(localspace, file_name).text = stressed_PnLs
+result = file_name
+
+println "... simulate_ptf_PnLs"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="stressed_PnLs_$PA_TASK_REPLICATION.txt" accessMode="transferToUserSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+          500.5
+        </positionTop>
+        <positionLeft>
+          1126.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="merge_to_csv" >
+      <depends>
+        <task ref="simulate_ptf_PnLs"/>
+      </depends>
+      <inputFiles>
+        <files  includes="stressed_PnLs_*.txt" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def nb_replicated_tasks = variables.get("nb_replicated_tasks") as Integer
+def csv_content = "stressed_risk_free_rate_in_percent stressed_volatility_in_percent expected_PnL" + System.getProperty("line.separator")
+
+// Gather all stressed PnLs
+for (i=0; i<nb_replicated_tasks-1; i++)
+{
+    csv_content += new File(localspace, "stressed_PnLs_" + i + ".txt").text + System.getProperty("line.separator")
+}
+csv_content += new File(localspace, "stressed_PnLs_" + i + ".txt").text
+
+// Write them into the csv file
+new File(localspace, "stressed_PnLs.csv").text = csv_content
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="stressed_PnLs.csv" accessMode="transferToUserSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+          628.5
+        </positionTop>
+        <positionLeft>
+          1126.75
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+</job>

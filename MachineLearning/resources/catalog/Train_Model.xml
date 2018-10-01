@@ -1,54 +1,54 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Train_Model" onTaskError="continueJobExecution" priority="normal" projectName="6. Train" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Train_Model" onTaskError="continueJobExecution" priority="normal" projectName="6. Train" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
-    <![CDATA[ Train a model using a classification or regression algorithm. ]]>
+    <![CDATA[ Train a classification/clustering/anomaly detection model ]]>
   </description>
   <genericInformation>
 <info name="bucketName" value="machine-learning"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_model"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_anomaly_model"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
     <task name="Train_Model">
       <description>
-        <![CDATA[ Train a model using a classification or regression algorithm. ]]>
+        <![CDATA[ Train a classification/clustering/anomaly detection model ]]>
       </description>
       <variables>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" name="LABEL_COLUMN" value=""/>
+        <variable inherited="true" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+        <variable inherited="false" name="TASK_ENABLED" value="True"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_model"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_anomaly_model"/>
       </genericInformation>
       <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
               <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters 
+containerName = 'activeeon/dlm3' 
+dockerRunCommand =  'docker run ' 
+dockerParameters = '--rm ' 
+# Prepare ProActive home volume 
+paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+# Prepare working directory (For Dataspaces and serialized task file) 
+workspaceHost = localspace 
+workspaceContainer = localspace 
+workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+# Prepare container working directory 
+containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 ]]>
             </code>
           </script>
@@ -58,76 +58,245 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Train_Model")
+__file__ = variables.get("PA_TASK_NAME")
 
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid, json
+import random, pickle
 import pandas as pd
-import random
-import pickle
 
-IS_SUPERVIDED_ALGORITHM = variables.get("SUPERVISED_ALGORITHM")
-LABEL_TRAIN_DF_JSON = variables.get("LABEL_TRAIN_DF_JSON")
-DATA_TRAIN_DF_JSON  = variables.get("DATA_TRAIN_DF_JSON")
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+  is_labeled_data = True
 
-if IS_SUPERVIDED_ALGORITHM == 'True' and LABEL_TRAIN_DF_JSON != None and DATA_TRAIN_DF_JSON != None:
-  ALGORITHM_NAME = variables.get("ALGORITHM_NAME")
-  data_train_df = pd.read_json(DATA_TRAIN_DF_JSON, orient='split')
-  label_train_df = pd.read_json(LABEL_TRAIN_DF_JSON, orient='split')
-  model = None
-  
-  # CLASSIFICATION LEARNING
-  if ALGORITHM_NAME == 'SupportVectorMachines':
+input_variables = {
+  'task.dataframe_id': None, 
+  'task.dataframe_id_train': None,
+  'task.algorithm_json': None
+}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
+
+dataframe_id = None
+if input_variables['task.dataframe_id'] is not None:
+  dataframe_id = input_variables['task.dataframe_id']
+if input_variables['task.dataframe_id_train'] is not None:
+  dataframe_id = input_variables['task.dataframe_id_train']
+print("dataframe id (in): ", dataframe_id)
+
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
+dataframe = pd.read_json(dataframe_json, orient='split')
+
+algorithm_json = input_variables['task.algorithm_json']
+assert algorithm_json is not None
+algorithm = json.loads(algorithm_json)
+#-------------------------------------------------------------
+class obj(object):
+  def __init__(self, d):
+    for a, b in d.items():
+      if isinstance(b, (list, tuple)):
+        setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+      else:
+        setattr(self, a, obj(b) if isinstance(b, dict) else b)
+#-------------------------------------------------------------
+alg = obj(algorithm)
+model = None
+if alg.is_supervised:
+    
+#-------------------------------------------------------------
+  # Classification algorithms
+  #
+  if alg.name == 'SupportVectorMachines':
     from sklearn.svm import SVC
-    c_para = variables.get("C_PARA")
-    kernel_para = variables.get("KERNEL_PARA")
-    model = SVC(C=c_para, kernel=kernel_para)
+    model = SVC(
+      C=alg.C, 
+      kernel=alg.kernel
+    )
    
-  if ALGORITHM_NAME == 'GaussianNaiveBayes':
+  if alg.name == 'GaussianNaiveBayes':
     from sklearn.naive_bayes import GaussianNB
     model = GaussianNB()
   
-  if ALGORITHM_NAME == 'LogisticRegression':
+  if alg.name == 'LogisticRegression':
     from sklearn.linear_model import LogisticRegression
-    penalty_para = variables.get("PENALTY_PARA")
-    solver_para = variables.get("SOLVER_PARA") 
-    max_iter_para = variables.get("MAX_ITERATIONS_PARA")
-    n_jobs_para = variables.get("N_JOBS_PARA")
-    model = LogisticRegression(penalty=penalty_para, solver=solver_para, max_iter = int(max_iter_para), n_jobs = int(n_jobs_para))
-  
-  # REGRESSION LEARNING
-  if ALGORITHM_NAME == 'LinearRegression':
-    from sklearn.linear_model import LinearRegression
-    n_jobs_para = variables.get("N_JOBS_PARA")
-    model = LinearRegression(n_jobs = int(n_jobs_para))
+    model = LogisticRegression(
+      penalty=alg.penalty, 
+      solver=alg.solver, 
+      max_iter=alg.max_iter, 
+      n_jobs=alg.n_jobs
+    )
 
-  if ALGORITHM_NAME == 'SupportVectorRegression':
+  #-------------------------------------------------------------
+  # Regression algorithms
+  if alg.name == 'LinearRegression':
+    from sklearn.linear_model import LinearRegression
+    model = LinearRegression(n_jobs=alg.n_jobs)
+
+  if alg.name == 'SupportVectorRegression':
     from sklearn.svm import SVR
-    c_para = variables.get("C_PARA")
-    kernel_para = variables.get("KERNEL_PARA")
-    epsilon_para = variables.get("EPSILON_PARA")
-    model = SVR(C=c_para, kernel=kernel_para, epsilon=epsilon_para) 
+    model = SVR(
+      C=alg.C, 
+      kernel=alg.kernel, 
+      epsilon=alg.epsilon
+    )
   
-  if ALGORITHM_NAME == 'BayesianRidgeRegression':
-    from sklearn import linear_model
-    n_iter_para = variables.get("N_ITERATIONS_PARA")
-    alpha1_para = variables.get("ALPHA1_PARA")
-    alpha2_para = variables.get("ALPHA2_PARA")
-    lambda1_para = variables.get("LAMBDA1_PARA")
-    lambda2_para = variables.get("LAMBDA2_PARA")
-    model = linear_model.BayesianRidge(alpha_1=alpha1_para, alpha_2=alpha2_para, lambda_1=lambda1_para, lambda_2=lambda2_para, n_iter= int(n_iter_para))
-  
-  model.fit(data_train_df.values, label_train_df.values.ravel())
-  model_bin = pickle.dumps(model)
-  variables.put("MODEL", model_bin)
-  
-  print("END Train_Model")
+  if alg.name == 'BayesianRidgeRegression':
+    from sklearn.linear_model import BayesianRidge
+    model = BayesianRidge(
+      alpha_1=alg.alpha_1, 
+      alpha_2=alg.alpha_2, 
+      lambda_1=alg.lambda_1, 
+      lambda_2=alg.lambda_2, 
+      n_iter=alg.n_iter
+    )
+#-------------------------------------------------------------
 
 else:
-  print('Please check your ML pipeline')
+    
+#-------------------------------------------------------------
+  # Anomaly Detection algorithms
+  if alg.name == 'OneClassSVM':
+    from sklearn import svm
+    model = svm.OneClassSVM(nu=alg.nu, kernel=alg.kernel, gamma = alg.gamma) 
+    
+  if alg.name == 'LocalOutlierFactor':
+    from sklearn.neighbors import LocalOutlierFactor
+    model = LocalOutlierFactor(n_neighbors=alg.neighbors_para, n_jobs=alg.n_jobs_para)
+    
+#-------------------------------------------------------------
+  # Clustering algorithms
+  if alg.name == 'MeanShift':
+    from sklearn.cluster import MeanShift
+    model = MeanShift(cluster_all = alg.cluster_all, n_jobs = alg.n_jobs) 
+    
+  if alg.name == 'KMeans':
+    from sklearn.cluster import KMeans
+    model = KMeans(n_clusters= alg.n_clusters, max_iter= alg.max_iterations, n_jobs = alg.n_jobs)
+
+#-------------------------------------------------------------
+
+if model is not None:
+  if is_labeled_data:
+       columns = [LABEL_COLUMN]
+       dataframe_train = dataframe.drop(columns, axis=1, inplace=False)
+       dataframe_label = dataframe.filter(columns, axis=1)
+       model.fit(dataframe_train.values, dataframe_label.values.ravel())
+  else:
+    dataframe_train = dataframe
+    model.fit(dataframe_train.values)
+  model_bin = pickle.dumps(model)
+  model_compressed = bz2.compress(model_bin)
+  model_id = str(uuid.uuid4())
+  variables.put(model_id, model_compressed)
+  print("model id: ", model_id)
+  print('model size (original):   ', sys.getsizeof(model_bin), " bytes")
+  print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")   
+  resultMetadata.put("task.model_id", model_id)
+else:
+  print("Algorithm not found!")
+
+dataframe_json = dataframe.to_json(orient='split').encode()
+compressed_data = bz2.compress(dataframe_json)
+
+dataframe_id = str(uuid.uuid4())
+variables.put(dataframe_id, compressed_data)
+
+print("dataframe id (out): ", dataframe_id)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+print(dataframe.head())
+
+resultMetadata.put("task.name", __file__)
+#resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.algorithm_json", algorithm_json)
+resultMetadata.put("task.label_column", LABEL_COLUMN)
+
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False)
+
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8" />
+                <style>{0}</style>
+              </head>
+              <body>{1}</body></html>
+""".format(css_style, result)
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
 ]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-    </task>
-  </taskFlow>
-</job>
+            </code>
+          </script>
+        </scriptExecutable>
+        <controlFlow block="none"/>
+        <metadata>
+          <positionTop>
+            650
+        </positionTop>
+          <positionLeft>
+            994.25
+        </positionLeft>
+        </metadata>
+      </task>
+    </taskFlow>
+  </job>

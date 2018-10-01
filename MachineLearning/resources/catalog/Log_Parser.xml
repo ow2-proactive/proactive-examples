@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Log_Parser" onTaskError="continueJobExecution" priority="normal" projectName="2. Input and Output Data" xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Log_Parser" onTaskError="continueJobExecution" priority="normal" projectName="2. Input and Output Data" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
@@ -9,7 +9,7 @@
   <genericInformation>
 <info name="bucketName" value="machine-learning"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/log_parser.png"/>
-<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_log_parser"/>
+<info name="Documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_log_analysis"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
@@ -22,10 +22,10 @@
         <variable inherited="false" name="PATTERNS_FILE" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/patterns.csv"/>
         <variable inherited="false" name="STRUCTURED_LOG_FILE" value="HTML"/>
         <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" model="PA:Boolean" name="TASK_ENABLED" value="True"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/log_parser.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_log_parser"/>
       </genericInformation>
       <forkEnvironment javaHome="/usr">
         <envScript>
@@ -61,7 +61,13 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN LOG PARSING")
+__file__ = variables.get("PA_TASK_NAME")
+
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
 
 import pandas as pd
 import numpy as np
@@ -72,6 +78,7 @@ from datetime import datetime, timedelta
 from time import gmtime, strftime
 from argparse import ArgumentParser
 from collections import OrderedDict
+import sys, bz2, uuid
 
 TIME_FORMAT = '%H%M%S'
 DATE_FORMAT = '%d%m%Y'
@@ -144,6 +151,7 @@ with open(LOG_FILE) as infile:
         break
     df_inter = pd.DataFrame([my_dict.values()], columns=df_columns)
     df_structured_logs = df_structured_logs.append(df_inter, ignore_index=True)
+
         
 print("All logs were matched")
 #===================================== Preview results =================================
@@ -160,20 +168,89 @@ elif STRUCTURED_LOG_FILE.endswith('html'):
   resultMetadata.put("content.type", "text/html") 
 else:
   print('Your data is empty')
-  
 #===================================== Save the linked variables =================================    
-df_json_logs = df_structured_logs.to_json(orient='split')
+df_json_logs = df_structured_logs.to_json(orient='split').encode()
+compressed_data = bz2.compress(df_json_logs)
+
+dataframe_id = str(uuid.uuid4())
+variables.put(dataframe_id, compressed_data)
+
+print("dataframe id: ", dataframe_id)
+print('dataframe size (original):   ', sys.getsizeof(df_json_logs), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+
+resultMetadata.put("task.name", __file__)
+resultMetadata.put("task.dataframe_id", dataframe_id)
     
 print("Finshed " + LOG_FILE + "PARSING")
 
-variables.put("DATAFRAME_JSON", df_json_logs) 
+with pd.option_context('display.max_colwidth', -1):
+  result = df_structured_logs.to_html(escape=False)
 
-print("END LOG PARSING")
+css_style="""
+table {
+  border: 1px solid #999999;
+  text-align: center;
+  border-collapse: collapse;
+  width: 100%; 
+}
+td {
+  border: 1px solid #999999;         
+  padding: 3px 2px;
+  font-size: 13px;
+  border-bottom: 1px solid #999999;
+  #border-bottom: 1px solid #FF8C00;  
+  border-bottom: 1px solid #0B6FA4;   
+}
+th {
+  font-size: 17px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: center;
+  background: #0B6FA4;
+  #background: #E7702A;       
+  #border-left: 2px solid #999999
+  border-bottom: 1px solid #FF8C00;            
+}
+"""
+result = """
+
+            
+            
+            
+            
+            
+              
+              
+              
+              
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8" />
+                <style>{0}</style>
+              </head>
+              <body>{1}</body></html>
+""".format(css_style, result)
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
 ]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-    </task>
-  </taskFlow>
-</job>
+            </code>
+          </script>
+        </scriptExecutable>
+        <controlFlow block="none"/>
+        <metadata>
+          <positionTop>
+            433.09375
+        </positionTop>
+          <positionLeft>
+            1051.1875
+        </positionLeft>
+        </metadata>
+      </task>
+    </taskFlow>
+  </job>
