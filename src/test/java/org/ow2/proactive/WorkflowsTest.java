@@ -65,7 +65,6 @@ public class WorkflowsTest {
 
     @Before
     public void init() throws Exception {
-        PASchedulerProperties.CATALOG_REST_URL.updateProperty("http://localhost:8080/catalog");
         JobFactory factory = JobFactory.getFactory();
         this.job = (TaskFlowJob) factory.createJob(this.filePath);
     }
