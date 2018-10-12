@@ -30,7 +30,6 @@ import org.ow2.proactive.scheduler.common.job.JobVariable;
 import org.ow2.proactive.scheduler.common.job.TaskFlowJob;
 import org.ow2.proactive.scheduler.common.job.factories.JobFactory;
 import org.ow2.proactive.scheduler.common.task.Task;
-import org.ow2.proactive.scheduler.core.properties.PASchedulerProperties;
 
 
 @RunWith(Parameterized.class)
