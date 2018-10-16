@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
+    name="SQL_Statements" projectName="2. SQL"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
+  <description>
+    <![CDATA[ This task enables to execute any SQL statement (SQL query, trigger, procedure..) on an SQL database. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/sql-statement.png"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Execute_SQL_Statements" >
+      <description>
+        <![CDATA[ This task enables to execute any SQL statement (SQL query, trigger, procedure..) on an SQL database.
+It requires the following third-party credential: {key: <dbms>://<username>@<host>:<port>, value: DATABASE_PASSWORD}. Please refer to the User documentation to learn how to add third-party credentials.
+It uses the following variables: 
+$DBMS (required) is the database management system. . It can be one of these values {PostgreSQL, MySQL, Oracle, SQL Server, Greenplum}. The default value is "PostgreSQL".
+$DATABASE (required) is the database name
+$HOST (required) is the database host
+$PORT (required) is the listening database port
+$USER (required) is the database user
+$INPUT_TYPE (required) is the type of the input statements. It can be either "File" or "String". The default value is "String".
+$SQL_STATEMENTS is a string composed of a set of SQL statements. If INPUT_TYPE is equals to String then SQL_STATEMENTS is required.
+$INPUT_FILE is the file that contains the SQL statements which is stored in the dataspace (user, global..). If INPUT_TYPE is equals to File then INPUT_FILE is required. ]]>
+      </description>
+      <variables>
+        <variable name="DBMS" value="PostgreSQL" inherited="false" model="PA:List(PostgreSQL,MySQL,Oracle,SQL Server,Greenplum)"/>
+        <variable name="DATABASE" value="" inherited="false" />
+        <variable name="HOST" value="" inherited="false" />
+        <variable name="PORT" value="" inherited="false" />
+        <variable name="USER" value="" inherited="false" />
+        <variable name="SQL_STATEMENTS" value="" inherited="false" />
+        <variable name="INPUT_TYPE" value="String" inherited="false" model="PA:List(File,String)"/>
+        <variable name="INPUT_FILE" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/sql-statement.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_sql"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="$INPUT_FILE" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+# In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters
+containerName = 'activeeon/dlm3'
+dockerRunCommand = 'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare working directory (For Dataspaces and serialized task file)
+workspaceHost = localspace
+workspaceContainer = localspace
+workspaceVolume = '-v '+localspace +':'+localspace+' '
+# Prepare container working directory
+containerWorkingDirectory = '-w '+workspaceContainer+' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import pandas as pd
+import numpy as np
+from sqlalchemy import create_engine, text, exc
+import sys
+
+DBMS = variables.get("DBMS")
+if DBMS == "PostgreSQL":
+    DBMS_DEFAULT_PORT,DBMS_DRIVER,DBMS_PROTOCOL = 5432,'psycopg2','postgresql'
+if DBMS == "MySQL":
+    DBMS_DEFAULT_PORT,DBMS_DRIVER,DBMS_PROTOCOL = 3306,'mysqlconnector','mysql'
+if DBMS == "Oracle":
+    DBMS_DEFAULT_PORT,DBMS_DRIVER,DBMS_PROTOCOL = 1521,'cx_oracle','oracle'
+if DBMS == "SQL Server":
+    DBMS_DEFAULT_PORT,DBMS_DRIVER,DBMS_PROTOCOL = 1433,'pyodbc','mssql'
+if DBMS == "Greenplum":
+    DBMS_DEFAULT_PORT,DBMS_DRIVER,DBMS_PROTOCOL = 5432,'psycopg2','postgresql'
+    
+
+URL_KEY = DBMS_PROTOCOL + "://<username>@<host>:<port>"
+HOST = variables.get("HOST")
+PORT = int(variables.get("PORT"))
+DATABASE = variables.get("DATABASE")
+USER = variables.get("USER")
+INPUT_TYPE = variables.get("INPUT_TYPE")
+# This key is used for getting the password from 3rd party credentials.
+PASSWORD_KEY = DBMS_PROTOCOL + "://" + USER + "@" + HOST + ":" + str(PORT)
+PASSWORD=credentials.get(PASSWORD_KEY)
+
+if not HOST:
+    print("ERROR: HOST variable is not provided by the user.")
+    sys.exit(1)
+if not PORT:
+    PORT = DBMS_DEFAULT_PORT
+    print("WARNING: PORT variable is not provided by the user. Using the default value:", PORT)
+if not DATABASE:
+    print("ERROR: DATABASE variable is not provided by the user.")
+    sys.exit(1)
+if not USER:
+    print("ERROR: USER variable is not provided by the user.")
+    sys.exit(1)
+if not PASSWORD:
+    print("ERROR: Please add your " + DBMS + " password to 3rd-party credentials in the scheduler-portal under the key :\"" + PASSWORD_KEY + "\"")
+    sys.exit(1)
+if INPUT_TYPE == "File":
+    INPUT_FILE = variables.get("INPUT_FILE")
+    if not INPUT_FILE:
+        print("ERROR: INPUT_FILE variable is not provided by the user.")
+        sys.exit(1)
+    print("Reading SQL_STATEMENTS from the file: " + INPUT_FILE)
+    file = open(INPUT_FILE)
+    SQL_STATEMENTS = text(file.read())
+if INPUT_TYPE == "String":
+    SQL_STATEMENTS = variables.get("SQL_STATEMENTS")   
+    if not SQL_STATEMENTS:
+        print("ERROR: SQL_STATEMENTS variable is not provided by the user.")
+        sys.exit(1)
+        
+# Please refer to SQLAlchemy doc for more info about database urls.
+# http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls
+
+print("BEGIN processing in " + DBMS + " database using " + DBMS_DRIVER + " connector")
+print('HOST=', HOST)
+print('PORT=', PORT)
+print('USER=', USER)
+print('PASSWORD=', PASSWORD)
+print('DATABASE=', DATABASE)
+database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(DBMS_PROTOCOL,DBMS_DRIVER,USER,PASSWORD,HOST,PORT,DATABASE)
+engine = create_engine(database_url)
+try:
+    connection = engine.connect()
+except OperationalError:
+    print("OperationalError: Unable to connect to " + DBMS + " database.")
+    raise
+try:
+    connection.execute(SQL_STATEMENTS)
+    connection.close()
+except exc.DBAPIError as err:
+    print(str(err))
+    pass
+
+print("END EXECUTE SQL STATEMENTS")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            352.5
+        </positionTop>
+        <positionLeft>
+            1057
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+</job>
