@@ -1,17 +1,13 @@
 package org.ow2.proactive;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.ow2.proactive.scheduler.common.exception.JobCreationException;
-import org.ow2.proactive.scheduler.common.job.JobVariable;
-import org.ow2.proactive.scheduler.common.job.TaskFlowJob;
-import org.ow2.proactive.scheduler.common.job.factories.JobFactory;
-import org.ow2.proactive.scheduler.common.task.Task;
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.Matchers.emptyString;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.startsWith;
+import static org.junit.Assert.assertThat;
 
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.transform.TransformerException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,9 +18,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.assertThat;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.TransformerException;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.ow2.proactive.scheduler.common.exception.JobCreationException;
+import org.ow2.proactive.scheduler.common.job.JobVariable;
+import org.ow2.proactive.scheduler.common.job.TaskFlowJob;
+import org.ow2.proactive.scheduler.common.job.factories.JobFactory;
+import org.ow2.proactive.scheduler.common.task.Task;
+import org.ow2.proactive.scheduler.core.properties.PASchedulerProperties;
 
 
 @RunWith(Parameterized.class)
@@ -42,14 +48,15 @@ public class WorkflowsTest {
 
     private final static String BOOLEAN_MODEL = "PA:Boolean";
 
+    private final static String PCW_RULE_NAME = "rule";
+
     private final String filePath;
 
     private TaskFlowJob job = null;
 
     private static boolean isPackageDirIncludingCatalogObjects(Path packagePath) {
-        return Files.isDirectory(packagePath) &&
-                Files.exists(Paths.get(packagePath.toString(), METADATA_JSON_FILE)) &&
-                Files.exists(Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH));
+        return Files.isDirectory(packagePath) && Files.exists(Paths.get(packagePath.toString(), METADATA_JSON_FILE)) &&
+               Files.exists(Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH));
     }
 
     public WorkflowsTest(String filePath) {
@@ -58,6 +65,7 @@ public class WorkflowsTest {
 
     @Before
     public void init() throws Exception {
+        PASchedulerProperties.CATALOG_REST_URL.updateProperty("http://localhost:8080/catalog");
         JobFactory factory = JobFactory.getFactory();
         this.job = (TaskFlowJob) factory.createJob(this.filePath);
     }
@@ -65,18 +73,19 @@ public class WorkflowsTest {
     @Parameterized.Parameters(name = "{index}: testing workflow - {0}")
     public static Collection<String> data() throws IOException {
         return Files.list(Paths.get(""))
-                                  .filter(packagePath -> isPackageDirIncludingCatalogObjects(packagePath))
-                                  .map(packagePath -> Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH))
-                                  .flatMap(resourcesPath -> {
-                                      try {
-                                          return Files.list(resourcesPath)
-                                                      .filter(file -> file.toString().endsWith(".xml"));
-                                      } catch (IOException e) {
-                                          throw new RuntimeException(e);
-                                      }
-                                  })
-                                  .map(workflowPath -> workflowPath.toString())
-                .collect(Collectors.toList());
+                    .filter(packagePath -> isPackageDirIncludingCatalogObjects(packagePath))
+                    .map(packagePath -> Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH))
+                    .flatMap(resourcesPath -> {
+                        try {
+                            return Files.list(resourcesPath)
+                                        .filter(file -> file.toString().endsWith(".xml"))
+                                        .filter(file -> !file.toString().toLowerCase().contains(PCW_RULE_NAME));
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
+                    .map(workflowPath -> workflowPath.toString())
+                    .collect(Collectors.toList());
     }
 
     @Test

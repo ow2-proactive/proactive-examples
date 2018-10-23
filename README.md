@@ -10,21 +10,21 @@ Please run next command: ``gradlew clean zip`` or ``gradlew clean build``
 This will generate the `proactive-examples.zip` file inside project's build folder.
 
 # How to test locally
-Copy the genarated proactive-examples.zip file to your `Scheduler_Distribution_Path/samples` directory.
+Copy the genarated proactive-examples.zip file to your `PA_SCHEDULER_HOME/samples` directory.
 Start your proactive distribution. From this point everything should work ok.
-During scheduling startup: the proactive-examples.zip archive will be extracted to proactive-examples folder. On the next step the special groovy script will automatically push the workflows from proactive-examples folder to Catalog storage.
-If you need to retest the extracting and loading of proactive-examples, please remove `proactive-examples folder`. Also to test the filling of catalog storage don't forget to clean database.
+During scheduling startup: the proactive-examples.zip archive will be extracted to `PA_SCHEDULER_HOME/samples/workflows/proactive-examples` folder. On the next step the special groovy script will automatically push the workflows from proactive-examples folder to Catalog storage.
+If you need to retest the extracting and loading of proactive-examples, please remove `workflows/proactive-examples folder`. Also to test the filling of catalog storage don't forget to clean database.
 
 ## The example of exact commands to test locally on linux:
 ```
-1) Scheduler_Distribution_Path is the path to your local Proactive distribution folder. You need to `cd` to this folder.
-2) rm -fr samples/proactive-examples*
+1) PA_SCHEDULER_HOME is the path to your local Proactive distribution folder. You need to `cd` to this folder.
+2) rm -fr samples/workflows/proactive-examples*
 3) rm -fr data/*
 4) you need to `cd` into your locally cloned proactive-examples project folder
 5) ./gradlew clean zip
-6) cp build/proactive-examples.zip Scheduler_Distribution_Path/samples/
-7) go back to Scheduler_Distribution_Path and start proactive-server
-8) ./Scheduler_Distribution_Path/bin/proactive-server
+6) cp build/proactive-examples.zip PA_SCHEDULER_HOME/samples/
+7) go back to PA_SCHEDULER_HOME and start proactive-server
+8) ./PA_SCHEDULER_HOME/bin/proactive-server
 ```
 
 # How to add a new package

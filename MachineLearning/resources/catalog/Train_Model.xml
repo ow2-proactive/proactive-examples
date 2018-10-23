@@ -1,31 +1,38 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Train_Model" onTaskError="continueJobExecution" priority="normal" projectName="6. Train" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11"
+     xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
+    name="Train_Model" projectName="6. Train"
+    priority="normal"
+    onTaskError="continueJobExecution"
+     maxNumberOfExecution="2">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
-    <![CDATA[ Train a model using a classification or regression algorithm. ]]>
+    <![CDATA[ Train a classification/clustering/anomaly detection model ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="machine-learning-new"/>
+<info name="bucketName" value="machine-learning"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_model"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_anomaly_model"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
     <task name="Train_Model">
       <description>
-        <![CDATA[ Train a model using a classification or regression algorithm. ]]>
+        <![CDATA[ Train a classification/clustering/anomaly detection model ]]>
       </description>
       <variables>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
-        <variable inherited="false" model="PA:Boolean" name="TASK_ENABLED" value="True"/>
-        <variable inherited="false" name="LABEL_COLUMN" value=""/>
+        <variable name="LABEL_COLUMN" value="" inherited="false" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_model"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_anomaly_model"/>
       </genericInformation>
       <forkEnvironment javaHome="/usr">
         <envScript>
@@ -116,12 +123,8 @@ class obj(object):
 #-------------------------------------------------------------
 alg = obj(algorithm)
 
-if alg.is_supervised and is_labeled_data:
-  model = None
-  columns = [LABEL_COLUMN]
-  dataframe_train = dataframe.drop(columns, axis=1, inplace=False)
-  dataframe_label = dataframe.filter(columns, axis=1)
-
+model = None
+if alg.is_supervised:
   #-------------------------------------------------------------
   # Classification algorithms
   #
@@ -149,7 +152,9 @@ if alg.is_supervised and is_labeled_data:
   # Regression algorithms
   if alg.name == 'LinearRegression':
     from sklearn.linear_model import LinearRegression
-    model = LinearRegression(n_jobs=alg.n_jobs)
+    model = LinearRegression(
+      n_jobs=alg.n_jobs
+    )
 
   if alg.name == 'SupportVectorRegression':
     from sklearn.svm import SVR
@@ -168,22 +173,66 @@ if alg.is_supervised and is_labeled_data:
       lambda_2=alg.lambda_2, 
       n_iter=alg.n_iter
     )
-  #-------------------------------------------------------------
-
-  if model is not None:
-    model.fit(dataframe_train.values, dataframe_label.values.ravel())
-    model_bin = pickle.dumps(model)
-    model_compressed = bz2.compress(model_bin)
-    model_id = str(uuid.uuid4())
-    variables.put(model_id, model_compressed)
-    print("model id: ", model_id)
-    print('model size (original):   ', sys.getsizeof(model_bin), " bytes")
-    print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")
-    resultMetadata.put("task.model_id", model_id)
-  else:
-    print("Algorithm not found!")
 else:
-  print("The algorithm must be supervised and the dataframe must be labelled!")
+  #-------------------------------------------------------------
+  # Anomaly detection algorithms
+  if alg.name == 'OneClassSVM':
+    from sklearn import svm
+    model = svm.OneClassSVM(
+      nu=alg.nu, 
+      kernel=alg.kernel, 
+      gamma=alg.gamma
+    ) 
+  
+  if alg.name == 'IsolationForest':
+    from sklearn.ensemble import IsolationForest
+    model = IsolationForest(
+      n_estimators=alg.n_estimators, 
+      n_jobs=alg.n_jobs
+    )
+  
+  #-------------------------------------------------------------
+  # Clustering algorithms
+  if alg.name == 'MeanShift':
+    from sklearn.cluster import MeanShift
+    model = MeanShift(
+      cluster_all=alg.cluster_all, 
+      n_jobs=alg.n_jobs
+    ) 
+    
+  if alg.name == 'KMeans':
+    from sklearn.cluster import KMeans
+    model = KMeans(
+      n_clusters=alg.n_clusters, 
+      max_iter=alg.max_iterations, 
+      n_jobs=alg.n_jobs
+    )
+
+#-------------------------------------------------------------
+if model is not None:
+  if is_labeled_data:
+    columns = [LABEL_COLUMN]
+    dataframe_train = dataframe.drop(columns, axis=1, inplace=False)
+    dataframe_label = dataframe.filter(columns, axis=1)
+  else:
+    dataframe_train = dataframe
+
+  if alg.is_supervised:
+    model.fit(dataframe_train.values, dataframe_label.values.ravel())
+  else:
+    model.fit(dataframe_train.values)
+  
+  model_bin = pickle.dumps(model)
+  model_compressed = bz2.compress(model_bin)
+  model_id = str(uuid.uuid4())
+  variables.put(model_id, model_compressed)
+
+  print("model id: ", model_id)
+  print('model size (original):   ', sys.getsizeof(model_bin), " bytes")
+  print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")   
+  resultMetadata.put("task.model_id", model_id)
+else:
+  print("Algorithm not found!")
 
 dataframe_json = dataframe.to_json(orient='split').encode()
 compressed_data = bz2.compress(dataframe_json)
@@ -238,6 +287,7 @@ th {
 """
 result = """
 
+            
             <!DOCTYPE html>
             <html>
               <head>
@@ -259,10 +309,10 @@ print("END " + __file__)
         <controlFlow block="none"/>
         <metadata>
           <positionTop>
-            395
+            650
         </positionTop>
           <positionLeft>
-            880.99609375
+            994.25
         </positionLeft>
         </metadata>
       </task>
