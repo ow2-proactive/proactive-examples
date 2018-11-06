@@ -70,7 +70,7 @@ engine = create_engine(database_url)
 with engine.connect() as conn, conn.begin():
     #pd.read_sql() can take either a SQL query as a parameter or a table name
     dataframe = pd.read_sql(SQL_QUERY, conn)
-
+print(dataframe.to_string())
 #***************# HTML PREVIEW STYLING #***************#
 styles = [
     dict(selector="th", props=[("font-weight", "bold"),
@@ -81,19 +81,21 @@ styles = [
                                ("padding", "3px 5px"),
                                ("border-bottom", "1px solid #999999")]),
     dict(selector="table", props=[("border", "1px solid #999999"),
-                                  ("text-align", "center"),
-                                  ("width", "100%"),
-                                  ("border", "1px solid #999999")])
+                               ("text-align", "center"),
+                               ("width", "100%"),
+                               ("border", "1px solid #999999")])
 ]
 #******************************************************#
 
 if OUTPUT_TYPE == "HTML":
+    print('The task result will be previewed in HTML format')
     result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
     resultMetadata.put("file.extension", ".html")
     resultMetadata.put("file.name", "output.html")
     resultMetadata.put("content.type", "text/html")
 else:
     # Write results to the task result in CSV format
+    print('The task result will be written in csv file')
     result = dataframe.to_csv(index=False).encode('utf-8')
     resultMetadata.put("file.extension", ".csv")
     resultMetadata.put("file.name", "result.csv")
