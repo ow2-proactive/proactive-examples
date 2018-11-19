@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Mark_to_Future_cube_process" projectName="Risk Valuation Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+    <variables>
+        <variable name="evaluation_date_start" value="01/10/2018" model="PA:DATETIME(dd/mm/yyyy)"/>
+        <variable name="evaluation_date_end" value="01/02/2021" model="PA:DATETIME(dd/mm/yyyy)"/>
+        <variable name="evaluation_frequency" value="monthly" model="PA:LIST(monthly,biweekly)"/>
+        <variable name="shocked_yield_start" value="0.03" />
+        <variable name="shocked_yield_end" value="0.1" />
+        <variable name="shocked_yield_delta" value="0.02" />
+        <variable name="bonds_params_file_path_from_dataspace" value="bonds.txt" />
+        <variable name="resources_file_path_from_dataspace" value="resources.txt" />
+        <variable name="nb_replicated_tasks_per_cubelet" value="1" />
+    </variables>
+    <description>
+        <![CDATA[ Estimates a Mark-to-Future cube for bond portfolios. The pricing engine relies on the C++ Quantlib library. ]]>
+    </description>
+    <genericInformation>
+        <info name="bucketName" value="finance"/>
+        <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+        <info name="group" value="public-objects"/>
+        <info name="Documentation" value="https://ow2-proactive.github.io/proactive-examples/Finance/resources/doc/montecarlo-value-risk-proactive-activeeon.pdf"/>
+    </genericInformation>
+    <taskFlow>
+        <task name="split" >
+            <inputFiles>
+                <files  includes="$resources_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+                <files  includes="$bonds_params_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "split ..."
+
+// Retrieve variables
+def shocked_yield_start = variables.get("shocked_yield_start") as double
+def shocked_yield_end = variables.get("shocked_yield_end") as double
+def shocked_yield_delta = variables.get("shocked_yield_delta") as double
+def bonds_params_file_path_from_dataspace = variables.get("bonds_params_file_path_from_dataspace")
+def resources_file_path_from_dataspace = variables.get("resources_file_path_from_dataspace")
+def nb_replicated_tasks_per_cubelet = variables.get("nb_replicated_tasks_per_cubelet")
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+// FIRST LEVEL OF PARALLELISM: AS MANY REPLICATED TASKS AS lines in the resource file
+// EACH REPLICATED TASK CONSIDER A SUBSET OF THE SCENARIOS (CUBE -> CUBELETS)
+/////////////////////////////////////////////////////////////////////////////////////////
+
+
+// Compute the number of replicated tasks
+def resources_array = new File(localspace, resources_file_path_from_dataspace).readLines()
+def nb_tasks = resources_array.size()
+println "nb_tasks " + nb_tasks
+variables.put("nb_tasks", nb_tasks)
+
+// Compute shocked yields and number of yields per task
+def shocked_yields = []
+def shocked_yield_tmp = shocked_yield_start
+def task_id_tmp = 0
+def nb_yields_per_task = [0]*nb_tasks
+while(shocked_yield_tmp < shocked_yield_end)
+{
+    // Update the yields list
+    shocked_yields += shocked_yield_tmp
+    shocked_yield_tmp += shocked_yield_delta
+
+    // Increment the yield number for the current task
+    nb_yields_per_task[task_id_tmp % nb_tasks]++
+    task_id_tmp++
+}
+shocked_yields += shocked_yield_end
+nb_yields_per_task[task_id_tmp % nb_tasks]++
+
+println "shocked_yields " + shocked_yields
+println "nb_yields_per_task " + nb_yields_per_task
+
+// Split scenarios and resources
+def current_yield_index = 0
+def yield_index_start = -1
+def yield_index_end = -1
+
+0.upto(nb_tasks-1) {
+
+    // Split scenarios
+    yield_index_start = yield_index_end + 1
+    yield_index_end += nb_yields_per_task[it]
+    println yield_index_start + "-" + yield_index_end
+
+    // Store scenarios
+    variables.put("task_" + it + "_yield_start", shocked_yields[yield_index_start])
+    variables.put("task_" + it + "_yield_end", shocked_yields[yield_index_end])
+
+    // Split resources
+    def resources_line_array = resources_array[it].split(",")
+
+    // Store resources
+    variables.put("task_" + it + "_node_source", resources_line_array[0])
+    variables.put("task_" + it + "_output_files_directory_path", resources_line_array[1])
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+// SECOND LEVEL OF PARALLELISM: nb_replicated_tasks_per_cubelet REPLICATED TASKS
+// EACH REPLICATED TASK CONSIDER A SUBSET OF THE INSTRUMENTS (CUBELET -> MTF-Table)
+/////////////////////////////////////////////////////////////////////////////////////////
+
+
+// How many bonds, i.e. MtF tables, to consider?
+def bonds_params_file = new File(localspace, bonds_params_file_path_from_dataspace)
+def nb_bonds = bonds_params_file.readLines().size()
+
+// Split bonds over PA tasks
+def list_lines = bonds_params_file.readLines()
+def header = list_lines.remove(0)
+
+// Create a bond file with a header per task
+def bonds_params_file_name = new File(bonds_params_file_path_from_dataspace).name
+variables.put("bonds_params_file_name", bonds_params_file_name)
+(0..nb_tasks-1).each { int task_id ->
+    new File(localspace, task_id + "_" + bonds_params_file_name).text = header + System.getProperty("line.separator")
+}
+
+// Now fill each bonds file
+def task_id = 0
+list_lines.each { String line ->
+
+    new File(localspace, (task_id % nb_tasks) + "_" + bonds_params_file_name).append(line + System.getProperty("line.separator"))
+    task_id++
+}
+
+println "... split"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow >
+                <replicate>
+                    <script>
+                        <code language="groovy">
+                            <![CDATA[
+runs=variables.get("nb_tasks")
+]]>
+                        </code>
+                    </script>
+                </replicate>
+            </controlFlow>
+            <outputFiles>
+                <files  includes="*_$bonds_params_file_name" accessMode="transferToGlobalSpace"/>
+            </outputFiles>
+            <metadata>
+                <positionTop>
+                    432
+                </positionTop>
+                <positionLeft>
+                    783.75
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="simulate_MtF_cubelet" >
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="split"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+def task_id = variables.get("PA_TASK_REPLICATION")
+def node_source = variables.get("task_" + task_id + "_node_source")
+
+if (node_source.equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
+} else {
+   selected = false
+}
+]]>
+                    </code>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import org.apache.commons.io.FileUtils
+
+println "simulate_MtF_cubelet ..."
+
+// Retrieve variables
+def task_id = variables.get("PA_TASK_REPLICATION")
+def current_job_id = variables.get("PA_JOB_ID")
+def evaluation_date_start = variables.get("evaluation_date_start")
+def evaluation_date_end = variables.get("evaluation_date_end")
+def evaluation_frequency = variables.get("evaluation_frequency")
+def shocked_yield_start = variables.get("task_" + task_id + "_yield_start")
+def shocked_yield_end = variables.get("task_" + task_id + "_yield_end")
+def shocked_yield_delta = variables.get("shocked_yield_delta")
+def bonds_params_file_path_from_dataspace = variables.get("bonds_params_file_path_from_dataspace")
+def nb_tasks = variables.get("nb_tasks")
+def node_source = variables.get("task_" + task_id + "_node_source")
+def output_files_directory_path = variables.get("task_" + task_id + "_output_files_directory_path")
+
+// Connect to the scheduler for workflow submission
+schedulerapi.connect()
+
+// Submit the workflow
+def workflow_variables = ["evaluation_date_start":evaluation_date_start, "evaluation_date_end":evaluation_date_end, "evaluation_frequency":evaluation_frequency, "shocked_yield_start":shocked_yield_start, "shocked_yield_end":shocked_yield_end, "shocked_yield_delta":shocked_yield_delta, "bonds_params_file_path_from_dataspace":bonds_params_file_path_from_dataspace, "nb_tasks":nb_tasks, "node_source":node_source, "output_files_directory_path":output_files_directory_path, "submitter_task_id":task_id]
+def workflow_generic_infos = ["PARENT_JOB_ID" : current_job_id]
+def job_id = schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"), "finance", "Mark_to_Future_cube_no_csv_transfer", workflow_variables, workflow_generic_infos)
+
+// Wait until the submitted workflow is finised
+def timeout_in_sec = 500
+schedulerapi.waitForJob(job_id.toString(), timeout_in_sec * 1000)
+
+println "... simulate_MtF_cubelet"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="start"></controlFlow>
+            <metadata>
+                <positionTop>
+                    560
+                </positionTop>
+                <positionLeft>
+                    783.75
+                </positionLeft>
+            </metadata>
+        </task>
+
+
+
+
+
+
+        <task name="stats_cubelet" >
+            <depends>
+                <task ref="simulate_MtF_cubelet"/>
+            </depends>
+            <inputFiles>
+                <files  includes="MtF-cubelet_$PA_TASK_REPLICATION.csv" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="R">
+                        <![CDATA[
+print("stats_cubelet ...")
+
+Sys.sleep(999999)
+
+# Retrieve variables
+task_id <- variables["PA_TASK_REPLICATION"]
+
+# Get the cubelet file
+MtF_cubelet_file_path <- file.path(localspace, paste("MtF-cubelet_", task_id, sep=''))
+MtF_cubelet <- read.csv(file=MtF_cubelet_file_path, header=TRUE, sep=",")
+
+print("... stats_cubelet")
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="end"></controlFlow>
+        </task>
+
+
+
+
+
+
+        <task name="generate_MtF_cube_csv" >
+            <depends>
+                <task ref="stats_cubelet"/>
+            </depends>
+            <inputFiles>
+                <files  includes="outputs_*.txt" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <forkEnvironment >
+                <additionalClasspath>
+                    <pathElement path="DualAxisChart.jar"/>
+                    <pathElement path="jcommon-1.0.6.jar"/>
+                    <pathElement path="jfreechart-1.0.2.jar"/>
+                </additionalClasspath>
+            </forkEnvironment>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "generate_MtF_cube_csv ..."
+
+// Merge MtF-tables into a single MtF-cube
+def keep_header = true
+def MtF_cube_str = ""
+results.each { result ->
+	def result_lines_as_list = new File(result.value()).readLines()
+
+    if (keep_header) {
+        MtF_cube_str += result_lines_as_list.join(System.getProperty("line.separator"))
+        keep_header = false
+    }
+    else
+        MtF_cube_str += System.getProperty("line.separator") + result_lines_as_list.tail().join(System.getProperty("line.separator"))
+}
+
+// Generate the MtF-cube csv file
+def MtF_cube_file_name = "MtF-cube.csv"
+def MtF_cube_file = new File(localspace, MtF_cube_file_name)
+MtF_cube_file.text = MtF_cube_str
+
+// Expose the csv file
+result = MtF_cube_file.getBytes()
+resultMetadata.put("file.name", MtF_cube_file_name)
+resultMetadata.put("content.type", "text/csv")
+
+println "... generate_MtF_cube_csv"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <outputFiles>
+                <files  includes="MtF-cube.csv" accessMode="transferToGlobalSpace"/>
+            </outputFiles>
+            <metadata>
+                <positionTop>
+                    688
+                </positionTop>
+                <positionLeft>
+                    783.75
+                </positionLeft>
+            </metadata>
+        </task>
+    </taskFlow>
+    <metadata>
+        <visualization>
+            <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:1427px;
+            height:811px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-325px;left:-296.75px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_85" style="top: 330px; left: 301.75px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">split_scenarios</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_88" style="top: 458px; left: 301.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png" width="20px">&nbsp;<span class="name">simulate_MtF_cubelet</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_91" style="top: 586px; left: 301.75px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">generate_MtF_cube_csv</span></a></div><svg style="position:absolute;left:372.3px;top:359.5px" width="45.80000000000001" height="99" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 24.80000000000001 88 C 34.80000000000001 88 -10 -10 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M24.864965600000012,76.942366 L25.922275531898748,55.7791409218625 L20.905167656289922,63.51403772560228 L12.493947257501022,59.738938865572585 L24.864965600000012,76.942366" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M24.864965600000012,76.942366 L25.922275531898748,55.7791409218625 L20.905167656289922,63.51403772560228 L12.493947257501022,59.738938865572585 L24.864965600000012,76.942366" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_99" style="position: absolute; transform: translate(-50%, -50%); left: 394.7px; top: 409.75px;">replicate</div><svg style="position:absolute;left:342px;top:369.5px" width="36.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 15.5 88 C 25.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M17.008112,66.303232 L19.23307240780623,45.23074872954288 L13.796275816661353,52.67663637484854 L5.606476782654781,48.44258491288153 L17.008112,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M17.008112,66.303232 L19.23307240780623,45.23074872954288 L13.796275816661353,52.67663637484854 L5.606476782654781,48.44258491288153 L17.008112,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:357.5px;top:497.5px" width="27.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 6.5 88 C 16.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.787796875,66.78168750000002 L13.502214816791486,46.123171980483264 L7.218760132881903,52.86988949607962 L-0.4095831871289066,47.692208722601364 L8.787796875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.787796875,66.78168750000002 L13.502214816791486,46.123171980483264 L7.218760132881903,52.86988949607962 L-0.4095831871289066,47.692208722601364 L8.787796875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 342.5px; top: 360px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 372.8px; top: 360px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 358px; top: 488px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 397.6px; top: 448px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 358px; top: 448px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 364.5px; top: 616px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 364.5px; top: 576px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+        </visualization>
+    </metadata>
+</job>
