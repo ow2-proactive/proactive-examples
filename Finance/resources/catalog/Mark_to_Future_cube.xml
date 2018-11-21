@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.11"
+        xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
+        name="Mark_to_Future_cube" projectName="Risk Valuation Workflows"
+        priority="normal"
+        onTaskError="continueJobExecution"
+        maxNumberOfExecution="2"
+>
+    <variables>
+        <variable name="evaluation_date_start" value="01/10/2018" model="PA:DATETIME(dd/mm/yyyy)"/>
+        <variable name="evaluation_date_end" value="01/02/2021" model="PA:DATETIME(dd/mm/yyyy)"/>
+        <variable name="evaluation_frequency" value="monthly" model="PA:LIST(monthly,biweekly)"/>
+        <variable name="shocked_yield_start" value="0.03" />
+        <variable name="shocked_yield_end" value="0.1" />
+        <variable name="shocked_yield_delta" value="0.02" />
+        <variable name="bonds_params_file_path_from_dataspace" value="bonds.txt" />
+        <variable name="nb_tasks" value="4" />
+    </variables>
+    <description>
+        <![CDATA[ Estimates a Mark-to-Future cube for bond portfolios. The pricing engine relies on the C++ Quantlib library. ]]>
+    </description>
+    <genericInformation>
+        <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+    </genericInformation>
+    <taskFlow>
+        <task name="split_MtF_tables" >
+            <inputFiles>
+                <files  includes="$bonds_params_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "split_MtF_tables ..."
+
+// Retrieve variables
+def bonds_params_file_path_from_dataspace = variables.get("bonds_params_file_path_from_dataspace")
+def nb_tasks = variables.get("nb_tasks") as Integer
+
+// How many bonds, i.e. MtF tables, to consider?
+def bonds_params_file = new File(localspace, bonds_params_file_path_from_dataspace)
+def nb_bonds = bonds_params_file.readLines().size()
+
+// Split bonds over PA tasks
+def list_lines = bonds_params_file.readLines()
+def header = list_lines.remove(0)
+
+// Create a bond file with a header per task
+(0..nb_tasks-1).each { int task_id ->
+    new File(localspace, "bonds_task_" + task_id + ".txt").text = header + System.getProperty("line.separator")
+}
+
+// Now fill each bonds file
+def task_id = 0
+list_lines.each { String line ->
+
+   // Store nb_bonds_task
+   new File(localspace, "bonds_task_" + (task_id % nb_tasks) + ".txt").append(line + System.getProperty("line.separator"))
+
+    task_id++
+}
+
+println "... split_MtF_tables"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow >
+                <replicate>
+                    <script>
+                        <code language="groovy">
+                            <![CDATA[
+runs=variables.get("nb_tasks")
+]]>
+                        </code>
+                    </script>
+                </replicate>
+            </controlFlow>
+            <outputFiles>
+                <files  includes="bonds_task_*.txt" accessMode="transferToGlobalSpace"/>
+            </outputFiles>
+        </task>
+        <task name="simulate_MtF_table" >
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="split_MtF_tables"/>
+            </depends>
+            <inputFiles>
+                <files  includes="bondsSimulations" accessMode="transferFromGlobalSpace"/>
+                <files  includes="bonds_task_$PA_TASK_REPLICATION.txt" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "simulate_MtF_table ..."
+
+// Retrieve variables
+def task_id = variables.get("PA_TASK_REPLICATION")
+def evaluation_date_start = variables.get("evaluation_date_start")
+def evaluation_date_end = variables.get("evaluation_date_end")
+def evaluation_frequency = variables.get("evaluation_frequency")
+def shocked_yield_start = variables.get("shocked_yield_start")
+def shocked_yield_end = variables.get("shocked_yield_end")
+def shocked_yield_delta = variables.get("shocked_yield_delta")
+def bonds_params_file_path_from_dataspace = variables.get("bonds_params_file_path_from_dataspace")
+
+// Set executable permission
+def executable_file_path = new File(localspace, "bondsSimulations").absolutePath
+["chmod","+x", executable_file_path].execute().waitForProcessOutput(System.out, System.err)
+
+// Build the command
+def bonds_task_file_path_from_dataspace = "bonds_task_" + task_id + ".txt"
+def cmd = ['/bin/sh', '-c', "docker run --rm -v " + new File('.').absolutePath + ":/defaultglobal lballabio/quantlib:1.10-xenial /bin/bash -c 'cd defaultglobal; ./bondsSimulations " + evaluation_date_start + " " + evaluation_date_end + " " + evaluation_frequency + " " + shocked_yield_start + " " + shocked_yield_end + " " + shocked_yield_delta + " " + bonds_task_file_path_from_dataspace + "'"]
+println cmd
+
+// Execute the command
+def sout = new StringBuilder()
+cmd.execute().waitForProcessOutput(sout, System.err)
+println sout
+
+// Store ptf PnLs at horizon
+def csv_file_name = "MtF-table_" + task_id + ".csv"
+new File(localspace, csv_file_name).text = sout
+result = csv_file_name
+
+println "... simulate_MtF_table"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <outputFiles>
+                <files  includes="MtF-table_$PA_TASK_REPLICATION.csv" accessMode="transferToGlobalSpace"/>
+            </outputFiles>
+        </task>
+        <task name="generate_MtF_cube_csv" >
+            <depends>
+                <task ref="simulate_MtF_table"/>
+            </depends>
+            <inputFiles>
+                <files  includes="MtF-table_*.csv" accessMode="transferFromGlobalSpace"/>
+            </inputFiles>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+println "generate_MtF_cube_csv ..."
+
+// Merge MtF-tables into a single MtF-cube
+def keep_header = true
+def MtF_cube_str = ""
+results.each { result ->
+	def result_lines_as_list = new File(result.value()).readLines()
+
+    if (keep_header) {
+        MtF_cube_str += result_lines_as_list.join(System.getProperty("line.separator"))
+        keep_header = false
+    }
+    else
+        MtF_cube_str += System.getProperty("line.separator") + result_lines_as_list.tail().join(System.getProperty("line.separator"))
+}
+
+// Generate the MtF-cube csv file
+def MtF_cube_file_name = "MtF-cube.csv"
+def MtF_cube_file = new File(localspace, MtF_cube_file_name)
+MtF_cube_file.text = MtF_cube_str
+
+// Expose the csv file
+result = MtF_cube_file.getBytes()
+resultMetadata.put("file.name", MtF_cube_file_name)
+resultMetadata.put("content.type", "text/csv")
+
+println "... generate_MtF_cube_csv"
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+        </task>
+    </taskFlow>
+</job>
