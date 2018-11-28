@@ -3,18 +3,18 @@
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Mark_to_Future_cube_stats" projectName="Risk Valuation Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
     <variables>
-        <variable name="evaluation_date_start" value="01/10/2018" model="PA:DATETIME(dd/mm/yyyy)"/>
-        <variable name="evaluation_date_end" value="01/02/2021" model="PA:DATETIME(dd/mm/yyyy)"/>
+        <variable name="evaluation_date_start" value="01/12/2018" model="PA:DATETIME(dd/mm/yyyy)"/>
+        <variable name="evaluation_date_end" value="20/12/2018" model="PA:DATETIME(dd/mm/yyyy)"/>
         <variable name="evaluation_frequency" value="monthly" model="PA:LIST(monthly,biweekly)"/>
-        <variable name="shocked_yield_start" value="0.03" />
+        <variable name="shocked_yield_start" value="0" />
         <variable name="shocked_yield_end" value="0.1" />
-        <variable name="shocked_yield_delta" value="0.02" />
+        <variable name="shocked_yield_delta" value="0.00000005" />
         <variable name="bonds_params_file_path_from_dataspace" value="bonds.txt" />
         <variable name="node_source_compute_intensive" value="local" />
         <variable name="node_source_memory_intensive" value="local" />
         <variable name="data_dir_path" value="/tmp" />
-        <variable name="nb_replicated_tasks" value="1" />
-        <variable name="nb_replicated_tasks_per_cubelet" value="1" />
+        <variable name="nb_replicated_tasks" value="4" />
+        <variable name="nb_replicated_tasks_per_cubelet" value="4" />
     </variables>
     <description>
         <![CDATA[ Estimates a Mark-to-Future cube for bond portfolios. The pricing engine relies on the C++ Quantlib library. ]]>
@@ -47,47 +47,35 @@ def nb_replicated_tasks_per_cubelet = variables.get("nb_replicated_tasks_per_cub
 
 
 /////////////////////////////////////////////////////////////////////////////////////////
-// FIRST LEVEL OF PARALLELISM: AS MANY REPLICATED TASKS AS lines in the resource file
+// FIRST LEVEL OF PARALLELISM: nb_replicated_tasks REPLICATED TASKS
 // EACH REPLICATED TASK CONSIDER A SUBSET OF THE SCENARIOS (CUBE -> CUBELETS)
 /////////////////////////////////////////////////////////////////////////////////////////
 
+// Compute nb_yields_ranges_per_task
+def nb_yields = ((shocked_yield_end - shocked_yield_start) / shocked_yield_delta + 1).trunc()
+def nb_yields_per_task = (nb_yields / nb_replicated_tasks).trunc()
+def nb_yields_per_task_array = [nb_yields_per_task]*nb_replicated_tasks
 
-// Compute shocked yields and number of yields per task
-def shocked_yields = []
-def shocked_yield_tmp = shocked_yield_start
-def task_id_tmp = 0
-def nb_yields_per_task = [0]*nb_replicated_tasks
-while(shocked_yield_tmp < shocked_yield_end)
-{
-    // Update the yields list
-    shocked_yields += shocked_yield_tmp
-    shocked_yield_tmp += shocked_yield_delta
+// Now distribute the remainder yield ranges to the tasks
+nb_remainder_yields = nb_yields % nb_replicated_tasks
+0.upto(nb_remainder_yields-1) {
 
-    // Increment the yield number for the current task
-    nb_yields_per_task[task_id_tmp % nb_replicated_tasks]++
-    task_id_tmp++
+    nb_yields_per_task_array[it]++
 }
-shocked_yields += shocked_yield_end
-nb_yields_per_task[task_id_tmp % nb_replicated_tasks]++
+println "nb_yields " + nb_yields
+println "nb_yields_per_task_array " + nb_yields_per_task_array
 
-println "shocked_yields " + shocked_yields
-println "nb_yields_per_task " + nb_yields_per_task
-
-// Set scenarios to replicated tasks
-def current_yield_index = 0
-def yield_index_start = -1
-def yield_index_end = -1
-
+// Give a yield start/end to each replicated tasks
+def shocked_yield_start_tmp = null
+def shocked_yield_end_tmp = shocked_yield_start - shocked_yield_delta
 0.upto(nb_replicated_tasks-1) {
 
-    // Split scenarios
-    yield_index_start = yield_index_end + 1
-    yield_index_end += nb_yields_per_task[it]
-    println yield_index_start + "-" + yield_index_end
+    shocked_yield_start_tmp = shocked_yield_end_tmp + shocked_yield_delta
+    shocked_yield_end_tmp = shocked_yield_start_tmp + (nb_yields_per_task_array[it] - 1) * shocked_yield_delta
 
     // Store scenarios
-    variables.put("task_" + it + "_yield_start", shocked_yields[yield_index_start])
-    variables.put("task_" + it + "_yield_end", shocked_yields[yield_index_end])
+    variables.put("task_" + it + "_yield_start", shocked_yield_start_tmp)
+    variables.put("task_" + it + "_yield_end", shocked_yield_end_tmp)
 }
 
 
@@ -108,18 +96,16 @@ def header = list_lines.remove(0)
 def bonds_params_file_name = bonds_params_file.name
 variables.put("bonds_params_file_name", bonds_params_file_name)
 (0..nb_replicated_tasks_per_cubelet-1).each {
-    new File(localspace, it + "_" + bonds_params_file_name).text = header + System.getProperty("line.separator")
+    new File(localspace, it + "_" + bonds_params_file_name).text = header
 }
-println "split bonds files created!"
 
 // Now fill each bonds file
 task_id_tmp = 0
 list_lines.each { String line ->
 
-    new File(localspace, (task_id_tmp % nb_replicated_tasks_per_cubelet) + "_" + bonds_params_file_name).append(line + System.getProperty("line.separator"))
-    task_id_tmp++
+    new File(localspace, task_id_tmp + "_" + bonds_params_file_name).append(System.getProperty("line.separator") + line)
+    task_id_tmp = (task_id_tmp + 1) % nb_replicated_tasks_per_cubelet
 }
-println "split bonds files filled!"
 
 println "... split"
 ]]>
@@ -178,6 +164,11 @@ def node_source_compute_intensive = variables.get("node_source_compute_intensive
 def node_source_memory_intensive = variables.get("node_source_memory_intensive")
 def data_dir_path = variables.get("data_dir_path")
 def nb_replicated_tasks_per_cubelet = variables.get("nb_replicated_tasks_per_cubelet")
+
+println "================="
+println "shocked_yield_start " + shocked_yield_start
+println "shocked_yield_end " + shocked_yield_end
+println "================="
 
 // Connect to the scheduler for workflow submission
 schedulerapi.connect()
