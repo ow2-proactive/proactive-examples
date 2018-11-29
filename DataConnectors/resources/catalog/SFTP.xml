@@ -18,15 +18,15 @@
 It is launched with the following parameters:
 $HOST (required) is the SFTP server host. Default value is localhost.
 $USERNAME (required) is the username used for accessing the SFTP server.
-$PORT (optional) is the listening port. Default value is 22.
-$LOCAL_BASE (optional) is the local relative path in the data space from which we export file(s) to the SFTP server. $LOCAL_BASE can be either a path to a folder terminated by / or an empty value for the root (e.g. LOCAL/).
+$PORT (optional) is the listening port.
+$LOCAL_BASE (optional) is either a global path or a local relative path in the data space from which we export file(s) to the SFTP server. $LOCAL_BASE can be either a path to a folder terminated by / or an empty value for the root (e.g. LOCAL/, /global/path/LOCAL/).
 $REMOTE_BASE (optional) is the remote relative path on the SFTP server to which we export file(s) (e.g. REMOTE/).
-$FILE_PATTERN (optional) is either a file name or a wildcard string pattern (e.g. file.txt, *.txt, ** ) ]]>
+$FILE_PATTERN (optional) is either a file name or a wildcard string pattern (e.g. file.txt, *.txt, **) ]]>
       </description>
       <variables>
         <variable name="HOST" value="localhost" inherited="false" />
         <variable name="USERNAME" value="" inherited="false" />
-        <variable name="PORT" value="22" inherited="false" />
+        <variable name="PORT" value="" inherited="false" />
         <variable name="FILE_PATTERN" value="" inherited="false" />
         <variable name="REMOTE_BASE" value="" inherited="false" model="PA:REGEXP(^$|^.+/$)"/>
         <variable name="LOCAL_BASE" value="" inherited="false" model="PA:REGEXP(^$|^.+/$)"/>
@@ -40,138 +40,11 @@ $FILE_PATTERN (optional) is either a file name or a wildcard string pattern (e.g
       </depends>
       <scriptExecutable>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*
-#If you want to add more functionalities like a Proxy use
-# Please refer to Commons Virtual File System doc for more info.
-# https://commons.apache.org/proper/commons-vfs/index.html
-*/
-
-import java.io.File;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.regex.Pattern;
-import org.apache.commons.vfs2.*;
-import org.apache.commons.vfs2.auth.*;
-import org.apache.commons.vfs2.impl.*;
-import org.apache.commons.vfs2.provider.local.*;
-import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
-
-///Set connection parameters and retrieve the sftp password
-final String SFTP_URL_KEY = "sftp://<username>@<host>";
-host = variables.get("HOST")
-username = variables.get("USERNAME")
-port = variables.get("PORT")
-password = checkParametersAndReturnPassword()
-
-//Initialize the connection manger to the remote SFTP server.
-optsRemote = new FileSystemOptions()
-fsManager = null 
-initializeAuthentication()
-
-//Initialize file pattern, local and remote bases
-remoteDir = variables.get("REMOTE_BASE")
-filePattern = variables.get("FILE_PATTERN")
-localBase = variables.get("LOCAL_BASE")
-src = null
-//Export file(s) to the SFTP server
-importFiles()
-release()
-
-/**
-* Retrieves files that match the specified File pattern from the SFTP server
-* and import them to the local directory (global space).
-*/
-void importFiles(){
-	try {   
-    	startUrl = "sftp://" + host + ":" + port + "/" + remoteDir   
-    	localDir = Paths.get(localspace, localBase).toString()
-        (new File(localDir)).mkdirs()
-        ftpFile = fsManager.resolveFile(startUrl, optsRemote)
-        src = ftpFile
-        remoteBasePath = ftpFile.getName()
-        children = this.ftpFile.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
-        children.each { f ->
-        	String relativePath =
-            File.separator + remoteBasePath.getRelativeName(f.getName());
-       		 if (f.getType() == FileType.FILE) {
-            	println("Examining remote file " + f.getName());
-                standardPath = new File(localDir, relativePath);
-            	localUrl = standardPath.toURI().toURL();            
-            	println("  Standard local path is " + standardPath);
-            	LocalFile localFile = (LocalFile) fsManager.resolveFile(localUrl.toString());
-            	println("    Resolved local file name: " + localFile.getName());
-                if (!localFile.getParent().exists()) {
-                	localFile.getParent().createFolder();
-            	}
-            	println("  ### Retrieving file ###");
-            	localFile.copyFrom(f, new AllFileSelector());
-             } else {
-            	println("Ignoring non-file " + f.getName());
-        	}
-    	}
-	} catch (FileSystemException ex) {
-            throw new RuntimeException("Error collecting directory listing of " +
-                    startUrl, ex);
-    }
-}
-
-/**
-* Release system resources, close connection to the filesystem. 
-*/
-void release() {
-    FileSystem fs = null;
-    if (src != null) {
-        fs = src.getFileSystem(); // This works even if the src is closed.
-        fsManager.closeFileSystem(fs)
-    }
-} 
-
-/**
-* Checks whether the provided host, username and port values are empty or not, then
-* returns the sftp password using the third party credentials mechanism
-*/
-def checkParametersAndReturnPassword (){
-    if (host.isEmpty()){
-    	throw new IllegalArgumentException("ERROR: HOST variable is not provided by the user. Empty value is not allowed.")
-	}
-	if (username.isEmpty()){
-     	throw new IllegalArgumentException("ERROR: USERNAME variable is not provided by the user. Empty value is not allowed.")
-	}
-	def ftpUrlKey = "sftp://" + username + "@" + host;
-	def password = credentials.get(sftpUrlKey)
-	if (password == null || password.isEmpty()){
-   		 throw new IllegalArgumentException("Please add your sftp password to 3rd-party credentials under the key :\"" +
-                                               SFTP_URL_KEY + "\"");
-	}
-	if (port == null || port.isEmpty()){
-      	port = "22"
-      	println("WARNING: PORT variable is not provided by the user. Using the default value.")
-	}
-    return password
-}
-
-/**
-*This method initializes the connection to the remote SFTP server and returns the FileSystemManager instance that manages this connection.
-*/
-void initializeAuthentication(){
-    try {
-    	fsManager = VFS.getManager();
-	} catch (FileSystemException ex) {
-    	throw new RuntimeException("failed to get fsManager from VFS", ex);
-	}
-	def auth = new StaticUserAuthenticator(null, username, password)
-	try {
- 		DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
-	} catch (FileSystemException ex) {
-    	throw new RuntimeException("setUserAuthenticator failed", ex);
-	}
-}
-
-result = true
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/data-connector-scripts/resources/ImportFromFileSystem/raw" language="groovy">
+            <arguments>
+              <argument value="sftp"/>
+            </arguments>
+          </file>
         </script>
       </scriptExecutable>
       <outputFiles>
@@ -184,15 +57,15 @@ result = true
 It is launched with the following parameters:
 $HOST (required) is the SFTP server host. Default value is localhost.
 $USERNAME (required) is the username used for accessing the SFTP server.
-$PORT (optional) is the listening port. Default value is 22.
-$LOCAL_BASE (optional) is the local relative path in the data space from which we export file(s) to the SFTP server. $LOCAL_BASE can be either a path to a folder terminated by / or an empty value for the root (e.g. LOCAL/).
+$PORT (optional) is the listening port.
+$LOCAL_BASE (optional) is either a global path or a local relative path in the data space from which we export file(s) to the SFTP server. $LOCAL_BASE can be either a path to a folder terminated by / or an empty value for the root (e.g. LOCAL/, /global/path/LOCAL/).
 $REMOTE_BASE (optional) is the remote relative path on the SFTP server to which we export file(s) (e.g. REMOTE/).
 $FILE_PATTERN (optional) is either a file name or a wildcard string pattern (e.g. file.txt, *.txt, ** ) ]]>
       </description>
       <variables>
         <variable name="HOST" value="localhost" inherited="false" />
         <variable name="USERNAME" value="" inherited="false" />
-        <variable name="PORT" value="22" inherited="false" />
+        <variable name="PORT" value="" inherited="false" />
         <variable name="FILE_PATTERN" value="" inherited="false" />
         <variable name="REMOTE_BASE" value="" inherited="false" model="PA:REGEXP(^$|^.+/$)"/>
         <variable name="LOCAL_BASE" value="" inherited="false" model="PA:REGEXP(^$|^.+/$)"/>
@@ -206,139 +79,11 @@ $FILE_PATTERN (optional) is either a file name or a wildcard string pattern (e.g
       </inputFiles>
       <scriptExecutable>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*
-#If you want to add more functionalities like a Proxy use
-# Please refer to Commons Virtual File System doc for more info.
-# https://commons.apache.org/proper/commons-vfs/index.html
-*/
-
-import java.io.File;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.regex.Pattern;
-import org.apache.commons.vfs2.*;
-import org.apache.commons.vfs2.auth.*;
-import org.apache.commons.vfs2.impl.*;
-import org.apache.commons.vfs2.provider.local.*;
-import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
-
-//Set connection parameters and retrieve the sftp password
-final String SFTP_URL_KEY = "sftp://<username>@<host>";
-host = variables.get("HOST")
-username = variables.get("USERNAME")
-port = variables.get("PORT")
-password = checkParametersAndReturnPassword()
-
-//Initialize the connection manger to the remote SFTP server.
-optsRemote = new FileSystemOptions()
-fsManager = null 
-initializeAuthentication()
-
-//Initialize file pattern, local and remote bases
-remoteDir = variables.get("REMOTE_BASE")
-filePattern = variables.get("FILE_PATTERN")
-localBase = variables.get("LOCAL_BASE")
-src = null
-//Export file(s) to the SFTP server
-exportFiles()
-release()
-
-/**
-* Retrieves files that match the specified File pattern from the local directory (global space)
-* and export them to the SFTP server.
-*/
-void exportFiles(){
-	try {
-    	optsLocal = new FileSystemOptions()
-		startRemoteUrl = "sftp://" + host + ":" + port + "/" + remoteDir
-    	localDir = Paths.get(localspace, localBase).toString()
-    	startLocalPath = new File(localDir).toURI().toURL().toString();  
-    	println "Local path is : " + startLocalPath
-    	(new File(localDir)).mkdirs()
-        localFileRoot = fsManager.resolveFile(startLocalPath, optsLocal)
-        src = localFileRoot
-		localBasePath = localFileRoot.getName()
-		children = localFileRoot.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
-		children.each { f ->
-        	String relativePath = localBasePath.getRelativeName(f.getName());
-			if (f.getType() == FileType.FILE) {
-            	println("Examining local file " + f.getName());
-            	String remoteUrl = startRemoteUrl + "/" + relativePath;
-            	println("  Remote url is " + remoteUrl);
-            	remoteFile = fsManager.resolveFile(remoteUrl, optsRemote);
-            	println("    Resolved remote file name: " + remoteFile.getName());
-            	if (!remoteFile.getParent().exists()) {
-                	remoteFile.getParent().createFolder();
-            	}
-            	println("  ### Uploading file ###");
-            	remoteFile.copyFrom(f, new AllFileSelector());
-			} else {
-            	println("Ignoring non-file " + f.getName());
-       		 } 
-        }
-	} catch (FileSystemException ex) {
-            throw new RuntimeException("Error collecting directory listing of " +
-                    startRemoteUrl, ex);
-    }
-}
-
-/**
-* Release system resources, close connection to the filesystem. 
-*/
-void release() {
-    FileSystem fs = null;
-    if (src != null) {
-        fs = src.getFileSystem(); // This works even if the src is closed.
-        fsManager.closeFileSystem(fs)
-    }
-} 
-
-/**
-* Checks whether the provided host, username and port values are empty or not, then
-* returns the sftp password using the third party credentials mechanism
-*/
-def checkParametersAndReturnPassword (){
-    if (host.isEmpty()){
-    	throw new IllegalArgumentException("ERROR: HOST variable is not provided by the user. Empty value is not allowed.")
-	}
-	if (username.isEmpty()){
-     	throw new IllegalArgumentException("ERROR: USERNAME variable is not provided by the user. Empty value is not allowed.")
-	}
-	def sftpUrlKey = "sftp://" + username + "@" + host;
-	def password = credentials.get(ftpUrlKey)
-	if (password == null || password.isEmpty()){
-   		 throw new IllegalArgumentException("Please add your sftp password to 3rd-party credentials under the key :\"" +
-                                               SFTP_URL_KEY + "\"");
-	}
-	if (port == null || port.isEmpty()){
-      	port = "22"
-      	println("WARNING: PORT variable is not provided by the user. Using the default value.")
-	}
-    return password
-}
-
-/**
-*This method initializes the connection to the remote SFTP server and returns the FileSystemManager instance that manages this connection.
-*/
-void initializeAuthentication(){
-    try {
-    	fsManager = VFS.getManager();
-	} catch (FileSystemException ex) {
-    	throw new RuntimeException("failed to get fsManager from VFS", ex);
-	}
-	def auth = new StaticUserAuthenticator(null, username, password)
-	try {
- 		DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
-	} catch (FileSystemException ex) {
-    	throw new RuntimeException("setUserAuthenticator failed", ex);
-	}
-}
-
-result = true
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/data-connector-scripts/resources/ExportToFileSystem/raw" language="groovy">
+            <arguments>
+              <argument value="sftp"/>
+            </arguments>
+          </file>
         </script>
       </scriptExecutable>
     </task>
@@ -349,18 +94,18 @@ result = true
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1253px;
-            height:812px;
+            width:1067px;
+            height:632px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-392.984375px;left:-611.234375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_349" style="top: 525.984px; left: 616.234px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/sftp_import.png" width="20px">&nbsp;<span class="name">Import_from_SFTP_Server</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_352" style="top: 397.984px; left: 616.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/sftp_import.png" width="20px">&nbsp;<span class="name">Export_to_SFTP_Server</span></a></div><svg style="position:absolute;left:677.5px;top:437.5px" width="26.5" height="89" pointer-events="none" position="absolute" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-303px;left:-725.25px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_115" style="top: 436px; left: 730.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/sftp_import.png" width="20px">&nbsp;<span class="name">Import_from_SFTP_Server</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_118" style="top: 308px; left: 730.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/sftp_import.png" width="20px">&nbsp;<span class="name">Export_to_SFTP_Server</span></a></div><svg style="position:absolute;left:791.5px;top:347.5px" width="26.5" height="89" pointer-events="none" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 5.5 88 C 15.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 683.5px; top: 556px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 797.5px; top: 466px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 683.5px; top: 516px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 797.5px; top: 426px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 678px; top: 428px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 792px; top: 338px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
