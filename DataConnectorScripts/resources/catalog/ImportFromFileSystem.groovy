@@ -76,18 +76,7 @@ void importFiles() {
                 println("Standard local path is " + standardPath);
                 LocalFile localFile = (LocalFile) fsManager.resolveFile(localUrl.toString());
                 println("Resolved local file name: " + localFile.getName());
-                if (!localFile.getParent().exists()) {
-                    if (!localFile.getParent().isWriteable()) {
-                        throw new RuntimeException("This folder " + localFile.getParent() + " is read-only")
-                    }
-                    localFile.getParent().createFolder();
-                    println("Create the local folder " + localFile.getParent().toString())
-                }
-                println("  ### Retrieving file ###");
-                if (!localFile.isWriteable()) {
-                    throw new RuntimeException("This file " + localFile + " is read-only")
-                }
-                localFile.copyFrom(f, new AllFileSelector());
+                createParentFolderAndCopyFile(localFile, f)
             } else {
                 println("Ignoring non-file " + f.getName());
             }
@@ -95,6 +84,24 @@ void importFiles() {
     } catch (FileSystemException ex) {
         throw new RuntimeException(ex);
     }
+}
+
+/**
+ * Create the parent folder if it does not exist and copy the file locally
+ */
+void createParentFolderAndCopyFile(FileObject localFile, FileObject f) {
+    if (!localFile.getParent().exists()) {
+        if (!localFile.getParent().isWriteable()) {
+            throw new RuntimeException("This folder " + localFile.getParent() + " is read-only")
+        }
+        localFile.getParent().createFolder();
+        println("Create the local folder " + localFile.getParent().toString())
+    }
+    println("  ### Retrieving file ###");
+    if (!localFile.isWriteable()) {
+        throw new RuntimeException("This file " + localFile + " is read-only")
+    }
+    remoteFile.copyFrom(f, new AllFileSelector());
 }
 
 /**

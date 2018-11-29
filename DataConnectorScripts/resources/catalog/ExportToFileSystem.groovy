@@ -78,18 +78,7 @@ void exportFiles() {
                 println("  Remote url is " + remoteUrl);
                 remoteFile = fsManager.resolveFile(remoteUrl, optsRemote);
                 println("Resolved remote file name: " + remoteFile.getName());
-                if (!remoteFile.getParent().exists()) {
-                    if (!remoteFile.getParent().isWriteable()) {
-                        throw new RuntimeException("This folder " + remoteFile.getParent() + " is read-only")
-                    }
-                    remoteFile.getParent().createFolder();
-                    println("Create the remote folder " + remoteFile.getParent().toString())
-                }
-                println("  ### Uploading file ###");
-                if (!remoteFile.isWriteable()) {
-                    throw new RuntimeException("This file " + remoteFile + " is read-only")
-                }
-                remoteFile.copyFrom(f, new AllFileSelector());
+                createParentFolderAndCopyFile(remoteFile, f)
             } else {
                 println("Ignoring non-file " + f.getName());
             }
@@ -97,6 +86,24 @@ void exportFiles() {
     } catch (FileSystemException ex) {
         throw new RuntimeException(ex);
     }
+}
+
+/**
+ * Create the parent folder if it does not exist and copy the file to the remote server
+ */
+void createParentFolderAndCopyFile(FileObject remoteFile, FileObject f) {
+    if (!remoteFile.getParent().exists()) {
+        if (!remoteFile.getParent().isWriteable()) {
+            throw new RuntimeException("This folder " + remoteFile.getParent() + " is read-only")
+        }
+        remoteFile.getParent().createFolder();
+        println("Create the remote folder " + remoteFile.getParent().toString())
+    }
+    println("  ### Uploading file ###");
+    if (!remoteFile.isWriteable()) {
+        throw new RuntimeException("This file " + remoteFile + " is read-only")
+    }
+    remoteFile.copyFrom(f, new AllFileSelector());
 }
 
 /**
