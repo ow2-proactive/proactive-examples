@@ -73,15 +73,15 @@ void importFiles() {
                 println("Examining remote file " + f.getName());
                 standardPath = new File(localDir, relativePath);
                 localUrl = standardPath.toURI().toURL();
-                println("  Standard local path is " + standardPath);
+                println("Standard local path is " + standardPath);
                 LocalFile localFile = (LocalFile) fsManager.resolveFile(localUrl.toString());
-                println("    Resolved local file name: " + localFile.getName());
+                println("Resolved local file name: " + localFile.getName());
                 if (!localFile.getParent().exists()) {
                     if (!localFile.getParent().isWriteable()) {
                         throw new RuntimeException("This folder " + localFile.getParent() + " is read-only")
                     }
                     localFile.getParent().createFolder();
-                    println("create the local folder " + localFile.getParent().toString())
+                    println("Create the local folder " + localFile.getParent().toString())
                 }
                 println("  ### Retrieving file ###");
                 if (!localFile.isWriteable()) {
@@ -121,10 +121,10 @@ void release() {
  */
 def checkParametersAndReturnPassword() {
     if (host.isEmpty()) {
-        throw new IllegalArgumentException("ERROR: HOST variable is not provided by the user. Empty value is not allowed.")
+        throw new IllegalArgumentException("HOST variable is not provided by the user. Empty value is not allowed.")
     }
     if (username.isEmpty()) {
-        throw new IllegalArgumentException("ERROR: USERNAME variable is not provided by the user. Empty value is not allowed.")
+        throw new IllegalArgumentException("USERNAME variable is not provided by the user. Empty value is not allowed.")
     }
     def urlKey = URI_SCHEME + "://" + username + "@" + host;
     def password = credentials.get(urlKey)
@@ -143,15 +143,14 @@ void initializeAuthentication() {
     try {
         fsManager = VFS.getManager();
     } catch (FileSystemException ex) {
-        throw new RuntimeException("failed to get fsManager from VFS", ex);
+        throw new RuntimeException("Failed to get fsManager from VFS", ex);
     }
     def auth = new StaticUserAuthenticator(null, username, password)
     try {
-
         DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
         FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
     } catch (FileSystemException ex) {
-        throw new RuntimeException("setUserAuthenticator failed", ex);
+        throw new RuntimeException("Failed to set user authenticator", ex);
     }
 }
 
