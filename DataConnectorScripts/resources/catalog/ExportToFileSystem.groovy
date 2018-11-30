@@ -32,6 +32,9 @@ initializeAuthentication()
 //Initialize file pattern, local and remote bases
 remoteDir = variables.get("REMOTE_BASE")
 filePattern = variables.get("FILE_PATTERN")
+if (filePattern.isEmpty()) {
+    throw new IllegalArgumentException("FILE_PATTERN variable is not provided by the user. Empty value is not allowed.")
+}
 localBase = variables.get("LOCAL_BASE")
 
 // used for cleanup in release()
