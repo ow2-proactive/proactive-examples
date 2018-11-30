@@ -10,10 +10,11 @@ def channel = "Service_Instance_" + instanceId
 
 // Connect to Cloud Automation API
 def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
+def pcaStatesGI = genericInformation.get("pca.states")
 
 // If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
 def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
-if (currentStatus.equals("FINISHED") || currentStatus.equals("PAUSED") || synchronizationapi.get(channel, "RESUMED")){
+if (currentStatus.equals("FINISHED") || currentStatus.equals("PAUSED") || (pcaStatesGI.equals("(VOID,RUNNING)") && synchronizationapi.get(channel, "RESUMED"))){
     variables.put("IS_FINISHED",true)
     if (currentStatus.equals("FINISHED")){
         synchronizationapi.deleteChannel(channel)
