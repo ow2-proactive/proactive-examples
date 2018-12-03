@@ -1,6 +1,6 @@
 /*********************************************************************************
-* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE ACTION IS TRIGGERED                   *
-*********************************************************************************/
+ * THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE ACTION IS TRIGGERED                   *
+ *********************************************************************************/
 
 println("BEGIN " + variables.get("PA_TASK_NAME"))
 
@@ -12,5 +12,12 @@ def channel = "Service_Instance_" + instanceId
 def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
 variables.put("INSTANCE_NAME", instanceName)
 
-// Inform other platforms that service action is being triggred through Synchronization API
-synchronizationapi.put(channel, action, true)
+// Inform other platforms that service is running through Synchronization API
+if(action.equals("RESUME_LAUNCHED")){
+    synchronizationapi.put(channel, "RUNNING", true)
+    synchronizationapi.put(channel, "RESUMED", true)
+    synchronizationapi.put(channel, "PAUSE_LAUNCHED", false)
+}
+else{
+    synchronizationapi.put(channel, action, true)
+}
