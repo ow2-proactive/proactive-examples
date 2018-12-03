@@ -39,13 +39,23 @@ public class MetadataJsonFilesTest {
 
     private final static String SCENARIOS_KEY_NAME = "scenarios";
 
+    private final static String METADATA_KEY_NAME = "metadata";
+
+    private final static String WORKFLOW_NAME_KEY_NAME = "name";
+
+    private final static String WORKFLOW_KIND_KEY_NAME = "kind";
+
+    private final static String WORKFLOW_KIND_value = "workflow/";
+
+    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d][a-zA-Z\\d]*)*$";
+
     private final String packageDirPath;
 
     private JSONParser parser;
 
     private static boolean isPackageDir(Path packagePath) {
         return Files.isDirectory(packagePath) &&
-                Files.exists(Paths.get(packagePath.toString(), METADATA_JSON_FILE_NAME));
+               Files.exists(Paths.get(packagePath.toString(), METADATA_JSON_FILE_NAME));
     }
 
     public MetadataJsonFilesTest(String packageDirPath) {
@@ -53,28 +63,26 @@ public class MetadataJsonFilesTest {
     }
 
     @Before
-   public void init() {
+    public void init() {
         this.parser = new JSONParser();
     }
-
 
     @Parameterized.Parameters(name = "{index}: testing metadataJsonFile - {0}")
     public static List<String> data() throws IOException {
         return Files.list(Paths.get(""))
-                                  .filter(packagePath -> isPackageDir(packagePath))
-                                  .map(packagePath -> packagePath.toString())
-                                  .collect(Collectors.toList());
+                    .filter(packagePath -> isPackageDir(packagePath))
+                    .map(packagePath -> packagePath.toString())
+                    .collect(Collectors.toList());
     }
 
     @Test
-    public void doResourcesExistTest()
-            throws ParseException, IOException {
+    public void doResourcesExistTest() throws ParseException, IOException {
 
         String metadataJsonFilePath = new File(this.packageDirPath, METADATA_JSON_FILE_NAME).getAbsolutePath();
         JSONObject jsonObject = (JSONObject) this.parser.parse(new FileReader(metadataJsonFilePath));
 
         // Test if test scenarios are there
-        JSONObject test =  (JSONObject) jsonObject.get(TEST_KEY_NAME);
+        JSONObject test = (JSONObject) jsonObject.get(TEST_KEY_NAME);
         if (test != null) {
             String scenariosFilePath = (String) test.get(SCENARIOS_KEY_NAME);
             File scenariosFile = new File(this.packageDirPath, scenariosFilePath);
@@ -82,22 +90,47 @@ public class MetadataJsonFilesTest {
         }
 
         // Test if all dataspace resources are there
-        JSONObject dataspace =  (JSONObject) jsonObject.get(DATASPACE_KEY_NAME);
+        JSONObject dataspace = (JSONObject) jsonObject.get(DATASPACE_KEY_NAME);
         if (dataspace != null) {
             JSONArray filePaths = (JSONArray) dataspace.get(FILES_KEY_NAME);
-            filePaths.forEach( dataspaceFilePath -> {
-                    File dataspaceFile = new File(this.packageDirPath, (String)dataspaceFilePath);
-                    Assert.assertTrue(dataspaceFile + " does not exist!", dataspaceFile.exists());});
+            filePaths.forEach(dataspaceFilePath -> {
+                File dataspaceFile = new File(this.packageDirPath, (String) dataspaceFilePath);
+                Assert.assertTrue(dataspaceFile + " does not exist!", dataspaceFile.exists());
+            });
         }
 
         // Test if all object resources are there
-        JSONObject catalog =  (JSONObject) jsonObject.get(CATALOG_KEY_NAME);
+        JSONObject catalog = (JSONObject) jsonObject.get(CATALOG_KEY_NAME);
         if (catalog != null) {
-            JSONArray objects =  (JSONArray) catalog.get(OBJECTS_KEY_NAME);
-            objects.forEach( objectJsonObject -> {
-                String objectFilePath = (String)((JSONObject) objectJsonObject).get(FILE_KEY_NAME);
+            JSONArray objects = (JSONArray) catalog.get(OBJECTS_KEY_NAME);
+            objects.forEach(objectJsonObject -> {
+                String objectFilePath = (String) ((JSONObject) objectJsonObject).get(FILE_KEY_NAME);
                 File objectFile = new File(this.packageDirPath, objectFilePath);
-                Assert.assertTrue(objectFile + " does not exist!", objectFile.exists());});
+                Assert.assertTrue(objectFile + " does not exist!", objectFile.exists());
+            });
+        }
+    }
+
+    @Test
+    public void workflowNamePatternTest() throws ParseException, IOException {
+
+        String metadataJsonFilePath = new File(this.packageDirPath, METADATA_JSON_FILE_NAME).getAbsolutePath();
+        JSONObject jsonObject = (JSONObject) this.parser.parse(new FileReader(metadataJsonFilePath));
+
+        // Test if all workflow names match the WORKFLOW_NAME_PATTERN
+        JSONObject catalog = (JSONObject) jsonObject.get(CATALOG_KEY_NAME);
+        if (catalog != null) {
+            JSONArray objects = (JSONArray) catalog.get(OBJECTS_KEY_NAME);
+            objects.forEach(objectJsonObject -> {
+                String workflowName = (String) ((JSONObject) objectJsonObject).get(WORKFLOW_NAME_KEY_NAME);
+                JSONObject metatdata = (JSONObject) ((JSONObject) objectJsonObject).get(METADATA_KEY_NAME);
+                String workflowKind = (String) (metatdata).get(WORKFLOW_KIND_KEY_NAME);
+                if (workflowKind.toLowerCase().startsWith(WORKFLOW_KIND_value)) {
+                    Assert.assertTrue(workflowName +
+                                      " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
+                                      workflowName.matches(WORKFLOW_NAME_PATTERN));
+                }
+            });
         }
     }
 }
