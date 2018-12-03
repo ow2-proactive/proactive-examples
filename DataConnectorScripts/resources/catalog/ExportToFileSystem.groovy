@@ -18,7 +18,7 @@ import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
 URI_SCHEME = args[0]
 
 //Set connection parameters and retrieve the SFTP/FTP password
-final String URL_KEY = URI_SCHEME + "://<username>@<host>";
+URL_KEY = URI_SCHEME + "://<username>@<host>";
 host = variables.get("HOST")
 username = variables.get("USERNAME")
 port = variables.get("PORT")
@@ -79,7 +79,7 @@ void exportFiles() {
                 println("Examining local file " + f.getName());
                 String remoteUrl = startRemoteUrl + "/" + relativePath;
                 println("  Remote url is " + remoteUrl);
-                remoteFile = fsManager.resolveFile(remoteUrl, optsRemote);
+                FileObject remoteFile = fsManager.resolveFile(remoteUrl, optsRemote);
                 println("Resolved remote file name: " + remoteFile.getName());
                 createParentFolderAndCopyFile(remoteFile, f)
             } else {

@@ -18,7 +18,7 @@ import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
 URI_SCHEME = args[0]
 
 ///Set connection parameters and retrieve the SFTP/FTP password
-final String URL_KEY = URI_SCHEME + "://<username>@<host>";
+URL_KEY = URI_SCHEME + "://<username>@<host>";
 host = variables.get("HOST")
 username = variables.get("USERNAME")
 port = variables.get("PORT")
@@ -92,7 +92,7 @@ void importFiles() {
 /**
  * Create the parent folder if it does not exist and copy the file locally
  */
-void createParentFolderAndCopyFile(FileObject localFile, FileObject f) {
+void createParentFolderAndCopyFile(LocalFile localFile, FileObject f) {
     if (!localFile.getParent().exists()) {
         if (!localFile.getParent().isWriteable()) {
             throw new RuntimeException("This folder " + localFile.getParent() + " is read-only")
@@ -104,7 +104,7 @@ void createParentFolderAndCopyFile(FileObject localFile, FileObject f) {
     if (!localFile.isWriteable()) {
         throw new RuntimeException("This file " + localFile + " is read-only")
     }
-    remoteFile.copyFrom(f, new AllFileSelector());
+    localFile.copyFrom(f, new AllFileSelector());
 }
 
 /**
