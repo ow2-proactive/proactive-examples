@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Download_Model" onTaskError="continueJobExecution" priority="normal" projectName="1. Input and Output" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+  </variables>
+  <description>
+    <![CDATA[ Download a trained model by a deep learning algorithm. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="deep-learning-dev"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_model"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task name="Download_Model">
+      <description>
+        <![CDATA[ Download a trained model by a deep learning algorithm. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" model="PA:LIST(Pytorch, ONNX)" name="MODEL_TYPE" value="Pytorch"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_model"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="$MODEL_FOLDER/**"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+print("BEGIN Export_Model")
+
+import os
+import uuid
+import zipfile
+import shutil
+
+from os import remove, listdir, makedirs
+from os.path import exists, join, isfile
+
+if 'variables' in locals():
+  MODEL_PATH  = variables.get("MODEL_PATH")
+  MODEL_TYPE = variables.get("MODEL_TYPE")
+  MODEL_ONNX_PATH  = variables.get("MODEL_ONNX_PATH")
+  LABELS_PATH = variables.get("LABELS_PATH")
+  TEXT_PATH   = variables.get("TEXT_PATH")
+
+assert MODEL_PATH is not None
+
+MODEL_TYPE = MODEL_TYPE.upper()
+
+if MODEL_TYPE == 'ONNX' and MODEL_ONNX_PATH is not None:
+	MODEL_PATH = MODEL_ONNX_PATH
+elif MODEL_TYPE == 'ONNX' and MODEL_ONNX_PATH is None:
+	print('This network does not yet support the ONNX format!')
+elif MODEL_TYPE == 'PYTORCH':
+	MODEL_PATH = MODEL_PATH
+else:
+	print('Please check the [MODEL_TYPE] parameter!')    
+    
+'''
+assert MODEL_DIR_PATH is not None
+assert exists(MODEL_DIR_PATH) == True
+
+def zipdir(_path, _ziph):
+  # ziph is zipfile handle
+  for root, dirs, files in os.walk(_path):
+    for file in files:
+      _ziph.write(join(root, file))
+
+zipf = zipfile.ZipFile('model.zip', 'w', zipfile.ZIP_DEFLATED)
+zipdir(MODEL_DIR_PATH, zipf)
+zipf.close()
+'''
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+FILE_NAME = ID + '.zip'
+
+zipf = zipfile.ZipFile(FILE_NAME, 'w', zipfile.ZIP_DEFLATED)
+zipf.write(MODEL_PATH)
+if LABELS_PATH is not None:
+  zipf.write(LABELS_PATH)
+if TEXT_PATH is not None:
+  zipf.write(TEXT_PATH)  
+zipf.close()
+
+assert isfile(FILE_NAME) == True
+
+# Read the whole file at once
+FILE_BIN = None
+with open(FILE_NAME, "rb") as binary_file:
+  FILE_BIN = binary_file.read()
+assert FILE_BIN is not None
+
+if 'variables' in locals():
+  result = FILE_BIN
+  resultMetadata.put("file.extension", ".zip")
+  resultMetadata.put("file.name", "model.zip")
+  resultMetadata.put("content.type", "application/octet-stream")
+
+print("END Export_Model")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:1427px;
+            height:811px;
+            }
+        </style></head><body><div style="position:relative;top:-411.5px;left:-687.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_887" style="top: 461.5px; left: 787.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png" width="20px">&nbsp;<span class="name">Download_Model</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 834px; top: 492px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

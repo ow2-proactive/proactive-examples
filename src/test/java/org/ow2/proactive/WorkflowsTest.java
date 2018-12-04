@@ -7,6 +7,7 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -30,6 +31,7 @@ import org.ow2.proactive.scheduler.common.job.JobVariable;
 import org.ow2.proactive.scheduler.common.job.TaskFlowJob;
 import org.ow2.proactive.scheduler.common.job.factories.JobFactory;
 import org.ow2.proactive.scheduler.common.task.Task;
+import org.ow2.proactive.scheduler.core.properties.PASchedulerProperties;
 
 
 @RunWith(Parameterized.class)
@@ -49,6 +51,8 @@ public class WorkflowsTest {
 
     private final static String PCW_RULE_NAME = "rule";
 
+    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d][a-zA-Z\\d]*)*$";
+
     private final String filePath;
 
     private TaskFlowJob job = null;
@@ -64,6 +68,7 @@ public class WorkflowsTest {
 
     @Before
     public void init() throws Exception {
+        PASchedulerProperties.CATALOG_REST_URL.updateProperty("http://localhost:8080/catalog");
         JobFactory factory = JobFactory.getFactory();
         this.job = (TaskFlowJob) factory.createJob(this.filePath);
     }
@@ -94,9 +99,16 @@ public class WorkflowsTest {
         jobVariables.entrySet().stream().forEach(map -> {
             if (Arrays.asList("false", "true").contains(map.getValue().getValue().toLowerCase())) {
                 assertThat("The wf variable: " + map.getValue().getName() + " MUST HAVE a boolean model: " +
-                           BOOLEAN_MODEL, map.getValue().getModel(), is(BOOLEAN_MODEL));
+                           BOOLEAN_MODEL,
+                           map.getValue().getModel(),
+                           is(BOOLEAN_MODEL));
             }
         });
+
+        String workflowName = this.job.getName();
+        assertTrue("The workflow name " + workflowName +
+                   " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
+                   workflowName.matches(WORKFLOW_NAME_PATTERN));
 
         // Check mandatory generic informations
         String workflowIconValue = this.job.getGenericInformation().get(WORKFLOW_ICON_KEY_NAME);
