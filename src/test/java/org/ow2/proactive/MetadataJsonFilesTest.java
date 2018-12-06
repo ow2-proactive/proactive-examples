@@ -11,6 +11,7 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -45,7 +46,7 @@ public class MetadataJsonFilesTest {
 
     private final static String WORKFLOW_KIND_KEY_NAME = "kind";
 
-    private final static String WORKFLOW_KIND_value = "workflow/";
+    private final static String WORKFLOW_KIND_VALUE = "workflow";
 
     public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d][a-zA-Z\\d]*)*$";
 
@@ -78,8 +79,7 @@ public class MetadataJsonFilesTest {
     @Test
     public void doResourcesExistTest() throws ParseException, IOException {
 
-        String metadataJsonFilePath = new File(this.packageDirPath, METADATA_JSON_FILE_NAME).getAbsolutePath();
-        JSONObject jsonObject = (JSONObject) this.parser.parse(new FileReader(metadataJsonFilePath));
+        JSONObject jsonObject = getMetadataRootObject();
 
         // Test if test scenarios are there
         JSONObject test = (JSONObject) jsonObject.get(TEST_KEY_NAME);
@@ -125,12 +125,40 @@ public class MetadataJsonFilesTest {
                 String workflowName = (String) ((JSONObject) objectJsonObject).get(WORKFLOW_NAME_KEY_NAME);
                 JSONObject metatdata = (JSONObject) ((JSONObject) objectJsonObject).get(METADATA_KEY_NAME);
                 String workflowKind = (String) (metatdata).get(WORKFLOW_KIND_KEY_NAME);
-                if (workflowKind.toLowerCase().startsWith(WORKFLOW_KIND_value)) {
+                if (workflowKind.toLowerCase().startsWith(WORKFLOW_KIND_VALUE)) {
                     Assert.assertTrue(workflowName +
                                       " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
                                       workflowName.matches(WORKFLOW_NAME_PATTERN));
                 }
             });
         }
+    }
+
+    @Test
+    public void scenariosWorkflowNamePatternTest() throws ParseException, IOException {
+
+        // Test if test scenarios are there
+        JSONObject test = (JSONObject) getMetadataRootObject().get(TEST_KEY_NAME);
+        if (test != null) {
+            File scenariosFile = new File((String) test.get(SCENARIOS_KEY_NAME));
+            if (scenariosFile.exists()) {
+                JSONArray scenarios = (JSONArray) this.parser.parse(new FileReader(scenariosFile.getAbsolutePath()));
+
+                // Test if all workflow names match the WORKFLOW_NAME_PATTERN
+                if (scenarios != null) {
+                    scenarios.forEach(objectJsonObject -> {
+                        String workflowName = (String) ((JSONObject) objectJsonObject).get(WORKFLOW_KIND_VALUE);
+                        Assert.assertTrue(workflowName +
+                                        " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
+                                workflowName.matches(WORKFLOW_NAME_PATTERN));
+                    });
+                }
+            }
+        }
+    }
+
+    private JSONObject getMetadataRootObject() throws IOException, ParseException {
+        String metadataJsonFilePath = new File(this.packageDirPath, METADATA_JSON_FILE_NAME).getAbsolutePath();
+        return  (JSONObject) this.parser.parse(new FileReader(metadataJsonFilePath));
     }
 }
