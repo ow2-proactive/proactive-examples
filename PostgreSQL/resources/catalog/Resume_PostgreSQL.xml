@@ -28,70 +28,20 @@ It will run every minute. ]]>
       </depends>
       <scriptExecutable>
         <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def channel = "Service_Instance_" + instanceId
-
-// Connect to Cloud Automation API
-def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
-
-// If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
-def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
-if (currentStatus.equals("FINISHED") || currentStatus.equals("PAUSED")){
-    variables.put("IS_FINISHED",true)
-    synchronizationapi.deleteChannel(channel)
-} else {
-    // Check if container has been stopped abnormally
-    def isContainerRunning = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().getText().trim().toBoolean()
-    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "FINISH_LAUNCHED")) && (!synchronizationapi.get(channel, "PAUSE_LAUNCHED"))){
-        currentStatus = 'ERROR'
-        println("[ERROR] An internal error occured in docker container: " + instanceName)
-        // Update docker container is not running
-        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
-        serviceInstanceData.setInstanceStatus(currentStatus)
-        serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
-        // Tell the CRON loop to stop
-        variables.put("IS_FINISHED",true)
-        // Exit with error
-        System.exit(1)
-    } else {
-        // Fetch all logs or only new logs since last fetch time mark
-        def lastTime=variables.get('LAST_TIME_MARKER')
-        def fetchLogsCmd = lastTime ? ["docker", "logs", "--since", lastTime, instanceName] : ["docker", "logs", instanceName]
-        fetchLogsCmd.execute().waitForProcessOutput(System.out, System.err)
-    }
-}
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw" language="groovy"></file>
         </script>
       </scriptExecutable>
       <controlFlow >
         <loop target="Loop_Over_Instance_Status">
           <script>
-            <code language="groovy">
-              <![CDATA[
-def isFinished = variables.get('IS_FINISHED') as boolean
-if(!isFinished){
-    variables.put("LAST_TIME_MARK",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
-	loop = '*/1 * * * *'
-} else{
-    loop = false
-}
-]]>
-            </code>
+            <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw" language="groovy"></file>
           </script>
         </loop>
       </controlFlow>
     </task>
-    <task name="Resume_PostgreSQL" onTaskError="cancelJob" >
+    <task name="Resume_PostgreSQL" 
+    
+    onTaskError="cancelJob" >
       <description>
         <![CDATA[ Pull PostgreSQL image and start a container ]]>
       </description>
@@ -101,90 +51,25 @@ if(!isFinished){
       </genericInformation>
       <pre>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*********************************************************************************
-* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING RESUMED              *
-*********************************************************************************/
-
-println("BEGIN " + variables.get("PA_TASK_NAME"))
-
-// Acquire service instance id and instance name from synchro channel
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def channel = "Service_Instance_" + instanceId
-
-// Inform other platforms that service is running through Synchronization API
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "RESUMED", true)
-synchronizationapi.put(channel, "PAUSE_LAUNCHED", false)
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Pre_Trigger_Action/raw" language="groovy">
+            <arguments>
+              <argument value="RESUME_LAUNCHED"/>
+            </arguments>
+          </file>
         </script>
       </pre>
       <scriptExecutable>
         <script>
-          <code language="bash">
-            <![CDATA[
-INSTANCE_NAME=$variables_INSTANCE_NAME
-
-if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
- RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
- STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
-	if [ "$RUNNING" == "true" ]; then
-   		echo docker container: "$INSTANCE_NAME" is running
-        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
-	elif [ "$STOPPED" == "exited" ]; then
-		echo Starting docker container: "$INSTANCE_NAME"
-        INSTANCE_STATUS=$(docker start $INSTANCE_NAME 2>&1)
-        echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
-	fi
-else
-    echo Error: No such container: "$INSTANCE_NAME" > $INSTANCE_NAME"_status"
-fi
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Resume_Action/raw" language="bash"></file>
         </script>
       </scriptExecutable>
       <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*********************************************************************************
-* THIS POSTSCRIPT INFORMS PLATFORM THAT PCA SERVICE IS RESUMED                   *
-*********************************************************************************/
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-// Acquire service instance id
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-// Update service instance data : (status, endpoint)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
-def status = new File(instanceName+"_status").text.trim()
-def currentStatus = (!status.equals(instanceName)) ? "ERROR" : "RUNNING"
-serviceInstanceData.setInstanceStatus(currentStatus)
-serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
-
-// Print warning or error messages and force job to exit with error if there are any.
-if (!status.equals(instanceName)){
-    println("[ERROR] Could not resume docker container: " + instanceName + ". Docker output: " + status)
-    System.exit(1)
-}
-
-println("END " + variables.get("PA_TASK_NAME"))
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Trigger_Action/raw" language="groovy">
+            <arguments>
+              <argument value="RUNNING"/>
+            </arguments>
+          </file>
         </script>
       </post>
     </task>
@@ -195,26 +80,26 @@ println("END " + variables.get("PA_TASK_NAME"))
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1139px;
-            height:566px;
+            width:1427px;
+            height:812px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-269.9875030517578px;left:-481px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_718" style="top: 403px; left: 486px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_721" style="top: 275px; left: 486px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png" width="20px">&nbsp;<span class="name">Resume_PostgreSQL</span></a></div><svg style="position:absolute;left:541.5px;top:314.5px" width="36" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 15 88 C 25 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-589px;left:-625px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1021" style="top: 721px; left: 630px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1024" style="top: 594px; left: 630px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/postgresql.png" width="20px">&nbsp;<span class="name">Resume_PostgreSQL</span></a></div><svg style="position:absolute;left:685.5px;top:633.5px" width="36" height="88" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 15 87 C 25 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M16.55088,66.303232 L18.90737940053047,45.245052815291274 L13.424194637075896,52.656846447727325 L5.260993848257804,48.37173817821538 L16.55088,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M16.55088,66.303232 L18.90737940053047,45.245052815291274 L13.424194637075896,52.656846447727325 L5.260993848257804,48.37173817821538 L16.55088,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:628.0266769263776px;top:352.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M16.55088,65.388768 L18.84626210521223,44.32383930344203 L13.384608234291187,51.7515130304075 L5.209007135619735,47.49011106915084 L16.55088,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M16.55088,65.388768 L18.84626210521223,44.32383930344203 L13.384608234291187,51.7515130304075 L5.209007135619735,47.49011106915084 L16.55088,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:772.0266769263776px;top:670.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_732" style="position: absolute; transform: translate(-50%, -50%); left: 640px; top: 422.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 557px; top: 433px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1035" style="position: absolute; transform: translate(-50%, -50%); left: 784px; top: 740.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 701px; top: 751px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 557px; top: 393px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 701px; top: 711px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 638px; top: 393px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 782px; top: 711px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 638px; top: 433px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 782px; top: 751px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 542px; top: 305px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 686px; top: 624px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
