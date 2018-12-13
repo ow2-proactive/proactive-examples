@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Zookeeper_Start_Or_Bind_Service" projectName="1. Zookeeper" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Zookeeper_Start_or_Bind_Service" projectName="1. Zookeeper" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <description>
     <![CDATA[ This workflow calls ProActive-Cloud-Automation service to deploy an instance of Apache Zookeeper coordination server (https://zookeeper.apache.org/). The deployed instance consists in a single Zookeeper broker. The name and the endpoint of the deployed instance are added to the list of variables. ]]>
   </description>
@@ -16,49 +16,119 @@
         <![CDATA[ This task calls ProActive-Cloud-Automation service to deploy an instance of Apache Zookeeper coordination server (https://zookeeper.apache.org/). The deployed instance consists in a single Zookeeper broker. The name and the endpoint of the deployed instance are added to the list of variables. ]]>
       </description>
       <variables>
-        <variable name="instance_name" value="zookeeper-server-1" inherited="false" />
-        <variable name="service_model" value="http://models.activeeon.com/pca/zookeeper" inherited="false" />
+        <variable name="INSTANCE_NAME" value="zookeeper-server-1" inherited="false" />
+        <variable name="SERVICE_ID" value="Zookeeper" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg"/>
       </genericInformation>
+      <inputFiles>
+        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
-import org.ow2.proactive.pca.client.api.CloudAutomationApi;
-import java.util.Optional;
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
 
-zookeeper_model = variables.get("service_model")
-zookeeper_instanceName = variables.get("instance_name")
 
-schedulerapi.connect();
+println("BEGIN " + variables.get("PA_TASK_NAME"))
 
-pcaUrl = variables.get("PA_SCHEDULER_REST_URL").replaceAll("/rest\\z", "/cloud-automation-service");
-sessionId = schedulerapi.getSession();
-api = new CloudAutomationApi(pcaUrl, sessionId);
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionId = schedulerapi.getSession()
 
-//Start Zookeeper
-Optional<String> zookeeper_endpoint  = api.getServiceEndpoint(zookeeper_model,zookeeper_instanceName);
-if( !zookeeper_endpoint.isPresent()) {
-            api.createServiceInstance(zookeeper_model, zookeeper_instanceName);
-            zookeeper_endpoint = api.waitForServiceEndpoint(zookeeper_model, zookeeper_instanceName, 60);
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def serviceId = variables.get("SERVICE_ID")
+def instanceName = variables.get("INSTANCE_NAME")
+println("SERVICE_ID:    " + serviceId)
+println("INSTANCE_NAME: " + instanceName)
+
+/*********************************************************************************
+*                     Using existing instance (if it exists)                     *
+/********************************************************************************/
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
+
+for (ServiceInstanceData serviceInstanceData : service_instances) {
+    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
+        if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
+            instance_exists = true
+            def instanceId = serviceInstanceData.getInstanceId()
+            endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+            println("INSTANCE_ID: " + instanceId)
+            println("ENDPOINT:    " + endpoint)
+            variables.put("INSTANCE_ID", instanceId)
+            variables.put("ENDPOINT", endpoint)
+            break
+        }
+      }
+}
+/*********************************************************************************
+*                             Creating a new instance                            *
+/********************************************************************************/
+println("INSTANCE_EXISTS ? " + instance_exists)
+
+if (!instance_exists){
+    // Prepare service description
+    ServiceDescription serviceDescription = new ServiceDescription()
+    serviceDescription.setBucketName("cloud-automation")
+    serviceDescription.setWorkflowName(serviceId)
+    serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
+
+    // Run service
+    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription)
+
+    // Acquire service Instance ID
+    def serviceInstanceId = serviceInstanceData.getInstanceId()
+
+    // Create synchro channel
+    def channel = "Service_Instance_" + serviceInstanceId
+    println("CHANNEL: " + channel)
+    synchronizationapi.createChannelIfAbsent(channel, false)
+    synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
+
+    // Acquire service endpoint
+    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
+    def instanceId = serviceInstanceData.getInstanceId()
+    endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+
+    println("INSTANCE_ID: " + instanceId)
+    println("ENDPOINT: " + endpoint)
+
+    variables.put("INSTANCE_ID", instanceId)
+    variables.put("ENDPOINT", endpoint)
 }
 
-println "zookeeper Service "      + zookeeper_model + " is available on " + zookeeper_endpoint.get()
-
-variables.put("zookeeper_instance", zookeeper_instanceName)
-variables.put("zookeeper_endpoint", zookeeper_endpoint.get())
-
-println 'zookeeper instance added to variables'
-println 'zookeeper_instance='+zookeeper_instanceName
-
-println 'zookeeper endpoint added to variables'
-println 'zookeeper_endpoint='+zookeeper_endpoint.get()
+println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <metadata>
+        <positionTop>
+            412.51419830322266
+        </positionTop>
+        <positionLeft>
+            492.9403381347656
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
   <metadata>
@@ -67,10 +137,10 @@ println 'zookeeper_endpoint='+zookeeper_endpoint.get()
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1139px;
-            height:566px;
+            width:2476px;
+            height:2795px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-333.9875030517578px;left:-431.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_289" style="top: 339px; left: 436.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg" width="20px">&nbsp;<span class="name">Zookeeper_Start_or_Bind_Service</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 521px; top: 369px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-407.51419830322266px;left:-487.9403381347656px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1779" style="top: 412.515px; left: 492.954px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg" width="20px">&nbsp;<span class="name">Zookeeper_Start_or_Bind_Service</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 577px; top: 443px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
