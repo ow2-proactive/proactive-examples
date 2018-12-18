@@ -4,8 +4,7 @@ if (variables.get("SKIP_WEB_VALIDATION") && variables.get("SKIP_WEB_VALIDATION")
     return;
 }
 
-// Please fill variables
-def notification_message = args[0]
+def notification_message = (binding.variables["args"] && args[0]) ? args[0] : "Put your web validation message here"
 
 // Don't change code below unless you know what you are doing
 def jobid = variables.get("PA_JOB_ID")
