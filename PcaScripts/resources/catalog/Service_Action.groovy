@@ -29,7 +29,7 @@ if(instanceName){
 }else if (instanceId){
     instanceId = instanceId as int
 }else{
-    throw new IllegalArgumentException("You have to specify either an INSTANCE_NAME or an INSTANCE_ID. Both variables cannot not empty.");
+    throw new IllegalArgumentException("You have to specify either an INSTANCE_NAME or an INSTANCE_ID. Both variables cannot be empty.");
 }
 
 println("INSTANCE_ID: " + instanceId)
