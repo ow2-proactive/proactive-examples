@@ -3,10 +3,8 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Cassandra_Database_Interaction" projectName="Cassandra Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <variables>
-    <variable name="CASSANDRA_INSTANCE_NAME" value="cassandra-server" model="PA:SPEL( (variables[CASSANDRA_INSTANCE_NAME] = &quot;cassandra-server-&quot;+(T(java.lang.Math).random()*1000).intValue()) instanceof T(String) )"/>
-    <variable name="CASSANDRA_ENV_VARS" value="" />
+    <variable name="ENV_VARS" value="" />
     <variable name="CASSANDRA_KEYSPACE" value="activeeon" />
-    <variable name="ACTION" value="Finish_Cassandra" model="PA:LIST(Pause_Cassandra, Resume_Cassandra, Finish_Cassandra)"/>
   </variables>
   <description>
     <![CDATA[ This workflow shows how to deploy and use a PCA Cassandra service.
@@ -30,143 +28,16 @@ It demonstrates how to start a Cassandra database server using the PCA client AP
         <script>
           <code language="groovy">
             <![CDATA[
-def endpoint = new URL(variables.get("ENDPOINT" ))
+def endpoint = new URL(results[0].toString())
 variables.put("CASSANDRA_HOST",endpoint.getHost())
 variables.put("CASSANDRA_PORT",endpoint.getPort())
+variables.put("CASSANDRA_ENV_VARS", variables.get("ENV_VARS"))
 // Wait for database sever to be up and fully running.
 sleep(3000)
 ]]>
           </code>
         </script>
       </scriptExecutable>
-    </task>
-    <task name="Start_Cassandra" onTaskError="cancelJob" >
-      <description>
-        <![CDATA[ Start the Cassandra server as a service. ]]>
-      </description>
-      <variables>
-        <variable name="SERVICE_ID" value="Cassandra" inherited="false" />
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
-      </genericInformation>
-      <pre>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-/*********************************************************************************
-* THIS PRESCRIPT MAPS THE SERVICE SPECIFIC VARIABLES WITH GENERIC VARIABLE NAMES *
-* THIS AVOIDS YOU FROM CHANGING THE WHOLE PCA WORKFLOWS IMPLEMENTATIONS          *
-*********************************************************************************/
-
-variables.put("INSTANCE_NAME", variables.get("CASSANDRA_INSTANCE_NAME"))
-variables.put("ENV_VARS", variables.get("CASSANDRA_ENV_VARS"))
-]]>
-          </code>
-        </script>
-      </pre>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-println("BEGIN " + variables.get("PA_TASK_NAME"))
-
-/*********************************************************************************
-* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
-/********************************************************************************/
-def envVars = variables.get("ENV_VARS")
-/********************************************************************************/
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def sessionId = schedulerapi.getSession()
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pcaUrl = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-//apiClient.setDebugging(true)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-def serviceId = variables.get("SERVICE_ID")
-def instanceName = variables.get("INSTANCE_NAME")
-println("SERVICE_ID:    " + serviceId)
-println("INSTANCE_NAME: " + instanceName)
-
-// Check existing service instances
-boolean instance_exists = false
-List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
-
-for (ServiceInstanceData serviceInstanceData : service_instances) {
-    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
-        if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
-            instance_exists = true
-            def instanceId = serviceInstanceData.getInstanceId()
-            endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
-            println("INSTANCE_ID: " + instanceId)
-            println("ENDPOINT:    " + endpoint)
-            variables.put("INSTANCE_ID", instanceId)
-            variables.put("ENDPOINT", endpoint)
-            break
-        }
-  	}
-}
-
-println("INSTANCE_EXISTS ? " + instance_exists)
-
-if (!instance_exists){
-    // Prepare service description
-    ServiceDescription serviceDescription = new ServiceDescription()
-    serviceDescription.setBucketName("cloud-automation")
-    serviceDescription.setWorkflowName(serviceId)
-    serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
-
-/*********************************************************************************
-* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
-/********************************************************************************/
-    serviceDescription.putVariablesItem("ENV_VARS", envVars)
-/********************************************************************************/
-    // Run service
-    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription)
-
-    // Acquire service Instance ID
-    def serviceInstanceId = serviceInstanceData.getInstanceId()
-
-    // Create synchro channel
-    def channel = "Service_Instance_" + serviceInstanceId
-    println("CHANNEL: " + channel)
-    synchronizationapi.createChannelIfAbsent(channel, false)
-    synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
-
-    // Acquire service endpoint
-    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
-    def instanceId = serviceInstanceData.getInstanceId()
-    endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
-
-    println("INSTANCE_ID: " + instanceId)
-    println("ENDPOINT: " + endpoint)
-
-    variables.put("INSTANCE_ID", instanceId)
-    variables.put("ENDPOINT", endpoint)
-}
-
-println("END " + variables.get("PA_TASK_NAME"))
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
     </task>
     <task name="Import_from_Cassandra" >
       <description>
@@ -497,61 +368,14 @@ print("END Export_Data")
           </code>
         </script>
       </scriptExecutable>
-    </task>
-    <task name="Cassandra_Service_Action" onTaskError="cancelJob" >
-      <variables>
-        <variable name="INSTANCE_ID" value="" inherited="true" />
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
-      </genericInformation>
-      <depends>
-        <task ref="Import_from_Cassandra"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN " + variables.get("PA_TASK_NAME") + " ---")
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def sessionId = schedulerapi.getSession()
-
-// Define PCA URL
-def schedulerRestUrl = variables.get("PA_SCHEDULER_REST_URL")
-def pcaUrl = schedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-//apiClient.setDebugging(true)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-def instanceId = variables.get("INSTANCE_ID") as int
-println("INSTANCE_ID: " + instanceId)
-assert instanceId != null
-
-// Execute action on service
-ServiceDescription service = new ServiceDescription()
-service.setBucketName("cloud-automation")
-service.setWorkflowName(variables.get("ACTION"))
-serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId, service)
-
-println("--- END " + variables.get("PA_TASK_NAME") + " ---")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            526
+        </positionTop>
+        <positionLeft>
+            912
+        </positionLeft>
+      </metadata>
     </task>
     <task name="Prepare_Cassandra_Cluster" >
       <description>
@@ -624,6 +448,62 @@ session.execute("""CREATE KEYSPACE IF NOT EXISTS %s WITH replication = { 'class'
         </script>
       </scriptExecutable>
     </task>
+    <task name="Start_Cassandra" 
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Cassandra server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Cassandra" inherited="false" />
+        <variable name="INSTANCE_NAME" value="cassandra-server" inherited="false" />
+        <variable name="ENV_VARS" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw" language="groovy">
+            <arguments>
+              <argument value="ENV_VARS"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Cassandra_Service_Action" 
+    
+    onTaskError="cancelJob" >
+      <variables>
+        <variable name="INSTANCE_ID" value="" inherited="false" />
+        <variable name="INSTANCE_NAME" value="cassandra-server" inherited="false" />
+        <variable name="ACTION" value="Finish_Cassandra" inherited="false" model="PA:LIST(Pause_Cassandra, Resume_Cassandra, Finish_Cassandra)"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Import_from_Cassandra"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Action/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            753
+        </positionTop>
+        <positionLeft>
+            909
+        </positionLeft>
+      </metadata>
+    </task>
   </taskFlow>
   <metadata>
     <visualization>
@@ -631,50 +511,50 @@ session.execute("""CREATE KEYSPACE IF NOT EXISTS %s WITH replication = { 'class'
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1122px;
-            height:803px;
+            width:2854px;
+            height:3248px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-108px;left:-451px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_803" style="top: 241px; left: 456px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Parse_Endpoint</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_806" style="top: 113px; left: 456px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Start_Cassandra</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_809" style="top: 625px; left: 456px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Import_from_Cassandra</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_812" style="top: 497px; left: 456px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Export_to_Cassandra</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_815" style="top: 753px; left: 456px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Cassandra_Service_Action</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_818" style="top: 369px; left: 456px;"><a class="task-name"><img src="/studio/images/Python.png" width="20px">&nbsp;<span class="name">Prepare_Cassandra_Cluster</span></a></div><svg style="position:absolute;left:498.5px;top:152.5px" width="23" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 12 50 2 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-156px;left:-892px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1669" style="top: 271px; left: 912px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Parse_Endpoint</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1672" style="top: 654px; left: 912px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Import_from_Cassandra</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1675" style="top: 526px; left: 912px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Export_to_Cassandra</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1678" style="top: 398px; left: 912px;"><a class="task-name"><img src="/studio/images/Python.png" width="20px">&nbsp;<span class="name">Prepare_Cassandra_Cluster</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1681" style="top: 161px; left: 897px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Start_Cassandra</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_1684" style="top: 753px; left: 909px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/cassandra.png" width="20px">&nbsp;<span class="name">Cassandra_Service_Action</span></a></div><svg style="position:absolute;left:941.5px;top:200.5px" width="34" height="71" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 13 70 C 23 20 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.6529999999999996,66.78168750000002 L5.422684726887218,47.19129913754225 L-1.8927913941925154,52.80234263424697 L-8.556660138865833,46.431090531734775 L-2.6529999999999996,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.6529999999999996,66.78168750000002 L5.422684726887218,47.19129913754225 L-1.8927913941925154,52.80234263424697 L-8.556660138865833,46.431090531734775 L-2.6529999999999996,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:511.5px;top:536.5px" width="26.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 5.5 88 C 15.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M14.88775,52.36000000000001 L17.51038630944286,31.333307944700586 L11.933902216535985,38.675162285502815 L3.825548594945669,34.2871557281646 L14.88775,52.36000000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M14.88775,52.36000000000001 L17.51038630944286,31.333307944700586 L11.933902216535985,38.675162285502815 L3.825548594945669,34.2871557281646 L14.88775,52.36000000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:967.5px;top:565.5px" width="26.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 5.5 88 C 15.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:511.5px;top:408.5px" width="36" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:967.5px;top:437.5px" width="36" height="89" pointer-events="none" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 25 50 15 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" d="M-1.5508800000000005,66.303232 L9.739006151742196,48.37173817821538 L1.575805362924103,52.656846447727325 L-3.9073794005304716,45.245052815291274 L-1.5508800000000005,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-1.5508800000000005,66.303232 L9.739006151742196,48.37173817821538 L1.575805362924103,52.656846447727325 L-3.9073794005304716,45.245052815291274 L-1.5508800000000005,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:517px;top:664.5px" width="27.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 6.5 88 C 16.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-1.5508800000000005,66.303232 L9.739006151742196,48.37173817821538 L1.575805362924103,52.656846447727325 L-3.9073794005304716,45.245052815291274 L-1.5508800000000005,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:954.5px;top:310.5px" width="49" height="88" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 28 87 C 38 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M8.787796875,66.78168750000002 L13.502214816791486,46.123171980483264 L7.218760132881903,52.86988949607962 L-0.4095831871289066,47.692208722601364 L8.787796875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M8.787796875,66.78168750000002 L13.502214816791486,46.123171980483264 L7.218760132881903,52.86988949607962 L-0.4095831871289066,47.692208722601364 L8.787796875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:498.5px;top:280.5px" width="49" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 28 88 C 38 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M28.3293185,64.92074025000001 L27.143087387822856,43.76434982657232 L22.97192212381845,51.986355685264165 L14.208702823087012,49.12174620275386 L28.3293185,64.92074025000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M28.3293185,64.92074025000001 L27.143087387822856,43.76434982657232 L22.97192212381845,51.986355685264165 L14.208702823087012,49.12174620275386 L28.3293185,64.92074025000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:973px;top:693.5px" width="24" height="60" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 3 59 C 13 9 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M28.3293185,65.8307285 L27.243134379193783,44.66896571766761 L23.033139643665223,52.87115715208451 L14.283563031278282,49.96514457400239 L28.3293185,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M28.3293185,65.8307285 L27.243134379193783,44.66896571766761 L23.033139643665223,52.87115715208451 L14.283563031278282,49.96514457400239 L28.3293185,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 499px; top: 271px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M5.3719019999999995,43.71384600000001 L11.370443503211945,23.391014016385036 L4.676922237205071,29.731106528447754 L-2.6122959683403124,24.085993779179965 L5.3719019999999995,43.71384600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M5.3719019999999995,43.71384600000001 L11.370443503211945,23.391014016385036 L4.676922237205071,29.731106528447754 L-2.6122959683403124,24.085993779179965 L5.3719019999999995,43.71384600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 955px; top: 301px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 499px; top: 231px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 955px; top: 261px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 501px; top: 143px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 973.5px; top: 684px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 517.5px; top: 655px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 973.5px; top: 644px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 517.5px; top: 615px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 968px; top: 556px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 512px; top: 527px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 968px; top: 516px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 512px; top: 487px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 983px; top: 428px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 524px; top: 783px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 983px; top: 388px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 524px; top: 743px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 942px; top: 191px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 527px; top: 399px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 976.5px; top: 783px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 527px; top: 359px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 976.5px; top: 743px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
