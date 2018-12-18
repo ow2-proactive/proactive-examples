@@ -26,10 +26,10 @@ def instanceId = variables.get("INSTANCE_ID")
 def instanceName = variables.get("INSTANCE_NAME")
 if(instanceName){
     instanceId = variables.get("INSTANCE_ID_" + instanceName) as int
-        }else if (instanceId){
+}else if (instanceId){
     instanceId = instanceId as int
-        } else{
-    throw new IllegalArgumentException("You have to specify an INSTANCE_NAME or an INSTANCE_ID. Empty value for both is not allowed.");
+}else{
+    throw new IllegalArgumentException("You have to specify either an INSTANCE_NAME or an INSTANCE_ID. Both variables cannot not empty.");
 }
 
 println("INSTANCE_ID: " + instanceId)
