@@ -2,8 +2,8 @@ import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 import org.ow2.proactive.pca.service.client.model.ServiceDescription
-import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow		
-import org.ow2.proactive.pca.service.client.api.CatalogRestApi		
+import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
+import org.ow2.proactive.pca.service.client.api.CatalogRestApi
 
 println("BEGIN " + variables.get("PA_TASK_NAME"))
 
@@ -53,6 +53,7 @@ for (ServiceInstanceData serviceInstanceData : service_instances) {
             println("ENDPOINT:    " + endpoint)
             variables.put("INSTANCE_ID_" + instanceName, instanceId)
             variables.put("ENDPOINT_" + instanceName, endpoint)
+            result = endpoint
             break
         }
     }
