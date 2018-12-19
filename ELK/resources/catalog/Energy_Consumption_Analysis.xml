@@ -1,414 +1,20 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Energy_Consumption_Analysis" projectName="4. ELK Stack Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Energy_Consumption_Analysis" onTaskError="continueJobExecution" priority="normal" projectName="4. ELK Stack Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
-    <variable name="DATA_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/ELK/fusion.csv" />
-    <variable name="elasticsearch_instance_name" value="elasticsearch-server-1" />
-    <variable name="kibana_instance_name" value="kibana-server-1" />
-    <variable name="logstash_instance_name" value="logstash-server-1" />
+    <variable name="DATA_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/ELK/fusion.csv"/>
   </variables>
   <description>
     <![CDATA[ Analysis of energy consumption for a sample of London Households using ELK.
 You can use the following pre-made dashboard to visualize the results in Kibana : https://s3.eu-west-2.amazonaws.com/activeeon-public/ELK/energy_consumption_kibana.json ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="elastic-logstash-kibana"/>
-    <info name="Documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
-    <info name="group" value="public-objects"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/electricity.png"/>
-  </genericInformation>
+<info name="bucketName" value="elastic-logstash-kibana"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/electricity.png"/>
+<info name="Documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Wait_For_Stop_Validation" 
-    
-    onTaskError="pauseJob" >
-      <description>
-        <![CDATA[ Task to pause the job and send a validation message to the notification service ]]>
-      </description>
-      <genericInformation>
-        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/web_validation.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Start_Logstash_Service"/>
-        <task ref="Start_Kibana_Service"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/notifications-tools/resources/Web_Validation_Script/raw" language="groovy">
-            <arguments>
-              <argument value="Please, validate to stop the ELK Stack services"/>
-            </arguments>
-          </file>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="Start_Elasticsearch_Service" 
-    
-    onTaskError="cancelJob" >
-      <description>
-        <![CDATA[ Start the Elasticsearch server as a service. ]]>
-      </description>
-      <variables>
-        <variable name="elasticsearch_service_id" value="Elasticsearch" inherited="false" />
-        <variable name="elasticsearch_instance_name" value="elasticsearch-server-1" inherited="true" />
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
-      </genericInformation>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN Start_Elasticsearch_Service ---")
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def session_id = schedulerapi.getSession()
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Check existing service instances
-def service_id = variables.get("elasticsearch_service_id")
-def instance_name = variables.get("elasticsearch_instance_name")
-println("*_service_id:    " + service_id)
-println("*_instance_name: " + instance_name)
-
-boolean instance_exists = false
-List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
-
-for (ServiceInstanceData service_instance_data : service_instances) {
-	if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING")){
-      if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name) {
-        instance_exists = true
-        instance_id = service_instance_data.getInstanceId()
-  		endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
-        println("*_instance_id: " + instance_id)
-        println("*_endpoint:    " + endpoint)
-        variables.put("elasticsearch_instance_id", instance_id)
-        variables.put("elasticsearch_endpoint", endpoint)
-        break
-      }
-  	}
-}
-
-println("instance_exists: " + instance_exists)
-
-if (!instance_exists){
-  // Prepare service description
-  ServiceDescription serviceDescription = new ServiceDescription()
-  serviceDescription.setBucketName("cloud-automation")
-  serviceDescription.setWorkflowName(service_id) 
-  serviceDescription.putVariablesItem("INSTANCE_NAME", instance_name)
-  
-  // Run service
-  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
-  
-  // Acquire service Instance ID
-  def service_instance_id = service_instance_data.getInstanceId()
-  println("service_instance_id: " + service_instance_id)
-  
-  // Create synchro channel
-  channel = "Service_Instance_" + service_instance_id
-  println("channel: " + channel)
-  synchronizationapi.createChannelIfAbsent(channel, false)
-  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
-  
-  // Acquire service endpoint
-  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
-  instance_id = service_instance_data.getInstanceId()
-  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
-  
-  println("INSTANCE_NAME: " + instance_name)
-  println("*_instance_id: " + instance_id)
-  println("*_endpoint: " + endpoint)
-  
-  variables.put("elasticsearch_instance_id", instance_id)
-  variables.put("elasticsearch_endpoint", endpoint)
-  
-  result = '<meta http-equiv="refresh" content="1; url=' + variables.get("elasticsearch_endpoint") + '" />'
-  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
-  resultMetadata.put("content.type", "text/html")
-}
-
-println("--- END Start_Elasticsearch_Service ---")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-    </task>
-    <task name="Start_Logstash_Service" 
-    
-    onTaskError="cancelJob" >
-      <description>
-        <![CDATA[ Start the Logstash server as a service. ]]>
-      </description>
-      <variables>
-        <variable name="logstash_service_id" value="Logstash" inherited="false" />
-        <variable name="logstash_instance_name" value="logstash-server-1" inherited="true" />
-        <variable name="elasticsearch_endpoint" value="" inherited="true" />
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/logstash/6.2/index.html"/>
-      </genericInformation>
-      <depends>
-        <task ref="Start_Elasticsearch_Service"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN Start_Logstash_Service ---")
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-// Check elasticsearch endpoint
-def elasticsearch_endpoint = variables.get("elasticsearch_endpoint")
-println("elasticsearch_endpoint: " + elasticsearch_endpoint)
-assert (elasticsearch_endpoint != null) : "endpoint must not be null"
-assert (elasticsearch_endpoint.trim() != '') : "endpoint must not be empty"
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def session_id = schedulerapi.getSession()
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Check existing service instances
-def service_id = variables.get("logstash_service_id")
-def instance_name = variables.get("logstash_instance_name")
-println("*_service_id:    " + service_id)
-println("*_instance_name: " + instance_name)
-
-boolean instance_exists = false
-List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
-
-for (ServiceInstanceData service_instance_data : service_instances)
-{
-  if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING") )
-  {
-    if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name)
-    {
-      instance_exists = true
-      instance_id = service_instance_data.getInstanceId()
-      endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
-      println("*_instance_id: " + instance_id)
-      println("*_endpoint:    " + endpoint)
-      variables.put("logstash_instance_id", instance_id)
-      variables.put("logstash_endpoint", endpoint)
-      break
-    }
-  }
-}
-
-println("instance_exists: " + instance_exists)
-
-if (!instance_exists)
-{
-  // Prepare service description
-  ServiceDescription serviceDescription = new ServiceDescription()
-  serviceDescription.setBucketName("cloud-automation")
-  serviceDescription.setWorkflowName(service_id)
-  serviceDescription.putVariablesItem("elasticsearch_endpoint", elasticsearch_endpoint)
-  serviceDescription.putVariablesItem("INSTANCE_NAME", instance_name)
-  
-  // Run service
-  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
-  
-  // Acquire service Instance ID
-  def service_instance_id = service_instance_data.getInstanceId()
-  println("service_instance_id: " + service_instance_id)
-  
-  // Create synchro channel
-  channel = "Service_Instance_" + service_instance_id
-  println("channel: " + channel)
-  synchronizationapi.createChannelIfAbsent(channel, false)
-  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
-  
-  // Acquire service endpoint
-  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
-  instance_id = service_instance_data.getInstanceId()
-  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
-  
-  println("INSTANCE_NAME: " + instance_name)
-  println("*_instance_id: " + instance_id)
-  println("*_endpoint: " + endpoint)
-  
-  variables.put("logstash_instance_id", instance_id)
-  variables.put("logstash_endpoint", endpoint)
-  
-  result = '<meta http-equiv="refresh" content="1; url=' + endpoint + '" />'
-  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
-  resultMetadata.put("content.type", "text/html")
-}
-
-println("--- END Start_Logstash_Service ---")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-    </task>
-    <task name="Start_Kibana_Service" 
-    
-    onTaskError="cancelJob" >
-      <description>
-        <![CDATA[ Start the Kibana server as a service. ]]>
-      </description>
-      <variables>
-        <variable name="kibana_service_id" value="Kibana" inherited="false" />
-        <variable name="kibana_instance_name" value="kibana-server-1" inherited="true" />
-        <variable name="elasticsearch_endpoint" value="" inherited="true" />
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/kibana/current/introduction.html"/>
-      </genericInformation>
-      <depends>
-        <task ref="Start_Elasticsearch_Service"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-println("--- BEGIN Start_Kibana_Service ---")
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-// Check elasticsearch endpoint
-def elasticsearch_endpoint = variables.get("elasticsearch_endpoint")
-println("elasticsearch_endpoint: " + elasticsearch_endpoint)
-assert (elasticsearch_endpoint != null) : "endpoint must not be null"
-assert (elasticsearch_endpoint.trim() != '') : "endpoint must not be empty"
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def session_id = schedulerapi.getSession()
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Check existing service instances
-def service_id = variables.get("kibana_service_id")
-def instance_name = variables.get("kibana_instance_name")
-println("*_service_id:    " + service_id)
-println("*_instance_name: " + instance_name)
-
-boolean instance_exists = false
-List<ServiceInstanceData> service_instances = service_instance_rest_api.getServiceInstancesUsingGET()
-
-for (ServiceInstanceData service_instance_data : service_instances)
-{
-  if ( (service_instance_data.getServiceId() == service_id) && (service_instance_data.getInstanceStatus()  == "RUNNING") )
-  {
-    if (service_instance_data.getVariables().get("INSTANCE_NAME") == instance_name)
-    {
-      instance_exists = true
-      instance_id = service_instance_data.getInstanceId()
-      endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
-      println("*_instance_id: " + instance_id)
-      println("*_endpoint:    " + endpoint)
-      variables.put("kibana_instance_id", instance_id)
-      variables.put("kibana_endpoint", endpoint)
-      break
-    }
-  }
-}
-
-println("instance_exists: " + instance_exists)
-
-if (!instance_exists)
-{
-  // Prepare service description
-  ServiceDescription serviceDescription = new ServiceDescription()
-  serviceDescription.setBucketName("cloud-automation")
-  serviceDescription.setWorkflowName(service_id)
-  serviceDescription.putVariablesItem("elasticsearch_endpoint", elasticsearch_endpoint)
-  serviceDescription.putVariablesItem("INSTANCE_NAME", instance_name)
-  
-  // Run service
-  def service_instance_data = service_instance_rest_api.createRunningServiceInstanceUsingPOST(session_id, serviceDescription)
-  
-  // Acquire service Instance ID
-  def service_instance_id = service_instance_data.getInstanceId()
-  println("service_instance_id: " + service_instance_id)
-  
-  // Create synchro channel
-  channel = "Service_Instance_" + service_instance_id
-  println("channel: " + channel)
-  synchronizationapi.createChannelIfAbsent(channel, false)
-  synchronizationapi.waitUntil(channel, "RUNNING", "{k,x -> x == true}")
-  
-  // Acquire service endpoint
-  service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-  instance_name = service_instance_data.getVariables().get("INSTANCE_NAME")
-  instance_id = service_instance_data.getInstanceId()
-  endpoint = service_instance_data.getInstanceEndpoints().entrySet().iterator().next().getValue()
-  
-  println("INSTANCE_NAME: " + instance_name)
-  println("*_instance_id: " + instance_id)
-  println("*_endpoint: " + endpoint)
-  
-  variables.put("kibana_instance_id", instance_id)
-  variables.put("kibana_endpoint", endpoint)
-  
-  result = '<meta http-equiv="refresh" content="1; url=' + endpoint + '" />'
-  result+= '<h2><span style="color:black">Please wait while redirecting...</span></h2>'
-  resultMetadata.put("content.type", "text/html")
-}
-
-println("--- END Start_Kibana_Service ---")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-    </task>
-    <task name="Configure_Logstash" >
+    <task name="Configure_Logstash">
       <description>
         <![CDATA[ The simplest task, ran by a python engine. ]]>
       </description>
@@ -422,7 +28,7 @@ println("--- END Start_Kibana_Service ---")
             <![CDATA[
 echo "=================BEGIN_CONFIGURE_LOGSTASH=================="
 
-CONTAINER=$variables_logstash_instance_name
+CONTAINER=$variables_INSTANCE_NAME_LOGSTASH
 DATA_URL=$variables_DATA_URL
 
 docker exec $CONTAINER /bin/bash -c "cd usr/share/logstash/config && mkdir -p energy"
@@ -435,178 +41,357 @@ echo "=================END_CONFIGURE_LOGSTASH=================="
           </code>
         </script>
       </scriptExecutable>
+      <metadata>
+        <positionTop>
+            516
+        </positionTop>
+        <positionLeft>
+            632.015625
+        </positionLeft>
+      </metadata>
     </task>
-    <task name="Finish_Kibana_Service" 
-    
-    onTaskError="cancelJob" >
+    <task name="Start_Elasticsearch_Service" onTaskError="cancelJob">
       <description>
-        <![CDATA[ Finish the Kibana service. ]]>
+        <![CDATA[ Start the Elasticsearch server as a service. ]]>
       </description>
+      <variables>
+        <variable inherited="false" name="SERVICE_ID" value="Elasticsearch"/>
+        <variable inherited="false" name="INSTANCE_NAME" value="elasticsearch-server-1"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("ENDPOINT_ELASTICSEARCH",variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME")))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            260
+        </positionTop>
+        <positionLeft>
+            632
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start_Kibana_Service" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ Start the Kibana server as a service. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" name="SERVICE_ID" value="Kibana"/>
+        <variable inherited="false" name="INSTANCE_NAME" value="kibana-server-1"/>
+      </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
         <info name="task.documentation" value="https://www.elastic.co/guide/en/kibana/current/introduction.html"/>
       </genericInformation>
       <depends>
-        <task ref="Wait_For_Stop_Validation"/>
+        <task ref="Start_Elasticsearch_Service"/>
       </depends>
-      <scriptExecutable>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN Finish_Kibana_Service ---")
 
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def session_id = schedulerapi.getSession()
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-instance_id = variables.get("kibana_instance_id")
-println("*_instance_id: " + instance_id)
-assert instance_id != null
-
-// Finish service
-ServiceDescription service = new ServiceDescription()
-service.setBucketName("cloud-automation") 
-service.setWorkflowName("Finish_Kibana")
-service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
-
-println("--- END Finish_Kibana_Service ---")
 ]]>
           </code>
         </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw">
+            <arguments>
+              <argument value="ENDPOINT_ELASTICSEARCH"/>
+            </arguments>
+          </file>
+        </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            387
+        </positionTop>
+        <positionLeft>
+            624.5
+        </positionLeft>
+      </metadata>
     </task>
-    <task name="Finish_Logstash_Service" 
-    
-    onTaskError="cancelJob" >
+    <task name="Start_Logstash_Service" onTaskError="cancelJob">
       <description>
-        <![CDATA[ Finish the Logstash service. ]]>
+        <![CDATA[ Start the Logstash server as a service. ]]>
       </description>
+      <variables>
+        <variable inherited="false" name="SERVICE_ID" value="Logstash"/>
+        <variable inherited="false" name="INSTANCE_NAME" value="logstash-server-1"/>
+      </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/logstash/6.2/index.html"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
       <depends>
-        <task ref="Wait_For_Stop_Validation"/>
+        <task ref="Start_Elasticsearch_Service"/>
       </depends>
-      <scriptExecutable>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN Finish_Logstash_Service ---")
 
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-
-// Get schedulerapi access
-schedulerapi.connect()
-
-// Acquire session id
-def session_id = schedulerapi.getSession()
-
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-instance_id = variables.get("logstash_instance_id")
-println("*_instance_id: " + instance_id)
-assert instance_id != null
-
-// Finish service
-ServiceDescription service = new ServiceDescription()
-service.setBucketName("cloud-automation") 
-service.setWorkflowName("Finish_Logstash")
-service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
-
-println("--- END Finish_Logstash_Service ---")
 ]]>
           </code>
         </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw">
+            <arguments>
+              <argument value="ENDPOINT_ELASTICSEARCH"/>
+            </arguments>
+          </file>
+        </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("INSTANCE_NAME_LOGSTASH",variables.get("INSTANCE_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            387
+        </positionTop>
+        <positionLeft>
+            798.5
+        </positionLeft>
+      </metadata>
     </task>
-    <task name="Finish_Elasticsearch_Service" 
-    
-    onTaskError="cancelJob" >
+    <task name="Web_Validation_Finish_ELK" onTaskError="pauseJob">
       <description>
-        <![CDATA[ Finish the Elasticsearch service. ]]>
+        <![CDATA[ Task to pause the job and send a validation message to the notification service ]]>
       </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/web_validation.png"/>
       </genericInformation>
       <depends>
-        <task ref="Finish_Logstash_Service"/>
-        <task ref="Finish_Kibana_Service"/>
+        <task ref="Start_Kibana_Service"/>
       </depends>
       <scriptExecutable>
         <script>
-          <code language="groovy">
+          <code language="python">
             <![CDATA[
-println("--- BEGIN Finish_Elasticsearch_Service ---")
+# Please fill variables
 
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
+notification_message = 'Put your web validation message here'
 
-// Get schedulerapi access
+# Don't change code below unless you know what you are doing
+from org.ow2.proactive.addons.webhook import Webhook
+
+jobid = variables.get("PA_JOB_ID")
+userName = variables.get("PA_USER")
+schedulerURL =  variables.get("PA_SCHEDULER_REST_URL")
+
+print schedulerURL
+# get sessionid
 schedulerapi.connect()
 
-// Acquire session id
-def session_id = schedulerapi.getSession()
+# pause job
+schedulerapi.pauseJob(jobid)
 
-// Define PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
 
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-instance_id = variables.get("elasticsearch_instance_id")
-println("*_instance_id: " + instance_id)
-assert instance_id != null
-
-// Finish service
-ServiceDescription service = new ServiceDescription()
-service.setBucketName("cloud-automation") 
-service.setWorkflowName("Finish_Elasticsearch")
-service_instance_rest_api.launchServiceInstanceActionUsingPUT(session_id, instance_id, service)
-
-println("--- END Finish_Elasticsearch_Service ---")
+# send web validation
+print "Sending web validation..."
+url = schedulerURL.replace("/rest", "") +'/notification-service/notifications'
+headers = '{\"Content-Type\" : \"application/json\" }'
+notification_content = '{\"description\": \"'+notification_message+'\", \"jobId\": \"'+jobid+'\" , \"validation\": \"true\", \"userName\":  \"'+userName+'\"}'
+Webhook.execute ( 'POST', url, headers, notification_content);
+print "Web Validation sent"
 ]]>
           </code>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            515
+        </positionTop>
+        <positionLeft>
+            814
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Elasticsearch_Service_Action" onTaskError="cancelJob">
+      <variables>
+        <variable inherited="false" model="PA:LIST(Pause_Elasticsearch, Resume_Elasticsearch, Finish_Elasticsearch)" name="ACTION" value="Finish_Elasticsearch"/>
+        <variable inherited="false" name="INSTANCE_NAME" value="elasticsearch-server-1"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Web_Validation_Finish_ELK"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Action/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            643
+        </positionTop>
+        <positionLeft>
+            619
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Logstash_Service_Action" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ This workflow manages the life-cycle of Cassandra PCA service. It allows to trigger three possible actions: Pause_Logstash, Resume_Logstash and Finish_Logstash. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" model="PA:LIST(Pause_Logstash, Resume_Logstash, Finish_Logstash)" name="ACTION" value="Finish_Logstash"/>
+        <variable inherited="false" name="INSTANCE_NAME" value="logstash-server-1"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Web_Validation_Finish_ELK"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Action/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            643
+        </positionTop>
+        <positionLeft>
+            814
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Kibana_Service_Action" onTaskError="cancelJob">
+      <variables>
+        <variable inherited="false" model="PA:LIST(Pause_Kibana, Resume_Kibana, Finish_Kibana)" name="ACTION" value="Finish_Kibana"/>
+        <variable inherited="false" name="INSTANCE_NAME" value="kibana-server-1"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Web_Validation_Finish_ELK"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="http://192.168.1.84:8080/catalog/buckets/cloud-automation-scripts/resources/Service_Action/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            644
+        </positionTop>
+        <positionLeft>
+            994.984375
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
   <metadata>
@@ -615,80 +400,69 @@ println("--- END Finish_Elasticsearch_Service ---")
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1122px;
-            height:646px;
+            width:1176px;
+            height:617px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-78px;left:-305.875px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3172" style="top: 339px; left: 400.625px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_validation.png" width="20px">&nbsp;<span class="name">Wait_For_Stop_Validation</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_3175" style="top: 83px; left: 488.125px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png" width="20px">&nbsp;<span class="name">Start_Elasticsearch_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3178" style="top: 211px; left: 395.625px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png" width="20px">&nbsp;<span class="name">Start_Logstash_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3181" style="top: 211px; left: 580.625px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png" width="20px">&nbsp;<span class="name">Start_Kibana_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3184" style="top: 339px; left: 575.625px;"><a class="task-name"><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">Configure_Logstash</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3187" style="top: 467px; left: 310.875px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png" width="20px">&nbsp;<span class="name">Finish_Kibana_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3190" style="top: 467px; left: 490.375px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png" width="20px">&nbsp;<span class="name">Finish_Logstash_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3193" style="top: 595px; left: 400.625px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png" width="20px">&nbsp;<span class="name">Finish_Elasticsearch_Service</span></a></div><svg style="position:absolute;left:456px;top:250.5px" width="30.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9.5 88 C 19.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div style="position:relative;top:-133px;left:-562px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_364" style="top: 439px; left: 675.016px; z-index: 24;"><a class="task-name"><img src="images/LinuxBash.png" width="20px">&nbsp;<span class="name">Configure_Logstash</span></a></div><div class="task ui-draggable" id="jsPlumb_1_367" style="top: 183px; left: 675px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png" width="20px">&nbsp;<span class="name">Start_Elasticsearch_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_370" style="top: 310px; left: 667.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png" width="20px">&nbsp;<span class="name">Start_Kibana_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_373" style="top: 310px; left: 841.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png" width="20px">&nbsp;<span class="name">Start_Logstash_Service</span></a></div><div class="task ui-draggable" id="jsPlumb_1_376" style="top: 438px; left: 857px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_validation.png" width="20px">&nbsp;<span class="name">Web_Validation_Finish_ELK</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_379" style="top: 566px; left: 662px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/elasticsearch.png" width="20px">&nbsp;<span class="name">Elasticsearch_Service_Action</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_382" style="top: 566px; left: 857px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/logstash.png" width="20px">&nbsp;<span class="name">Logstash_Service_Action</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_385" style="top: 567px; left: 1037.98px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png" width="20px">&nbsp;<span class="name">Kibana_Service_Action</span></a></div><svg style="position:absolute;left:723px;top:349.5px" width="24.515625" height="90" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 3.515625 89 C 13.515625 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M11.521328,66.303232 L15.340231614961638,45.46058401132944 L9.353652074163795,52.472064981973276 L1.5090645969349188,47.628259937165645 L11.521328,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M11.521328,66.303232 L15.340231614961638,45.46058401132944 L9.353652074163795,52.472064981973276 L1.5090645969349188,47.628259937165645 L11.521328,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:465.5px;top:250.5px" width="191.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 180.5 50 170.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M6.0488325,67.21769599999999 L11.493991287965267,46.73965298378761 L4.974882043522186,53.25894854841856 L-2.4647561636161637,47.813603440265425 L6.0488325,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M6.0488325,67.21769599999999 L11.493991287965267,46.73965298378761 L4.974882043522186,53.25894854841856 L-2.4647561636161637,47.813603440265425 L6.0488325,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:726.515625px;top:349.5px" width="195.984375" height="90" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 89 C -10 39 184.984375 50 174.984375 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M24.813406125000004,59.788559500000005 L46.00252542731347,59.64287768120705 L37.995313889824196,55.07291450915647 L41.28688043646993,46.46096991638286 L24.813406125000004,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M24.813406125000004,59.788559500000005 L46.00252542731347,59.64287768120705 L37.995313889824196,55.07291450915647 L41.28688043646993,46.46096991638286 L24.813406125000004,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:456px;top:122.5px" width="122.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 111.5 50 101.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M25.539481371093746,60.62664724999999 L46.72894061317779,60.544081954269195 L38.73537711452785,55.950288032786496 L42.0525813959643,47.34818621083509 L25.539481371093746,60.62664724999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M25.539481371093746,60.62664724999999 L46.72894061317779,60.544081954269195 L38.73537711452785,55.950288032786496 L42.0525813959643,47.34818621083509 L25.539481371093746,60.62664724999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:723px;top:222.5px" width="42.5" height="88" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 87 C -10 37 31.5 50 21.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M10.769129,61.830692 L31.422724387293194,57.094765736006735 L22.615200123765604,54.36941872188675 L23.961451109179947,45.24869461224114 L10.769129,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M10.769129,61.830692 L31.422724387293194,57.094765736006735 L22.615200123765604,54.36941872188675 L23.961451109179947,45.24869461224114 L10.769129,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:557.5px;top:122.5px" width="99.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 78.5 88 C 88.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-0.9948960000000009,65.388768 L11.750397681045914,48.46075899173529 L3.2584165788038186,52.050502291633364 L-1.5878680273207184,44.207446412931475 L-0.9948960000000009,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-0.9948960000000009,65.388768 L11.750397681045914,48.46075899173529 L3.2584165788038186,52.050502291633364 L-1.5878680273207184,44.207446412931475 L-0.9948960000000009,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:744.5px;top:222.5px" width="178" height="88" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 157 87 C 167 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M72.060389875,63.115491500000005 L61.25735220796432,44.88654810866193 L61.34482862974137,54.10567756190387 L52.24753826986819,55.602109353920554 L72.060389875,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M72.060389875,63.115491500000005 L61.25735220796432,44.88654810866193 L61.34482862974137,54.10567756190387 L52.24753826986819,55.602109353920554 L72.060389875,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:627.5px;top:250.5px" width="29.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 18.5 50 8.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M135.28125,59.34375 L119.14605325153252,45.608560671554436 L122.2213309715845,54.30008913003353 L114.10239238156606,58.66847969996993 L135.28125,59.34375" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M135.28125,59.34375 L119.14605325153252,45.608560671554436 L122.2213309715845,54.30008913003353 L114.10239238156606,58.66847969996993 L135.28125,59.34375" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:723px;top:349.5px" width="225" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 204 88 C 214 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.1068640000000003,66.303232 L7.664175659289976,47.500924057181315 L-0.11740982136979405,52.44530747750635 L-6.1937488632036715,45.511469878551104 L-2.1068640000000003,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.1068640000000003,66.303232 L7.664175659289976,47.500924057181315 L-0.11740982136979405,52.44530747750635 L-6.1937488632036715,45.511469878551104 L-2.1068640000000003,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:456px;top:250.5px" width="192.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 171.5 88 C 181.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M172.57036799999997,59.394175999999995 L155.38902482536398,46.9925048740836 L159.1491210974657,55.41044262774552 L151.40529145310947,60.41375177661788 L172.57036799999997,59.394175999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M172.57036799999997,59.394175999999995 L155.38902482536398,46.9925048740836 L159.1491210974657,55.41044262774552 L151.40529145310947,60.41375177661788 L172.57036799999997,59.394175999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 727.016px; top: 469px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 727.016px; top: 429px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 745px; top: 213px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 723.5px; top: 340px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 723.5px; top: 300px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 902px; top: 340px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 902px; top: 300px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 927.5px; top: 468px; visibility: visible;" dragid="jsPlumb_1_424" elid="jsPlumb_1_376"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 927.5px; top: 428px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 735.5px; top: 596px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 921px; top: 596px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1096.98px; top: 597px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:735px;top:477.5px" width="213" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 202 50 192 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M146.524681625,59.788559500000005 L130.02727602134388,46.49060445614249 L133.33431823230123,55.09661815674432 L125.33533467808819,59.68096784884128 L146.524681625,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M146.524681625,59.788559500000005 L130.02727602134388,46.49060445614249 L133.33431823230123,55.09661815674432 L125.33533467808819,59.68096784884128 L146.524681625,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:369px;top:378.5px" width="117.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 106.5 50 96.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M28.2945195,59.788559500000005 L49.47574469534634,60.38496475150727 L41.633474442861214,55.53740894605366 L45.2245941414,47.04600980864605 L28.2945195,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 735.5px; top: 556px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:920.5px;top:477.5px" width="27.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 16.5 50 6.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M9.580359374999999,62.2538125 L30.09056992354616,56.93110047939379 L21.208941057791794,54.45791049659853 L22.294667920144686,45.302518796602 L9.580359374999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M9.580359374999999,62.2538125 L30.09056992354616,56.93110047939379 L21.208941057791794,54.45791049659853 L22.294667920144686,45.302518796602 L9.580359374999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:465.5px;top:378.5px" width="108" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 87 88 C 97 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.287796875,66.78168750000002 L6.909583187128906,47.692208722601364 L-0.7187601328819035,52.86988949607962 L-7.002214816791488,46.123171980483264 L-2.287796875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 921px; top: 556px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:927px;top:477.5px" width="190.484375" height="90" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 169.484375 89 C 179.484375 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M79.103232,62.682047999999995 L67.31482739999264,45.074279345609824 L67.90876737609733,54.274672560292814 L58.90745196028545,56.2687439695125 L79.103232,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M79.103232,62.682047999999995 L67.31482739999264,45.074279345609824 L67.90876737609733,54.274672560292814 L58.90745196028545,56.2687439695125 L79.103232,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:473.5px;top:506.5px" width="100" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 89 50 79 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M6.499009249999998,63.115491500000005 L26.334186455443895,55.661248062290255 L17.24140069906177,54.13768408643156 L17.356379041875453,44.918856613228485 L6.499009249999998,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M6.499009249999998,63.115491500000005 L26.334186455443895,55.661248062290255 L17.24140069906177,54.13768408643156 L17.356379041875453,44.918856613228485 L6.499009249999998,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:369px;top:506.5px" width="125.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 104.5 88 C 114.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M93.327773,61.830692 L79.92864211743489,45.415354915678826 L81.3891100125129,54.51848808659566 L72.61643820403054,57.35401790316592 L93.327773,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M93.327773,61.830692 L79.92864211743489,45.415354915678826 L81.3891100125129,54.51848808659566 L72.61643820403054,57.35401790316592 L93.327773,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 466px; top: 369px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M144.83541100390624,60.62664724999999 L128.4543978854504,47.18557552141459 L131.68639384896414,55.82005304421995 L123.64780367967036,60.33459267635669 L144.83541100390624,60.62664724999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 1096.98px; top: 557px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 466px; top: 329px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 558px; top: 113px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 456.5px; top: 241px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 456.5px; top: 201px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 636.5px; top: 241px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 636.5px; top: 201px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 628px; top: 369px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 628px; top: 329px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 369.5px; top: 497px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 369.5px; top: 457px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 553px; top: 497px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 553px; top: 457px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 474px; top: 625px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 474px; top: 585px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></body></html>
  ]]>
     </visualization>
   </metadata>
