@@ -1,54 +1,51 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Finish_Kibana" projectName="Cloud Automation - Lifecycle" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
-  <variables>
-    <variable name="kibana_instance_name" value="kibana-server-1" />
-  </variables>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Finish_Kibana" onTaskError="continueJobExecution" priority="normal" projectName="Cloud Automation - Lifecycle" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <description>
-    <![CDATA[ Delete Elasticsearch instance. ]]>
+    <![CDATA[ Delete Kibana instance. ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="cloud-automation"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
-    <info name="pca.states" value="(RUNNING,FINISHED)(STOPPED,FINISHED)(ERROR,FINISHED)"/>
-    <info name="Documentation" value="https://www.elastic.co/guide/en/kibana/current/index.html"/>
-    <info name="pca.service.id" value="Kibana"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+<info name="bucketName" value="cloud-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
+<info name="pca.states" value="(RUNNING,FINISHED)(PAUSED,FINISHED)(ERROR,FINISHED)"/>
+<info name="Documentation" value="https://www.elastic.co/guide/en/kibana/current/index.html"/>
+<info name="pca.service.id" value="Kibana"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Remove_Elasticsearch" >
+    <task name="Finish_Kibana">
       <description>
-        <![CDATA[ Remove Elasticsearch instance ]]>
+        <![CDATA[ Finish Kibana instance and remove its docker container ]]>
       </description>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/kibana/current/index.html"/>
+        <info name="Documentation" value="https://www.elastic.co/guide/en/kibana/current/index.html"/>
       </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
       <pre>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN PRE-SCRIPT Remove_Kibana ---")
+/*********************************************************************************
+* THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE IS BEING FINISHED             *
+*********************************************************************************/
 
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id (PCA_INSTANCE_ID): " + service_instance_id)
+println("BEGIN " + variables.get("PA_TASK_NAME"))
 
-// Construct synchro channel name
-channel = "Service_Instance_" + service_instance_id  
-println("channel: " + channel)
+// Acquire service instance id and instance name from synchro channel
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def channel = "Service_Instance_" + instanceId
+def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
+variables.put("INSTANCE_NAME", instanceName)
 
-//Acquire docker container to delete from synchro channel
-def instance_name = synchronizationapi.get(channel, "INSTANCE_NAME")
-variables.put("kibana_instance_name", instance_name)
-println("*_instance_name: " + instance_name)
-
-// Inform the Activation workflow that the delete is triggered
-synchronizationapi.put(channel, "DELETE_LAUNCHED", true) 
-println("DELETE_LAUNCHED = true")
-
-println("--- END PRE-SCRIPT Remove_Kibana ---")
+// Inform other platforms that service is being finished through Synchronization API
+synchronizationapi.put(channel, "FINISH_LAUNCHED", true)
 ]]>
           </code>
         </script>
@@ -57,70 +54,67 @@ println("--- END PRE-SCRIPT Remove_Kibana ---")
         <script>
           <code language="bash">
             <![CDATA[
-echo "--- BEGIN Remove_Kibana ---"
-
-echo "*_instance name: $variables_kibana_instance_name"
-docker rm -f $variables_kibana_instance_name
-
-echo "--- END Remove_Kibana ---"
+echo Removing docker container: "$variables_INSTANCE_NAME"
+INSTANCE_NAME=$(docker rm -f $variables_INSTANCE_NAME 2>&1)
+echo $INSTANCE_NAME > $variables_INSTANCE_NAME"_status"
 ]]>
           </code>
         </script>
       </scriptExecutable>
-    </task>
-    <task name="End_Deployment" >
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png"/>
-        <info name="task.documentation" value="https://www.elastic.co/guide/en/kibana/current/index.html"/>
-      </genericInformation>
-      <depends>
-        <task ref="Remove_Elasticsearch"/>
-      </depends>
-      <scriptExecutable>
+      <post>
         <script>
           <code language="groovy">
             <![CDATA[
-println("--- BEGIN End_Deployment ---")
+/*********************************************************************************
+* THIS POSTSCRIPT INFORMS PLATFORM THAT PCA SERVICE IS DELETED                   *
+*********************************************************************************/
 
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
-// PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service");
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
 
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+def ALREADY_REMOVED_MESSAGE = "Error: No such container: " + instanceName
 
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println("service_instance_id (PCA_INSTANCE_ID): " + service_instance_id)
+// Connect to Cloud Automation API
+def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
 
-// Update service instance status
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-service_instance_data.setInstanceStatus("FINISHED")
-service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id, service_instance_data)
+// Update service instance data : (status, endpoint)
+def status = new File(instanceName+"_status").text.trim()
+def currentStatus = (!status.equals(ALREADY_REMOVED_MESSAGE) && !status.equals(instanceName)) ? "ERROR" : "FINISHED"
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+serviceInstanceData.setInstanceStatus(currentStatus)
+serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
 
-// Create synchro channel
-channel = "Service_Instance_" + service_instance_id
-println("channel: " + channel)
-synchronizationapi.waitUntil(channel, "DELETE_INSTANCE", "{k,x -> x == true}")
+// Inform other jobs that the service is finished and deleted.
+def channel = "Service_Instance_" + instanceId
+synchronizationapi.put(channel, "FINISH_DONE", true)
 
-// Delete service instance
-//service_instance_data = service_instance_rest_api.deleteServiceInstancesFromDatabaseUsingDELETE(service_instance_id)
+// Print warning or error messages and force job to exit with error if there are any.
+if (status.equals(ALREADY_REMOVED_MESSAGE)){
+    println("[WARNING] docker container: " + instanceName + " is already removed.")
+} else if (!status.equals(instanceName)){
+    println("[ERROR] Could not remove docker container: " + instanceName + ". Docker output: " + status)
+    System.exit(1)
+}
 
-// Delete synchro channel
-synchronizationapi.deleteChannel(channel)
-
-println("--- END End_Deployment ---")
+println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
-      </scriptExecutable>
+      </post>
+      <metadata>
+        <positionTop>
+            398.5
+        </positionTop>
+        <positionLeft>
+            1168.25
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
   <metadata>
@@ -129,20 +123,12 @@ println("--- END End_Deployment ---")
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1139px;
-            height:566px;
+            width:1067px;
+            height:592px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-269.9875030517578px;left:-495px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_790" style="top: 275px; left: 500px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png" width="20px">&nbsp;<span class="name">Remove_Elasticsearch</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_793" style="top: 403px; left: 500px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png" width="20px">&nbsp;<span class="name">End_Deployment</span></a></div><svg style="position:absolute;left:545.5px;top:314.5px" width="34" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 23 50 13 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-1.7219520000000006,66.303232 L9.11339332990344,48.093473858230524 L1.0605433106448878,52.582527942035654 L-4.607310728060904,45.310978547585634 L-1.7219520000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-1.7219520000000006,66.303232 L9.11339332990344,48.093473858230524 L1.0605433106448878,52.582527942035654 L-4.607310728060904,45.310978547585634 L-1.7219520000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 559px; top: 305px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+        </style></head><body><div style="position:relative;top:-246.5px;left:-706.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_4" style="top: 296.5px; left: 806.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/kibana.png" width="20px">&nbsp;<span class="name">Finish_Kibana</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 846px; top: 327px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 546px; top: 433px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 546px; top: 393px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></body></html>
  ]]>
     </visualization>
   </metadata>
