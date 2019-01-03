@@ -11,7 +11,7 @@ if DBMS_NAME == "MySQL":
 if DBMS_NAME == "Greenplum":
     DBMS_DATA=('postgresql','psycopg2',5432,"GPDB_")
 if DBMS_NAME == "SQL Server":
-    DBMS_DATA=('mssql','pyodbc',1433,"SQL_SERVER_")
+    DBMS_DATA=('sqlserver','pyodbc',1433,"SQL_SERVER_")
 if DBMS_NAME == "Oracle":
     DBMS_DATA=('oracle','cx_oracle',1521,"ORACLE_")
 
