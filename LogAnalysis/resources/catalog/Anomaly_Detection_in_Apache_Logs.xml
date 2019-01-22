@@ -16,20 +16,22 @@ Support Vector Machines (SVM) ]]>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Export_Results" >
+    <task name="Import_Data" >
       <description>
-        <![CDATA[ Export the results. ]]>
+        <![CDATA[ Load data from external sources. ]]>
       </description>
       <variables>
-        <variable name="OUTPUT_FILE" value="HTML" inherited="false" />
+        <variable name="FILE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/log_Apache.csv" inherited="false" />
+        <variable name="FILE_DELIMITER" value=";" inherited="false" />
         <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="LIMIT_OUTPUT_VIEW" value="5" inherited="false" model="PA:Integer"/>
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_data"/>
       </genericInformation>
-      <depends>
-        <task ref="Predict_Model"/>
-      </depends>
       <forkEnvironment javaHome="/usr" >
         <envScript>
           <script>
@@ -37,21 +39,21 @@ Support Vector Machines (SVM) ]]>
               <![CDATA[
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters
-  containerName = 'activeeon/dlm3'
-  dockerRunCommand =  'docker run '
-  dockerParameters = '--rm '
-  # Prepare ProActive home volume
-  paHomeHost = variables.get("PA_SCHEDULER_HOME")
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-  # Prepare working directory (For Dataspaces and serialized task file)
-  workspaceHost = localspace
-  workspaceContainer = localspace
-  workspaceVolume = '-v '+localspace +':'+localspace+' '
-  # Prepare container working directory
-  containerWorkingDirectory = '-w '+workspaceContainer+' '
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
   preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 else:
   print("Fork environment disabled")
@@ -64,53 +66,98 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Export_Results")
+__file__ = variables.get("PA_TASK_NAME")
 
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid
 import pandas as pd
 import numpy as np
 
-OUTPUT_FILE = variables.get("OUTPUT_FILE")
-DATA_TEST_DF_JSON = variables.get("DATA_TEST_DF_JSON")
-PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
+FILE_URL = variables.get("FILE_URL")
+FILE_DELIMITER = variables.get("FILE_DELIMITER")
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
 
-if DATA_TEST_DF_JSON != None and PREDICT_DATA != None:
-  data_test_df  = pd.read_json(DATA_TEST_DF_JSON, orient='split')
-  predict_data  = pd.read_json(PREDICT_DATA, orient='split')
-  frame_prediction = pd.DataFrame(predict_data)
-  prediction_result = data_test_df.assign(predictions=frame_prediction.values)
-  prediction_result = prediction_result.sort_index(ascending=True)
+assert FILE_URL is not None and FILE_URL is not ""
+assert FILE_DELIMITER is not None and FILE_DELIMITER is not ""
 
-  if OUTPUT_FILE == 'CSV':
-    result = prediction_result.to_csv()
-    resultMetadata.put("file.extension", ".csv")
-    resultMetadata.put("file.name", "result.csv")
-    resultMetadata.put("content.type", "text/csv")
-  elif OUTPUT_FILE == 'HTML':
-    result = prediction_result.to_html()
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "result.html")
-    resultMetadata.put("content.type", "text/html")
-  print("END Export_Results")
-else:
-  print('It is not possible to export the data')
+FILE_URL = variables.get(FILE_URL[1:]) if FILE_URL.startswith("$") else FILE_URL
+dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
+
+dataframe_json = dataframe.to_json(orient='split').encode()
+compressed_data = bz2.compress(dataframe_json)
+
+dataframe_id = str(uuid.uuid4())
+variables.put(dataframe_id, compressed_data)
+
+print("dataframe id: ", dataframe_id)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+print(dataframe.head())
+
+resultMetadata.put("task.name", __file__)
+resultMetadata.put("task.dataframe_id", dataframe_id)
+
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+
+#============================== Preview results ===============================
+#***************# HTML PREVIEW STYLING #***************#
+styles = [
+    dict(selector="th", props=[("font-weight", "bold"),
+                               ("text-align", "center"),
+                               ("font-size", "15px"),
+                               ("background", "#0B6FA4"),
+                               ("color", "#FFFFFF")]),
+                               ("padding", "3px 7px"),
+    dict(selector="td", props=[("text-align", "right"),
+                               ("padding", "3px 3px"),
+                               ("border", "1px solid #999999"),
+                               ("font-size", "13px"),
+                               ("border-bottom", "1px solid #0B6FA4")]),
+    dict(selector="table", props=[("border", "1px solid #999999"),
+                               ("text-align", "center"),
+                               ("width", "100%"),
+                               ("border-collapse", "collapse")])
+]
+#******************************************************#
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "output.html")
+  resultMetadata.put("content.type", "text/html")
+#==============================================================================
+
+print("END " + __file__)
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
     </task>
-    <task name="Predict_Model" >
+    <task name="Split_Data" >
       <description>
-        <![CDATA[ Generate predictions using a trained model. ]]>
+        <![CDATA[ Separate data into training and testing sets. ]]>
       </description>
       <variables>
+        <variable name="TRAIN_SIZE" value="0.7" inherited="false" />
         <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/predict.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_split_data"/>
       </genericInformation>
       <depends>
-        <task ref="Train_Model"/>
+        <task ref="Import_Data"/>
       </depends>
       <forkEnvironment javaHome="/usr" >
         <envScript>
@@ -119,21 +166,21 @@ else:
               <![CDATA[
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters
-  containerName = 'activeeon/dlm3'
-  dockerRunCommand =  'docker run '
-  dockerParameters = '--rm '
-  # Prepare ProActive home volume
-  paHomeHost = variables.get("PA_SCHEDULER_HOME")
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-  # Prepare working directory (For Dataspaces and serialized task file)
-  workspaceHost = localspace
-  workspaceContainer = localspace
-  workspaceVolume = '-v '+localspace +':'+localspace+' '
-  # Prepare container working directory
-  containerWorkingDirectory = '-w '+workspaceContainer+' '
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
   preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 else:
   print("Fork environment disabled")
@@ -146,190 +193,111 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Predict_Model")
+__file__ = variables.get("PA_TASK_NAME")
 
-import os
-import pickle
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid
 import pandas as pd
+import numpy as np
 
-from sklearn.metrics import mean_absolute_error
-from sklearn.metrics import mean_squared_error
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import precision_score
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import r2_score
+from sklearn.model_selection import train_test_split
 
-MODEL_BIN = variables.get("MODEL")
-DATA_TEST_DF_JSON = variables.get("DATA_TEST_DF_JSON")
+TRAIN_SIZE = variables.get("TRAIN_SIZE")
+assert TRAIN_SIZE is not None and TRAIN_SIZE is not ""
+TRAIN_SIZE = float(TRAIN_SIZE)
+test_size = 1 - TRAIN_SIZE
 
-if MODEL_BIN != None and DATA_TEST_DF_JSON != None:
-  LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
+input_variables = {'task.dataframe_id': None}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
 
-  data_test_df = pd.read_json(DATA_TEST_DF_JSON, orient='split')
-  label_test_df = pd.read_json(LABEL_TEST_DF_JSON, orient='split')
-  loaded_model = pickle.loads(MODEL_BIN)
-  score = loaded_model.score(data_test_df.values, label_test_df.values.ravel())
-  predict_data = list(loaded_model.predict(data_test_df.values))
-  predict_data_df = pd.DataFrame(predict_data)
+dataframe_id = input_variables['task.dataframe_id']
+print("dataframe id (in): ", dataframe_id)
 
-  # CLASSIFICATION MEASURES
-  try:
-    is_classification_algorithm = variables.get("CLASSIFICATION_MEASURE")
-    if is_classification_algorithm == 'True':
-      print("**********************CLASSIFICATION MEASURES**********************")
-      accuracy_score_result = accuracy_score(label_test_df.values.ravel(), predict_data)
-      precision_score_result = precision_score(label_test_df.values.ravel(), predict_data, average='micro')
-      confusion_matrix_result = confusion_matrix(label_test_df.values.ravel(), predict_data)
-      print("ACCURACY SCORE: %.2f" % accuracy_score_result)
-      print("PRECISION SCORE: %.2f" % precision_score_result)
-      print("CONFUSION MATRIX:\n%s" % confusion_matrix_result)
-      print("*********************************************************************************")
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
 
-  except NameError:
-    classification_algorithm = None
-    print("SCORE: %.2f" % score)
+dataframe = pd.read_json(dataframe_json, orient='split')
 
-  # REGRESSION MEASURES
-  try:
-    is_regression_algorithm = variables.get("REGRESSION_MEASURE")
-    if is_regression_algorithm == 'True':
-      mean_squared_error_result = mean_squared_error(label_test_df.values.ravel(), predict_data)
-      mean_absolute_error_result = mean_absolute_error(label_test_df.values.ravel(), predict_data)
-      mean_absolute_error_result = mean_absolute_error(label_test_df.values.ravel(), predict_data)
-      r2_score_result = r2_score(label_test_df.values.ravel(), predict_data)
-      print("**********************REGRESSION MEASURES**********************")
-      print("MEAN SQUARED ERROR: %.2f" % mean_squared_error_result)
-      print("MEAN ABSOLUTE ERROR: %.2f" % mean_absolute_error_result)
-      print("R2 SCORE: %.2f" % r2_score_result)
-      print("*****************************************************************************")
-  except NameError:
-    is_regression_algorithm = None
-    print("SCORE: %.2f" % score)
+# Split dataframe into train/test sets
+X_train, X_test = train_test_split(dataframe, test_size=test_size)
 
-  variables.put("PREDICT_DATA_JSON", predict_data_df.to_json(orient='split'))
-  print("END Predict_Model")
+dataframe1 = X_train.reset_index(drop=True)
+dataframe2 = X_test.reset_index(drop=True)
 
-else:
-  print('Please check your ML pipeline')
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-    </task>
-    <task name="Train_Model" >
-      <description>
-        <![CDATA[ Train a model using a classification or regression algorithm. ]]>
-      </description>
-      <variables>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Support_Vector_Machines"/>
-        <task ref="Split_Data"/>
-      </depends>
-      <forkEnvironment javaHome="/usr" >
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters
-  containerName = 'activeeon/dlm3'
-  dockerRunCommand =  'docker run '
-  dockerParameters = '--rm '
-  # Prepare ProActive home volume
-  paHomeHost = variables.get("PA_SCHEDULER_HOME")
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-  # Prepare working directory (For Dataspaces and serialized task file)
-  workspaceHost = localspace
-  workspaceContainer = localspace
-  workspaceVolume = '-v '+localspace +':'+localspace+' '
-  # Prepare container working directory
-  containerWorkingDirectory = '-w '+workspaceContainer+' '
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Train_Model")
+dataframe_json1 = dataframe1.to_json(orient='split').encode()
+dataframe_json2 = dataframe2.to_json(orient='split').encode()
 
-import pandas as pd
-import random
-import pickle
+compressed_data1 = bz2.compress(dataframe_json1)
+compressed_data2 = bz2.compress(dataframe_json2)
 
-IS_SUPERVIDED_ALGORITHM = variables.get("SUPERVISED_ALGORITHM")
-LABEL_TRAIN_DF_JSON = variables.get("LABEL_TRAIN_DF_JSON")
-DATA_TRAIN_DF_JSON  = variables.get("DATA_TRAIN_DF_JSON")
+dataframe_id1 = str(uuid.uuid4())
+dataframe_id2 = str(uuid.uuid4())
 
-if IS_SUPERVIDED_ALGORITHM == 'True' and LABEL_TRAIN_DF_JSON != None and DATA_TRAIN_DF_JSON != None:
-  ALGORITHM_NAME = variables.get("ALGORITHM_NAME")
-  data_train_df = pd.read_json(DATA_TRAIN_DF_JSON, orient='split')
-  label_train_df = pd.read_json(LABEL_TRAIN_DF_JSON, orient='split')
-  model = None
+variables.put(dataframe_id1, compressed_data1)
+variables.put(dataframe_id2, compressed_data2)
 
-  # CLASSIFICATION LEARNING
-  if ALGORITHM_NAME == 'SupportVectorMachines':
-    from sklearn.svm import SVC
-    c_para = variables.get("C_PARA")
-    kernel_para = variables.get("KERNEL_PARA")
-    model = SVC(C=c_para, kernel=kernel_para)
+print("Train set:")
+print("dataframe id1 (out): ", dataframe_id1)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json1), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data1), " bytes")
+print(dataframe1.head())
 
-  if ALGORITHM_NAME == 'GaussianNaiveBayes':
-    from sklearn.naive_bayes import GaussianNB
-    model = GaussianNB()
+print("Test set:")
+print("dataframe id2 (out): ", dataframe_id2)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json2), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data2), " bytes")
+print(dataframe2.head())
 
-  if ALGORITHM_NAME == 'LogisticRegression':
-    from sklearn.linear_model import LogisticRegression
-    penalty_para = variables.get("PENALTY_PARA")
-    solver_para = variables.get("SOLVER_PARA")
-    max_iter_para = variables.get("MAX_ITERATIONS_PARA")
-    n_jobs_para = variables.get("N_JOBS_PARA")
-    model = LogisticRegression(penalty=penalty_para, solver=solver_para, max_iter = int(max_iter_para), n_jobs = int(n_jobs_para))
+resultMetadata.put("task.name", __file__)
+resultMetadata.put("task.dataframe_id_train", dataframe_id1)
+resultMetadata.put("task.dataframe_id_test", dataframe_id2)
 
-  # REGRESSION LEARNING
-  if ALGORITHM_NAME == 'LinearRegression':
-    from sklearn.linear_model import LinearRegression
-    n_jobs_para = variables.get("N_JOBS_PARA")
-    model = LinearRegression(n_jobs = int(n_jobs_para))
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
 
-  if ALGORITHM_NAME == 'SupportVectorRegression':
-    from sklearn.svm import SVR
-    c_para = variables.get("C_PARA")
-    kernel_para = variables.get("KERNEL_PARA")
-    epsilon_para = variables.get("EPSILON_PARA")
-    model = SVR(C=c_para, kernel=kernel_para, epsilon=epsilon_para)
+#============================== Preview results ===============================
+#***************# HTML PREVIEW STYLING #***************#
+styles = [
+    dict(selector="th", props=[("font-weight", "bold"),
+                               ("text-align", "center"),
+                               ("font-size", "15px"),
+                               ("background", "#0B6FA4"),
+                               ("color", "#FFFFFF")]),
+                               ("padding", "3px 7px"),
+    dict(selector="td", props=[("text-align", "right"),
+                               ("padding", "3px 3px"),
+                               ("border", "1px solid #999999"),
+                               ("font-size", "13px"),
+                               ("border-bottom", "1px solid #0B6FA4")]),
+    dict(selector="table", props=[("border", "1px solid #999999"),
+                               ("text-align", "center"),
+                               ("width", "100%"),
+                               ("border-collapse", "collapse")])
+]
+#******************************************************#
 
-  if ALGORITHM_NAME == 'BayesianRidgeRegression':
-    from sklearn import linear_model
-    n_iter_para = variables.get("N_ITERATIONS_PARA")
-    alpha1_para = variables.get("ALPHA1_PARA")
-    alpha2_para = variables.get("ALPHA2_PARA")
-    lambda1_para = variables.get("LAMBDA1_PARA")
-    lambda2_para = variables.get("LAMBDA2_PARA")
-    model = linear_model.BayesianRidge(alpha_1=alpha1_para, alpha_2=alpha2_para, lambda_1=lambda1_para, lambda_2=lambda2_para, n_iter= int(n_iter_para))
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "output.html")
+  resultMetadata.put("content.type", "text/html")
+#==============================================================================
 
-  model.fit(data_train_df.values, label_train_df.values.ravel())
-  model_bin = pickle.dumps(model)
-  variables.put("MODEL", model_bin)
-
-  print("END Train_Model")
-
-else:
-  print('Please check your ML pipeline')
+print("END " + __file__)
 ]]>
           </code>
         </script>
@@ -343,40 +311,13 @@ else:
       <variables>
         <variable name="C" value="1.0" inherited="false" />
         <variable name="KERNEL" value="rbf" inherited="false" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png"/>
-      </genericInformation>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-C = float(variables.get("C"))
-KERNEL = variables.get("KERNEL")
-
-variables.put("C_PARA", C)
-variables.put("KERNEL_PARA", KERNEL)
-variables.put("ALGORITHM_NAME", "SupportVectorMachines")
-variables.put("SUPERVISED_ALGORITHM", "True")
-variables.put("CLASSIFICATION_MEASURE", "True")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-    </task>
-    <task name="Import_Data" >
-      <description>
-        <![CDATA[ Load data from external sources. ]]>
-      </description>
-      <variables>
-        <variable name="FILE_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/log_Apache.csv" inherited="false" />
-        <variable name="FILE_DELIMITER" value=";" inherited="false" />
-        <variable name="IS_LABELED_DATA" value="True" inherited="false" />
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_support_vector_machines"/>
       </genericInformation>
       <forkEnvironment javaHome="/usr" >
         <envScript>
@@ -385,21 +326,21 @@ variables.put("CLASSIFICATION_MEASURE", "True")
               <![CDATA[
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters
-  containerName = 'activeeon/dlm3'
-  dockerRunCommand =  'docker run '
-  dockerParameters = '--rm '
-  # Prepare ProActive home volume
-  paHomeHost = variables.get("PA_SCHEDULER_HOME")
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-  # Prepare working directory (For Dataspaces and serialized task file)
-  workspaceHost = localspace
-  workspaceContainer = localspace
-  workspaceVolume = '-v '+localspace +':'+localspace+' '
-  # Prepare container working directory
-  containerWorkingDirectory = '-w '+workspaceContainer+' '
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
   preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 else:
   print("Fork environment disabled")
@@ -412,87 +353,565 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Import_Data")
+__file__ = variables.get("PA_TASK_NAME")
 
-import pandas as pd
-import numpy as np
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
 
-URL_GET = "https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/pima-indians-diabetes.csv"
-FILE_SEP = ";"
-IS_LABELED_DATA = 'True'
-try:
-  URL_GET = str(variables.get("FILE_URL"))
-  FILE_SEP = str(variables.get("FILE_DELIMITER"))
-  IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-except NameError:
-  pass
+print("BEGIN " + __file__)
 
-dataframe = pd.read_csv(URL_GET,FILE_SEP)
-columns_name = dataframe.columns
-columns_number = len(columns_name)
+import json
 
-if IS_LABELED_DATA == 'True':
-  data  = dataframe.values[:,0:columns_number-1]
-  label = dataframe.values[:,columns_number-1]
+algorithm = {
+  'name': 'SupportVectorMachines',
+  'is_supervised': True,
+  'type': 'classification',
+  'C': float(variables.get("C")),
+  'kernel': variables.get("KERNEL")
+}
 
-  data_df = pd.DataFrame(data=data,columns=columns_name[0:columns_number-1])
-  label_df = pd.DataFrame(data=label,columns=[columns_name[columns_number-1]])
+algorithm_json = json.dumps(algorithm)
+resultMetadata.put("task.algorithm_json", algorithm_json)
 
-  DATAFRAME_JSON = dataframe.to_json(orient='split')
-  COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
-  DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
-  DATA_TEST_DF_JSON = data_df.to_json(orient='split')
-  LABEL_TRAIN_DF_JSON = label_df.to_json(orient='split')
-  LABEL_TEST_DF_JSON = label_df.to_json(orient='split')
-
-  try:
-    variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
-    variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
-    variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
-    variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
-    variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
-    variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
-    variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
-
-    #**************Preview Data*********************
-    result = dataframe.to_html()
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "output.html")
-    resultMetadata.put("content.type", "text/html")
-    #***********************************************
-  except NameError:
-    pass
-
-  print("END Import_Data")
-
-elif IS_LABELED_DATA == 'False':
-  data = dataframe.values
-  data_df = pd.DataFrame(data=data,columns=columns_name)
-
-  DATAFRAME_JSON = dataframe.to_json(orient='split')
-  COLUMNS_NAME_JSON = pd.Series(columns_name).to_json()
-  DATA_TRAIN_DF_JSON = data_df.to_json(orient='split')
-  DATA_TEST_DF_JSON = data_df.to_json(orient='split')
-
-  try:
-    variables.put("DATAFRAME_JSON", DATAFRAME_JSON)
-    variables.put("COLUMNS_NAME_JSON", COLUMNS_NAME_JSON)
-    variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
-    variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
-    variables.put("IS_LABELED_DATA", IS_LABELED_DATA)
-
-    #**************Preview Data*********************
-    result = dataframe.to_html()
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "output.html")
-    resultMetadata.put("content.type", "text/html")
-    #***********************************************
-  except NameError:
-    pass
-
-  print("END Import_Data")
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Train_Model" >
+      <description>
+        <![CDATA[ Train a classification/clustering/anomaly detection model ]]>
+      </description>
+      <variables>
+        <variable name="LABEL_COLUMN" value="class" inherited="false" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_anomaly_model"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split_Data"/>
+        <task ref="Support_Vector_Machines"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 else:
-  print('The import data is failure')
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid, json
+import random, pickle
+import pandas as pd
+
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+  is_labeled_data = True
+
+input_variables = {
+  'task.dataframe_id': None, 
+  'task.dataframe_id_train': None,
+  'task.algorithm_json': None
+}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
+
+dataframe_id = None
+if input_variables['task.dataframe_id'] is not None:
+  dataframe_id = input_variables['task.dataframe_id']
+if input_variables['task.dataframe_id_train'] is not None:
+  dataframe_id = input_variables['task.dataframe_id_train']
+print("dataframe id (in): ", dataframe_id)
+
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
+dataframe = pd.read_json(dataframe_json, orient='split')
+
+algorithm_json = input_variables['task.algorithm_json']
+assert algorithm_json is not None
+algorithm = json.loads(algorithm_json)
+#-------------------------------------------------------------
+class obj(object):
+  def __init__(self, d):
+    for a, b in d.items():
+      if isinstance(b, (list, tuple)):
+        setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+      else:
+        setattr(self, a, obj(b) if isinstance(b, dict) else b)
+#-------------------------------------------------------------
+alg = obj(algorithm)
+
+model = None
+if alg.is_supervised:
+  #-------------------------------------------------------------
+  # Classification algorithms
+  #
+  if alg.name == 'SupportVectorMachines':
+    from sklearn.svm import SVC
+    model = SVC(
+      C=alg.C, 
+      kernel=alg.kernel
+    )
+   
+  if alg.name == 'GaussianNaiveBayes':
+    from sklearn.naive_bayes import GaussianNB
+    model = GaussianNB()
+  
+  if alg.name == 'LogisticRegression':
+    from sklearn.linear_model import LogisticRegression
+    model = LogisticRegression(
+      penalty=alg.penalty, 
+      solver=alg.solver, 
+      max_iter=alg.max_iter, 
+      n_jobs=alg.n_jobs
+    )
+
+  #-------------------------------------------------------------
+  # Regression algorithms
+  if alg.name == 'LinearRegression':
+    from sklearn.linear_model import LinearRegression
+    model = LinearRegression(
+      n_jobs=alg.n_jobs
+    )
+
+  if alg.name == 'SupportVectorRegression':
+    from sklearn.svm import SVR
+    model = SVR(
+      C=alg.C, 
+      kernel=alg.kernel, 
+      epsilon=alg.epsilon
+    )
+  
+  if alg.name == 'BayesianRidgeRegression':
+    from sklearn.linear_model import BayesianRidge
+    model = BayesianRidge(
+      alpha_1=alg.alpha_1, 
+      alpha_2=alg.alpha_2, 
+      lambda_1=alg.lambda_1, 
+      lambda_2=alg.lambda_2, 
+      n_iter=alg.n_iter
+    )
+else:
+  #-------------------------------------------------------------
+  # Anomaly detection algorithms
+  if alg.name == 'OneClassSVM':
+    from sklearn import svm
+    model = svm.OneClassSVM(
+      nu=alg.nu, 
+      kernel=alg.kernel, 
+      gamma=alg.gamma
+    ) 
+  
+  if alg.name == 'IsolationForest':
+    from sklearn.ensemble import IsolationForest
+    model = IsolationForest(
+      n_estimators=alg.n_estimators, 
+      n_jobs=alg.n_jobs
+    )
+  
+  #-------------------------------------------------------------
+  # Clustering algorithms
+  if alg.name == 'MeanShift':
+    from sklearn.cluster import MeanShift
+    model = MeanShift(
+      cluster_all=alg.cluster_all, 
+      n_jobs=alg.n_jobs
+    ) 
+    
+  if alg.name == 'KMeans':
+    from sklearn.cluster import KMeans
+    model = KMeans(
+      n_clusters=alg.n_clusters, 
+      max_iter=alg.max_iterations, 
+      n_jobs=alg.n_jobs
+    )
+
+#-------------------------------------------------------------
+if model is not None:
+  if is_labeled_data:
+    columns = [LABEL_COLUMN]
+    dataframe_train = dataframe.drop(columns, axis=1, inplace=False)
+    dataframe_label = dataframe.filter(columns, axis=1)
+  else:
+    dataframe_train = dataframe
+
+  if alg.is_supervised:
+    model.fit(dataframe_train.values, dataframe_label.values.ravel())
+  else:
+    model.fit(dataframe_train.values)
+  
+  model_bin = pickle.dumps(model)
+  model_compressed = bz2.compress(model_bin)
+  model_id = str(uuid.uuid4())
+  variables.put(model_id, model_compressed)
+
+  print("model id: ", model_id)
+  print('model size (original):   ', sys.getsizeof(model_bin), " bytes")
+  print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")   
+  resultMetadata.put("task.model_id", model_id)
+else:
+  print("Algorithm not found!")
+
+dataframe_json = dataframe.to_json(orient='split').encode()
+compressed_data = bz2.compress(dataframe_json)
+
+dataframe_id = str(uuid.uuid4())
+variables.put(dataframe_id, compressed_data)
+
+print("dataframe id (out): ", dataframe_id)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+print(dataframe.head())
+
+resultMetadata.put("task.name", __file__)
+#resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.algorithm_json", algorithm_json)
+resultMetadata.put("task.label_column", LABEL_COLUMN)
+
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+
+#============================== Preview results ===============================
+#***************# HTML PREVIEW STYLING #***************#
+styles = [
+    dict(selector="th", props=[("font-weight", "bold"),
+                               ("text-align", "center"),
+                               ("font-size", "15px"),
+                               ("background", "#0B6FA4"),
+                               ("color", "#FFFFFF")]),
+                               ("padding", "3px 7px"),
+    dict(selector="td", props=[("text-align", "right"),
+                               ("padding", "3px 3px"),
+                               ("border", "1px solid #999999"),
+                               ("font-size", "13px"),
+                               ("border-bottom", "1px solid #0B6FA4")]),
+    dict(selector="table", props=[("border", "1px solid #999999"),
+                               ("text-align", "center"),
+                               ("width", "100%"),
+                               ("border-collapse", "collapse")])
+]
+#******************************************************#
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "output.html")
+  resultMetadata.put("content.type", "text/html")
+#==============================================================================
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Predict_Model" >
+      <description>
+        <![CDATA[ Generate predictions using a trained model. ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="LABEL_COLUMN" value="class" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/predict.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_predict_model"/>
+      </genericInformation>
+      <depends>
+        <task ref="Train_Model"/>
+        <task ref="Split_Data"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import os, sys, bz2, uuid, json
+import random, pickle, sklearn
+import numpy as np
+import pandas as pd
+
+from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mutual_info_score
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import r2_score
+from sklearn.metrics.cluster import adjusted_mutual_info_score
+from sklearn.metrics.cluster import completeness_score
+from sklearn.metrics.cluster import homogeneity_score
+from sklearn.metrics.cluster import v_measure_score
+
+input_variables = {
+  'task.dataframe_id': None, 
+  'task.dataframe_id_test': None,
+  'task.algorithm_json': None,
+  'task.label_column': None,
+  'task.model_id': None
+}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
+
+dataframe_id = None
+if input_variables['task.dataframe_id'] is not None:
+  dataframe_id = input_variables['task.dataframe_id']
+if input_variables['task.dataframe_id_test'] is not None:
+  dataframe_id = input_variables['task.dataframe_id_test']
+print("dataframe id (in): ", dataframe_id)
+
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
+
+dataframe = pd.read_json(dataframe_json, orient='split')
+
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+  is_labeled_data = True
+else:
+  LABEL_COLUMN = input_variables['task.label_column']
+  if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+    is_labeled_data = True
+
+model_id = input_variables['task.model_id']
+model_compressed = variables.get(model_id)
+model_bin = bz2.decompress(model_compressed)
+assert model_bin is not None
+print("model id (in): ", model_id)
+print("model size: ", sys.getsizeof(model_compressed), " bytes")
+print("model size (decompressed): ", sys.getsizeof(model_bin), " bytes")
+
+algorithm_json = input_variables['task.algorithm_json']
+assert algorithm_json is not None
+algorithm = json.loads(algorithm_json)
+#-------------------------------------------------------------
+class obj(object):
+  def __init__(self, d):
+    for a, b in d.items():
+      if isinstance(b, (list, tuple)):
+        setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+      else:
+        setattr(self, a, obj(b) if isinstance(b, dict) else b)
+#-------------------------------------------------------------
+alg = obj(algorithm)
+
+loaded_model = pickle.loads(model_bin)
+dataframe_predictions = None
+
+if is_labeled_data:
+  columns = [LABEL_COLUMN]
+  dataframe_test = dataframe.drop(columns, axis=1, inplace=False)
+  dataframe_label = dataframe.filter(columns, axis=1)
+  predictions = list(loaded_model.predict(dataframe_test.values))
+  dataframe_predictions = pd.DataFrame(predictions)
+  dataframe = dataframe.assign(predictions=dataframe_predictions)
+
+  if alg.type == 'anomaly':
+    pred_map = {-1: 1, 1: 0}
+    dataframe["predictions"].replace(pred_map, inplace=True)
+    predictions = dataframe["predictions"].tolist()
+  
+  if alg.type != 'clustering' and alg.type != 'anomaly':
+    score = loaded_model.score(dataframe_test.values, dataframe_label.values.ravel())
+    print("MODEL SCORE: %.2f" % score)
+
+  #-------------------------------------------------------------
+  # CLASSIFICATION AND ANOMALY DETECTION SCORE
+  #
+  if alg.type == 'classification' or alg.type == 'anomaly':
+    dataframe['accuracy'] = np.where((dataframe[LABEL_COLUMN] == dataframe['predictions']), 1, 0)
+    accuracy_score_result = accuracy_score(dataframe_label.values.ravel(), predictions)
+    precision_score_result = precision_score(dataframe_label.values.ravel(), predictions, average='micro')
+    confusion_matrix_result = confusion_matrix(dataframe_label.values.ravel(), predictions)
+    print("********************** CLASSIFICATION SCORE **********************")
+    print("ACCURACY SCORE: %.2f" % accuracy_score_result)
+    print("PRECISION SCORE: %.2f" % precision_score_result)
+    print("CONFUSION MATRIX:\n%s" % confusion_matrix_result)
+    print("*******************************************************************")
+
+  #-------------------------------------------------------------
+  # REGRESSION SCORE
+  #
+  if alg.type == 'regression':
+    dataframe['absolute_error'] = dataframe[LABEL_COLUMN] - dataframe['predictions']
+    mean_squared_error_result = mean_squared_error(dataframe_label.values.ravel(), predictions)
+    mean_absolute_error_result = mean_absolute_error(dataframe_label.values.ravel(), predictions)
+    r2_score_result = r2_score(dataframe_label.values.ravel(), predictions) 
+    print("********************** REGRESSION SCORES **********************")
+    print("MEAN SQUARED ERROR: %.2f" % mean_squared_error_result)
+    print("MEAN ABSOLUTE ERROR: %.2f" % mean_absolute_error_result)
+    print("R2 SCORE: %.2f" % r2_score_result)
+    print("***************************************************************")
+  
+  #-------------------------------------------------------------
+  # CLUSTERING SCORE
+  #
+  if alg.type == 'clustering':
+    adjusted_mutual_info_score_result = adjusted_mutual_info_score(dataframe_label.values.ravel(), predictions)
+    completeness_score_result = completeness_score(dataframe_label.values.ravel(), predictions)
+    homogeneity_score_result = homogeneity_score(dataframe_label.values.ravel(), predictions)
+    mutual_info_score_result = mutual_info_score(dataframe_label.values.ravel(), predictions)
+    v_measure_score_result = v_measure_score(dataframe_label.values.ravel(), predictions)
+    print("********************** CLUSTERING SCORES **********************")
+    print("ADJUSTED MUTUAL INFORMATION: %.2f" % adjusted_mutual_info_score_result)
+    print("COMPLETENESS SCORE: %.2f" % completeness_score_result)
+    print("HOMOGENEITY METRIC: %.2f" % homogeneity_score_result)
+    print("MUTUAL INFORMATION: %.2f" % mutual_info_score_result)
+    print("V-MEASURE CLUSTER MEASURE: %.2f" % v_measure_score_result)
+    print("***************************************************************")
+    #-------------------------------------------------------------
+else:
+  predictions = list(loaded_model.predict(dataframe.values))
+  dataframe_predictions = pd.DataFrame(predictions)
+  dataframe = dataframe.assign(predictions=dataframe_predictions)
+
+dataframe_json = dataframe.to_json(orient='split').encode()
+compressed_data = bz2.compress(dataframe_json)
+
+dataframe_id = str(uuid.uuid4())
+variables.put(dataframe_id, compressed_data)
+
+print("dataframe id (out): ", dataframe_id)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+print(dataframe.head())
+
+resultMetadata.put("task.name", __file__)
+resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.algorithm_json", algorithm_json)
+resultMetadata.put("task.label_column", LABEL_COLUMN)
+
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+
+#============================== Preview results ===============================
+#***************# HTML PREVIEW STYLING #***************#
+styles = [
+    dict(selector="th", props=[("font-weight", "bold"),
+                               ("text-align", "center"),
+                               ("font-size", "15px"),
+                               ("background", "#0B6FA4"),
+                               ("color", "#FFFFFF")]),
+                               ("padding", "3px 7px"),
+    dict(selector="td", props=[("text-align", "right"),
+                               ("padding", "3px 3px"),
+                               ("border", "1px solid #999999"),
+                               ("font-size", "13px"),
+                               ("border-bottom", "1px solid #0B6FA4")]),
+    dict(selector="table", props=[("border", "1px solid #999999"),
+                               ("text-align", "center"),
+                               ("width", "100%"),
+                               ("border-collapse", "collapse")])
+]
+#******************************************************#
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "output.html")
+  resultMetadata.put("content.type", "text/html")
+#==============================================================================
+
+print("END " + __file__)
 ]]>
           </code>
         </script>
@@ -508,19 +927,23 @@ variables.put("PREVIOUS_PA_TASK_NAME", variables.get("PA_TASK_NAME"))
         </script>
       </post>
     </task>
-    <task name="Split_Data" >
+    <task name="Preview_Results" >
       <description>
-        <![CDATA[ Divide the data into two sets. ]]>
+        <![CDATA[ Export the results. ]]>
       </description>
       <variables>
-        <variable name="TRAIN_SIZE" value="0.7" inherited="false" />
         <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="OUTPUT_TYPE" value="HTML" inherited="false" model="PA:LIST(CSV,JSON,HTML)"/>
+        <variable name="LIMIT_OUTPUT_VIEW" value="1000" inherited="false" model="PA:Integer"/>
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/split_data.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_results"/>
       </genericInformation>
       <depends>
-        <task ref="Import_Data"/>
+        <task ref="Predict_Model"/>
       </depends>
       <forkEnvironment javaHome="/usr" >
         <envScript>
@@ -529,21 +952,21 @@ variables.put("PREVIOUS_PA_TASK_NAME", variables.get("PA_TASK_NAME"))
               <![CDATA[
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters
-  containerName = 'activeeon/dlm3'
-  dockerRunCommand =  'docker run '
-  dockerParameters = '--rm '
-  # Prepare ProActive home volume
-  paHomeHost = variables.get("PA_SCHEDULER_HOME")
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-  # Prepare working directory (For Dataspaces and serialized task file)
-  workspaceHost = localspace
-  workspaceContainer = localspace
-  workspaceVolume = '-v '+localspace +':'+localspace+' '
-  # Prepare container working directory
-  containerWorkingDirectory = '-w '+workspaceContainer+' '
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
   preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
 else:
   print("Fork environment disabled")
@@ -556,88 +979,168 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Split_Data")
+__file__ = variables.get("PA_TASK_NAME")
 
-from sklearn import model_selection
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
 import pandas as pd
+import numpy as np
+import bz2
 
-TRAIN_SIZE = 0.7
-try:
-  IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-  TRAIN_SIZE = float(variables.get("TRAIN_SIZE"))
-except NameError:
-  pass
-test_size = 1 - TRAIN_SIZE
+OUTPUT_TYPE = variables.get("OUTPUT_TYPE")
+assert OUTPUT_TYPE is not None and OUTPUT_TYPE is not ""
 
-if IS_LABELED_DATA == 'True':
-  try:
-    DATAFRAME_JSON = variables.get("DATAFRAME_JSON")
-    COLUMNS_NAME_JSON = variables.get("COLUMNS_NAME_JSON")
-  except NameError:
-    pass
+input_variables = {'task.dataframe_id': None}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
 
-  dataframe = pd.read_json(DATAFRAME_JSON, orient='split')
-  columns_name_df = pd.read_json(COLUMNS_NAME_JSON,typ='series')
-  columns_name = columns_name_df.values
-  columns_number = len(columns_name)
+dataframe_id = input_variables['task.dataframe_id']
+print("dataframe id (in): ", dataframe_id)
 
-  data = dataframe.values[:,0:columns_number-1]
-  label = dataframe.values[:,columns_number-1]
-  indice = dataframe.index.values
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
 
-  data_train, data_test, label_train, label_test, idx_train, idx_test = model_selection.train_test_split(data, label, indice, test_size=test_size)
-  data_train_df = pd.DataFrame(data=data_train,columns=columns_name[0:columns_number-1],index=idx_train)
-  label_train_df = pd.DataFrame(data=label_train,columns=[columns_name[columns_number-1]])
-  data_test_df = pd.DataFrame(data=data_test,columns=columns_name[0:columns_number-1],index=idx_test)
-  label_test_df = pd.DataFrame(data=label_test,columns=[columns_name[columns_number-1]])
+dataframe = pd.read_json(dataframe_json, orient='split')
+print(dataframe.head())
 
-  DATA_TRAIN_DF_JSON = data_train_df.to_json(orient='split')
-  DATA_TEST_DF_JSON = data_test_df.to_json(orient='split')
-  LABEL_TRAIN_DF_JSON = label_train_df.to_json(orient='split')
-  LABEL_TEST_DF_JSON = label_test_df.to_json(orient='split')
+OUTPUT_TYPE = OUTPUT_TYPE.upper()
+if OUTPUT_TYPE == "S3":
+  import s3fs, uuid
 
-  try:
-    variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
-    variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
-    variables.put("LABEL_TRAIN_DF_JSON", LABEL_TRAIN_DF_JSON)
-    variables.put("LABEL_TEST_DF_JSON", LABEL_TEST_DF_JSON)
-  except NameError:
-    pass
+  UserAccessKeyID=str(variables.get('UserAccessKeyID'))
+  UserSecretAccessKey=str(variables.get('UserSecretAccessKey'))
+  UserBucketPath=variables.get('UserBucketPath')
 
-  print("END Split_Data")
+  dataframe_id = str(uuid.uuid4())
+  print("dataframe id (out): ", dataframe_id)
+  bytes_to_write = dataframe.to_csv(index=False).encode()
 
-elif IS_LABELED_DATA == 'False' or IS_LABELED_DATA == None:
-  try:
-    DATAFRAME_JSON = variables.get("DATAFRAME_JSON")
-    COLUMNS_NAME_JSON = variables.get("COLUMNS_NAME_JSON")
-  except NameError:
-    pass
+  fs = s3fs.S3FileSystem(
+      key=UserAccessKeyID, 
+      secret=UserSecretAccessKey,
+      s3_additional_kwargs={'ACL': 'public-read'}
+  )
 
-  dataframe = pd.read_json(DATAFRAME_JSON, orient='split')
-  columns_name_df = pd.read_json(COLUMNS_NAME_JSON,typ='series')
-  columns_name = columns_name_df.values
-  columns_number = len(columns_name)
-  indice = dataframe.index.values
-  data = dataframe.values
+  bucket_path=str(UserBucketPath) if UserBucketPath is not None else 's3://activeeon-public/results/'
+  s3file_path = bucket_path+dataframe_id+'.csv'
+  with fs.open(s3file_path, 'wb') as f:
+    f.write(bytes_to_write)
 
-  data_train, data_test, idx_train, idx_test = model_selection.train_test_split(data,indice, test_size=test_size)
-  data_train_df = pd.DataFrame(data=data_train,columns=columns_name,index=idx_train)
-  data_test_df = pd.DataFrame(data=data_test,columns=columns_name,index=idx_test)
+  dataframe_url = fs.url(s3file_path).split('?')[0]
+  dataframe_info = fs.info(s3file_path)
+  print("The dataframe was uploaded successfully to the following url:")
+  print(dataframe_url)
+  print("File info:")
+  print(dataframe_info)
 
-  DATA_TRAIN_DF_JSON = data_train_df.to_json(orient='split')
-  DATA_TEST_DF_JSON = data_test_df.to_json(orient='split')
+if OUTPUT_TYPE == "CSV":
+  #result = dataframe.to_csv(encoding='utf-8', index=False)
+  result = dataframe.to_csv(index=False)
+  resultMetadata.put("file.extension", ".csv")
+  resultMetadata.put("file.name", "dataframe.csv")
+  resultMetadata.put("content.type", "text/csv")
 
-  try:
-    variables.put("DATA_TRAIN_DF_JSON", DATA_TRAIN_DF_JSON)
-    variables.put("DATA_TEST_DF_JSON", DATA_TEST_DF_JSON)
-  except NameError:
-    pass
+if OUTPUT_TYPE == "JSON":
+  result = dataframe.to_json(orient='split', encoding='utf-8')
+  resultMetadata.put("file.extension", ".json")
+  resultMetadata.put("file.name", "dataframe.json")
+  resultMetadata.put("content.type", "application/json")
 
-  print("END Split_Data")
-else:
-  print('The data could not be split, please check ypur ML pipeline')
+if OUTPUT_TYPE == "HTML":
+  LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+  LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+  if LIMIT_OUTPUT_VIEW > 0:
+    print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+    dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+  
+  #***************# HTML PREVIEW STYLING #***************#
+  styles = [
+    dict(selector="th", props=[("font-weight", "bold"),
+                               ("text-align", "center"),
+                               ("font-size", "15px"),
+                               ("background", "#0B6FA4"),
+                               ("color", "#FFFFFF")]),
+                               ("padding", "3px 7px"),
+    dict(selector="td", props=[("text-align", "right"),
+                               ("padding", "3px 3px"),
+                               ("border", "1px solid #999999"),
+                               ("font-size", "13px"),
+                               ("border-bottom", "1px solid #0B6FA4")]),
+    dict(selector="table", props=[("border", "1px solid #999999"),
+                               ("text-align", "center"),
+                               ("width", "100%"),
+                               ("border-collapse", "collapse")])
+  ]
+  #******************************************************#
+
+  with pd.option_context('display.max_colwidth', -1):
+    result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "output.html")
+    resultMetadata.put("content.type", "text/html")
+
+print("END " + __file__)
 ]]>
           </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Start_Visdom_Service" 
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Visdom server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Visdom" inherited="false" />
+        <variable name="INSTANCE_NAME" value="visdom-server-${PA_JOB_ID}" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+    </task>
+    <task name="Visdom_Service_Actions" 
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ This task manages the life-cycle of Visdom PCA service. It allows to trigger three possible actions: Pause_Visdom, Resume_Visdom and Finish_Visdom.
+It requires the following variables:
+INSTANCE_ID: if used alone or;
+INSTANCE_NAME: if used within the same workflow as a Visdom_Service_Start task. In this case there is no need for an INSTANCE_ID.
+ACTION: the action to execute on the Visdom service among the aforementioned actions. ]]>
+      </description>
+      <variables>
+        <variable name="INSTANCE_NAME" value="visdom-server-${PA_JOB_ID}" inherited="false" />
+        <variable name="ACTION" value="Finish_Visdom" inherited="false" model="PA:LIST(Pause_Visdom, Resume_Visdom, Finish_Visdom)"/>
+        <variable name="INSTANCE_ID" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Wait_For_Web_Validation"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Action/raw" language="groovy"></file>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
@@ -647,8 +1150,11 @@ else:
         <![CDATA[ Plot the different results obtained by a predictive model using Visdom ]]>
       </description>
       <variables>
-        <variable name="TARGETED_CLASS" value="0" inherited="false" />
         <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" />
+        <variable name="TARGET_CLASS" value="1" inherited="false" />
+        <variable name="VISDOM_ENDPOINT" value="" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
@@ -666,7 +1172,7 @@ else:
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
   # Prepare Docker parameters
-  containerName = 'activeeon/dlm3'
+  containerName = variables.get("DOCKER_IMAGE")
   dockerRunCommand =  'docker run '
   dockerParameters = '--rm '
   # Prepare ProActive home volume
@@ -692,19 +1198,73 @@ else:
         <script>
           <code language="cpython">
             <![CDATA[
-print("--- BEGIN Visdom_Visualize_Results ---")
+__file__ = variables.get("PA_TASK_NAME")
 
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid, json
 import pandas as pd
 import numpy as np
+
 from visdom import Visdom
-from sklearn.metrics import confusion_matrix
-from sklearn import metrics
 from sklearn.metrics import *
 
-DATA_TEST_DF_JSON = variables.get("DATA_TEST_DF_JSON")
-PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
-IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-TARGETED_CLASS = str(variables.get("TARGETED_CLASS"))
+input_variables = {
+  'task.dataframe_id': None,
+  'task.dataframe_id_test': None,
+  'task.algorithm_json': None,
+  'task.label_column': None,
+}
+for key in input_variables.keys():
+  for res in results:
+    value = res.getMetadata().get(key)
+    if value is not None:
+      input_variables[key] = value
+      break
+
+dataframe_id = None
+if input_variables['task.dataframe_id'] is not None:
+  dataframe_id = input_variables['task.dataframe_id']
+if input_variables['task.dataframe_id_test'] is not None:
+  dataframe_id = input_variables['task.dataframe_id_test']
+print("dataframe id (in): ", dataframe_id)
+
+dataframe_json = variables.get(dataframe_id)
+assert dataframe_json is not None
+dataframe_json = bz2.decompress(dataframe_json).decode()
+
+dataframe = pd.read_json(dataframe_json, orient='split')
+
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+  is_labeled_data = True
+else:
+  LABEL_COLUMN = input_variables['task.label_column']
+  if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+    is_labeled_data = True
+
+TARGET_CLASS = variables.get("TARGET_CLASS")
+assert TARGET_CLASS is not None, 'The variable TARGET_CLASS is mandatory'
+TARGET_CLASS = str(TARGET_CLASS)
+
+algorithm_json = input_variables['task.algorithm_json']
+assert algorithm_json is not None
+algorithm = json.loads(algorithm_json)
+#-------------------------------------------------------------
+class obj(object):
+  def __init__(self, d):
+    for a, b in d.items():
+      if isinstance(b, (list, tuple)):
+        setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+      else:
+        setattr(self, a, obj(b) if isinstance(b, dict) else b)
+#-------------------------------------------------------------
+alg = obj(algorithm)
 
 visdom_endpoint = variables.get("VISDOM_ENDPOINT") if variables.get("VISDOM_ENDPOINT") else results[0].__str__()
 print("VISDOM_ENDPOINT = ",visdom_endpoint)
@@ -715,118 +1275,148 @@ print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
 vis = Visdom(server="http://"+VISDOM_HOST,port=int(VISDOM_PORT))
 assert vis.check_connection()
 
-data_test  = pd.read_json(DATA_TEST_DF_JSON, orient='split')
-predict_data_df  = pd.read_json(PREDICT_DATA, orient='split')
-idx_test_df = data_test.index.values
-data_test_df_columns = list(data_test.columns.values)
-data_test_df = data_test.values
-nb_columns = data_test_df.shape[1]
-PREDICTION_LIMIT = data_test_df.shape[0]
-predict_df = predict_data_df.iloc[:,-1]
-predict_data = [str(predict_df[x]) for x in range(PREDICTION_LIMIT)]
-
-try:
-  is_classification_algorithm = variables.get("CLASSIFICATION_MEASURE")
-except NameError:
-  is_classification_algorithm = 'False'
-
-if is_classification_algorithm == 'True':
-  LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
-  label_test_df = pd.read_json(LABEL_TEST_DF_JSON, orient='split')
-  df_classes = label_test_df.iloc[:,-1].unique()
+columns = []
+if alg.type == 'classification' and is_labeled_data:
+  columns = [LABEL_COLUMN, "predictions","accuracy"]
+elif alg.type == 'regression' and is_labeled_data:
+  columns = [LABEL_COLUMN, "predictions","absolute_error"]
+elif alg.type == 'clustering' and is_labeled_data:
+  columns = [LABEL_COLUMN, "predictions"]
 else:
-  df_classes = predict_data_df.iloc[:,-1].unique()
+  columns = ["predictions"]
+
+dataframe_idx_values = dataframe.index.values
+dataframe_features = dataframe.drop(columns, axis=1, inplace=False)
+
+dataframe_features_values = dataframe_features.values
+dataframe_features_values_columns = list(dataframe_features.columns.values)
+
+nb_rows = dataframe_features_values.shape[0]
+nb_columns = dataframe_features_values.shape[1]
+
+dataframe_predictions = dataframe["predictions"]
+dataframe_predictions_values = dataframe_predictions.values.ravel()
+dataframe_predictions_values_str = [str(dataframe_predictions[x]) for x in range(nb_rows)]
+
+if alg.type == 'classification':
+  df_classes = dataframe[LABEL_COLUMN].unique()
+else:
+  df_classes = dataframe_predictions.unique()
 
 classes = [str(df_classes[x]) for x in range(0,len(df_classes))]
 classes.sort()
 classes_stats = [0]*len(classes)
 
-# REGRESSION PLOTS
-try:
-  is_regression_algorithm = variables.get("REGRESSION_MEASURE")
-except NameError:
-  is_regression_algorithm = 'False'
+if is_labeled_data:
+  dataframe_labels = dataframe[LABEL_COLUMN]
+  dataframe_labels_values = dataframe_labels.values.ravel()
 
-if is_regression_algorithm == 'True':
-  list_detected_simples_text = vis.text("List of detected samples in class "+TARGETED_CLASS+" :\n", opts = dict(title = 'List of indexes'))
-  targeted_class_line = vis.line(Y = np.array([0]), X = np.array([0]), opts = dict(xlabel = 'Index', ylabel = 'Targeted Class', title = "Detected samples in class "+TARGETED_CLASS+" \n"))
-  features_line = vis.line(X=np.column_stack(([0]*nb_columns)), Y=np.column_stack(np.asarray(data_test_df[0][:])), opts=dict(legend=data_test_df_columns,xlabel = 'Index', ylabel = 'Feature Value', title = 'Values of extracted features for each sample'))
-  count = 0
-  for x in range(PREDICTION_LIMIT):
-    if int(float(predict_data[x]))==int(float(TARGETED_CLASS)):
-      message = "%s\n"%(idx_test_df[x])
-      vis.text(message, win=list_detected_simples_text, append=True)
-      vis.line(Y = np.array([1]), X = np.array([count]), win = targeted_class_line, update = 'append')
+if is_labeled_data and alg.type == 'regression':
+  dataframe_predictions_values_float = [float(dataframe_predictions_values[x]) for x in range(nb_rows)]
+  model_mse = mean_squared_error(dataframe_labels_values, dataframe_predictions_values_float)
+  model_mae = mean_absolute_error(dataframe_labels_values, dataframe_predictions_values_float)
+  model_r2s = r2_score(dataframe_labels_values, dataframe_predictions_values_float)
+
+if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'):
+  dataframe_classes = dataframe_labels.unique()
+  classes = [str(dataframe_classes[x]) for x in range(0, len(dataframe_classes))]
+  classes.sort()
+  classes_stats = [0]*len(classes)
+  model_cm = confusion_matrix(dataframe_labels_values, dataframe_predictions_values)
+  model_as = accuracy_score(dataframe_labels_values, dataframe_predictions_values)
+  model_ps = precision_score(dataframe_labels_values, dataframe_predictions_values, average='micro')
+  model_fpr = None
+  model_tpr = None
+  if len(classes) == 2:
+    model_fpr, model_tpr, _ = roc_curve(dataframe_labels_values, dataframe_predictions_values)
+
+#-------------------------------------------------------------
+# VISDOM PLOTS
+#-------------------------------------------------------------
+
+list_detected_samples_text = vis.text("List of detected samples in class " + TARGET_CLASS, opts=dict(title='List of indexes'))
+
+target_class_line = vis.line(
+  Y=np.array([0]),
+  X=np.array([0]),
+  opts=dict(
+    xlabel='Index',
+    ylabel='Targeted Class',
+    title="Detected samples in class " + TARGET_CLASS
+    )
+  )
+
+features_line = vis.line(
+  X=np.column_stack([0]*nb_columns),
+  Y=np.column_stack(dataframe_features_values[0][:]),
+  opts=dict(
+    legend=dataframe_features_values_columns,
+    xlabel='Index',
+    ylabel='Feature Value',
+    title='Values of extracted features for each sample'
+    )
+  )
+if alg.type == 'classification' or alg.type == 'clustering':
+  statistic_pie = vis.pie(X=classes_stats, opts=dict(legend=classes, title='Classification results'))
+
+#-------------------------------------------------------------
+count = 0
+for x in range(nb_rows):
+  vis.line(
+    X=np.column_stack([count]*nb_columns),
+    Y=np.column_stack(dataframe_features_values[x][:]),
+    win=features_line,
+    update='append'
+  )
+  if alg.type == 'regression':
+    match = (int(float(dataframe_predictions_values[x])) == int(float(TARGET_CLASS)))
+    if match:
+      message = "%s\n"%(dataframe_idx_values[x])
+      vis.text(message, win=list_detected_samples_text, append=True)
+      vis.line(Y=np.array([1]), X=np.array([count]), win=target_class_line, update='append')
     else:
-      vis.line(Y = np.array([0]), X = np.array([count]), win = targeted_class_line, update = 'append')
-      count += 1
-    vis.line(X=np.column_stack(([count]*nb_columns)), Y=np.column_stack((np.asarray(data_test_df[x][:]))), win=features_line, update='append')
-else:
-  list_detected_simples_text = vis.text("List of detected samples in class "+TARGETED_CLASS+" :\n", opts = dict(title = 'List of indexes'))
-  targeted_class_line = vis.line(Y = np.array([0]), X = np.array([0]), opts = dict(xlabel = 'Index', ylabel = 'Targeted Class', title = "Detected samples in class "+TARGETED_CLASS+" \n"))
-  statistic_pie = vis.pie(X=classes_stats, opts=dict(legend=classes,  title = 'Detected classes',))
-  features_line = vis.line(X=np.column_stack(([0]*nb_columns)), Y=np.column_stack(np.asarray(data_test_df[0][:])), opts=dict(legend=data_test_df_columns,xlabel = 'Index', ylabel = 'Feature Value', title = 'Values of extracted features for each sample'))
-  count = 0
-  for x in range(PREDICTION_LIMIT):
-    i=0
-    while i<len(classes):
-      if predict_data[x] == classes[i]:
+      vis.line(Y=np.array([0]), X=np.array([count]), win=target_class_line, update='append')
+    count += 1
+
+  if alg.type == 'classification' or alg.type == 'clustering':
+    for i in range(len(classes)):
+      if dataframe_predictions_values_str[x] == classes[i]:
         classes_stats[i] += 1
-        if classes[i]== TARGETED_CLASS:
-          message = "%s\n"%(idx_test_df[x])
-          vis.text(message, win=list_detected_simples_text, append=True)
-          vis.line(Y = np.array([1]), X = np.array([count]), win = targeted_class_line, update = 'append')
+        vis.pie(X=classes_stats, win=statistic_pie, opts=dict(legend=classes, title='Classification results'))
+        match = (str(classes[i]) == str(TARGET_CLASS))
+        if match:
+          message = "%s\n"%(dataframe_idx_values[x])
+          vis.text(message, win=list_detected_samples_text, append=True)
+          vis.line(Y=np.array([1]), X=np.array([count]), win=target_class_line, update='append')
         else:
-          vis.line(Y = np.array([0]), X = np.array([count]), win = targeted_class_line, update = 'append')
+          vis.line(Y=np.array([0]), X=np.array([count]), win=target_class_line, update='append')
         count += 1
-        vis.pie(X = classes_stats, win = statistic_pie, opts=dict(legend=classes,  title = 'Classification results'))
-        i = len(classes)
-      i+= 1
-    vis.line(X=np.column_stack(([count]*nb_columns)), Y=np.column_stack((np.asarray(data_test_df[x][:]))), win=features_line, update='append')
 
-try:
-  is_clustering_algorithm = variables.get("CLUSTERING_MEASURE")
-except NameError:
-  is_clustering_algorithm = 'False'
+#-------------------------------------------------------------
 
-if IS_LABELED_DATA == 'True' and not(is_clustering_algorithm == 'True'):
-  LABEL_TEST_DF_JSON = variables.get("LABEL_TEST_DF_JSON")
-  label_test_df = pd.read_json(LABEL_TEST_DF_JSON, orient='split')
-  score_text = vis.text("Model scoring:\n")
-  if len(classes)==2:
-    fpr, tpr, thresholds = metrics.roc_curve(np.asarray(label_test_df), np.asarray(predict_data_df))
-    vis.line(X=fpr, Y=tpr, opts=dict(xlabel = 'False Positive Rate', ylabel = 'True Positive Rate', title = 'ROC Curve'))
-  # CLASSIFICATION MEASURES
-  try:
-    is_classification_algorithm = variables.get("CLASSIFICATION_MEASURE")
-    if is_classification_algorithm == 'True':
-      X_matrix = confusion_matrix(label_test_df, predict_data_df)
-      confusion_bar = vis.bar(X = X_matrix, opts=dict(stacked=True, legend=classes, rownames=classes, title = 'Predictive model performance'))
-      vis.text("CLASSIFICATION MEASURES", win=score_text, append=True)
-      vis.text("ACCURACY SCORE:", win=score_text, append=True)
-      vis.text(str(accuracy_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-      vis.text("PRECISION SCORE:", win=score_text, append=True)
-      vis.text(str(precision_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-      vis.text("CONFUSION MATRIX:", win=score_text, append=True)
-      vis.text(str(confusion_matrix(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-  except NameError:
-    classification_algorithm = None
+score_text = vis.text("Model scoring")
+if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'):
+  if model_fpr is not None and model_tpr is not None:
+    vis.line(X=model_fpr, Y=model_tpr, opts=dict(xlabel='False Positive Rate', ylabel='True Positive Rate', title='ROC Curve'))
+  vis.bar(X=model_cm, opts=dict(stacked=True, legend=classes, rownames=classes, title='Predictive model performance'))
+  vis.text("Classification scores", win=score_text, append=True)
+  vis.text("Accuracy score:", win=score_text, append=True)
+  vis.text(str(model_as), win=score_text, append=True)
+  vis.text("Precision score:", win=score_text, append=True)
+  vis.text(str(model_ps), win=score_text, append=True)
+  vis.text("Confusion matrix:", win=score_text, append=True)
+  vis.text(str(model_cm), win=score_text, append=True)
 
-  # REGRESSION MEASURES
-  try:
-    is_regression_algorithm = variables.get("REGRESSION_MEASURE")
-    if is_regression_algorithm == 'True':
-      vis.text("REGRESSION MEASURES", win=score_text, append=True)
-      vis.text("MEAN SQUARED ERROR:", win=score_text, append=True)
-      vis.text(str(mean_squared_error(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-      vis.text("MEAN ABSOLUTE ERROR:", win=score_text, append=True)
-      vis.text(str(mean_absolute_error(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-      vis.text("COEFFICIENT DE DETERMINATION:", win=score_text, append=True)
-      vis.text(str(r2_score(label_test_df.values.ravel(), predict_data_df)), win=score_text, append=True)
-  except NameError:
-    is_regression_algorithm = None
+if is_labeled_data and alg.type == 'regression':
+  vis.text("Regression scores", win=score_text, append=True)
+  vis.text("Mean squared error:", win=score_text, append=True)
+  vis.text(str(model_mse), win=score_text, append=True)
+  vis.text("Mean absolute error:", win=score_text, append=True)
+  vis.text(str(model_mae), win=score_text, append=True)
+  vis.text("Coefficient of determination:", win=score_text, append=True)
+  vis.text(str(model_r2s), win=score_text, append=True)
 
-print("--- END Visdom_Visualize_Results ---")
+print("END " + __file__)
 ]]>
           </code>
         </script>
@@ -840,7 +1430,8 @@ print("--- END Visdom_Visualize_Results ---")
         <![CDATA[ Task to pause the job and send a validation message to the notification service ]]>
       </description>
       <genericInformation>
-        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
       </genericInformation>
       <depends>
         <task ref="Visdom_Visualize_Results"/>
@@ -912,80 +1503,80 @@ ACTION: the action to execute on the Visdom service among the aforementioned act
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2673px;
-            height:3068px;
+            width:2134px;
+            height:2368px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-172.7734375px;left:-604.8046875px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_985" style="top: 689.785px; left: 704.824px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png" width="20px">&nbsp;<span class="name">Export_Results</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_988" style="top: 561.777px; left: 709.824px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/predict.png" width="20px">&nbsp;<span class="name">Predict_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_991" style="top: 433.77px; left: 709.824px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/train.png" width="20px">&nbsp;<span class="name">Train_Model</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_994" style="top: 305.781px; left: 609.805px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png" width="20px">&nbsp;<span class="name">Support_Vector_Machines</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_997" style="top: 177.774px; left: 773.828px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png" width="20px">&nbsp;<span class="name">Import_Data</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1000" style="top: 305.781px; left: 773.828px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/split_data.png" width="20px">&nbsp;<span class="name">Split_Data</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1003" style="top: 689.785px; left: 837.832px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Visdom_Visualize_Results</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1006" style="top: 817.774px; left: 837.832px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Wait_For_Web_Validation</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1009" style="top: 561.777px; left: 842.832px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1012" style="top: 945.781px; left: 837.832px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Visdom_Service_Actions</span></a></div><svg style="position:absolute;left:746px;top:600.5px" width="24.5" height="90" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 13.5 50 3.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.534544,67.21769599999999 L5.97512850950989,47.811885690175465 L-1.4634106095769124,53.258732096474745 L-7.983835394015355,46.74075229975238 L-2.534544,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.534544,67.21769599999999 L5.97512850950989,47.811885690175465 L-1.4634106095769124,53.258732096474745 L-7.983835394015355,46.74075229975238 L-2.534544,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:745.0235032915331px;top:473.5px" width="15.47649670846693" height="88" pointer-events="none" position="absolute" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-107px;left:-433.625px"><div class="task ui-draggable" id="jsPlumb_1_614" style="top: 112px; left: 463.875px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_data.png" width="20px">&nbsp;<span class="name">Import_Data</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_617" style="top: 239px; left: 463.875px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png" width="20px">&nbsp;<span class="name">Split_Data</span></a></div><div class="task ui-draggable" id="jsPlumb_1_620" style="top: 239px; left: 627.875px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png" width="20px">&nbsp;<span class="name">Support_Vector_Machines</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_623" style="top: 367px; left: 438.625px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/train.png" width="20px">&nbsp;<span class="name">Train_Model</span></a></div><div class="task ui-draggable" id="jsPlumb_1_626" style="top: 495px; left: 471.125px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/predict.png" width="20px">&nbsp;<span class="name">Predict_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_629" style="top: 623px; left: 466.125px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_data.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><div class="task ui-draggable" id="jsPlumb_1_632" style="top: 495px; left: 642.375px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_635" style="top: 879px; left: 634.625px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Visdom_Service_Actions</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_638" style="top: 623px; left: 633.625px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Visdom_Visualize_Results</span></a></div><div class="task ui-draggable" id="jsPlumb_1_671" style="top: 751px; left: 634.625px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Wait_For_Web_Validation</span></a></div><svg style="position:absolute;left:499.0235032915331px;top:151.5px" width="15.47649670846693" height="88" pointer-events="none" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 87 C -10 37 -10 50 0 0 " transform="translate(14.97649670846693,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,65.86284375000001 L-1.2275778407318203,44.90175553569722 L-6.970801092219563,52.1139248822649 L-14.97649670846693,47.54130662791678 L-4.331249999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(14.97649670846693,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,65.86284375000001 L-1.2275778407318203,44.90175553569722 L-6.970801092219563,52.1139248822649 L-14.97649670846693,47.54130662791678 L-4.331249999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(14.97649670846693,0.5)"></path></svg><svg style="position:absolute;left:675px;top:345.5px" width="95.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 74.5 88 C 84.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,65.86284375000001 L-1.2275778407318203,44.90175553569722 L-6.970801092219563,52.1139248822649 L-14.97649670846693,47.54130662791678 L-4.331249999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(14.97649670846693,0.5)"></path></svg><svg style="position:absolute;left:478.5px;top:278.5px" width="46" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 35 50 25 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M68.535582875,63.115491500000005 L58.185083444439975,44.625841380596 L58.04532552030423,53.84432649056072 L48.91391843500069,55.11609873529177 L68.535582875,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M68.535582875,63.115491500000005 L58.185083444439975,44.625841380596 L58.04532552030423,53.84432649056072 L48.91391843500069,55.11609873529177 L68.535582875,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:749.5px;top:345.5px" width="85" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 74 50 64 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-0.5993537500000019,65.8307285 L12.886094046986088,49.486227965729675 L4.242883066921186,52.69479524008836 L-0.24983921292555777,44.64399114880849 L-0.5993537500000019,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-0.5993537500000019,65.8307285 L12.886094046986088,49.486227965729675 L4.242883066921186,52.69479524008836 L-0.24983921292555777,44.64399114880849 L-0.5993537500000019,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:478.5px;top:278.5px" width="236" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 225 50 215 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.998374500000004 L22.929075029560156,54.31512137928547 L13.721469712576434,53.84607519109808 L12.776775720658232,44.675058166709036 L4.081406499999998,63.998374500000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.998374500000004 L22.929075029560156,54.31512137928547 L13.721469712576434,53.84607519109808 L12.776775720658232,44.675058166709036 L4.081406499999998,63.998374500000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:808.9817132113825px;top:217.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M33.27376,59.394175999999995 L54.42290526584743,60.70324227948445 L46.74825703747608,55.59444843252249 L50.62317769836993,47.22874524200838 L33.27376,59.394175999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M33.27376,59.394175999999995 L54.42290526584743,60.70324227948445 L46.74825703747608,55.59444843252249 L50.62317769836993,47.22874524200838 L33.27376,59.394175999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:478.5px;top:406.5px" width="53" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 32 88 C 42 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path></svg><svg style="position:absolute;left:899.5px;top:600.5px" width="25.5" height="90" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4.5 89 C 14.5 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M31.969271499999998,65.8307285 L29.934733623259604,44.739008427229535 L26.096979356082812,53.12182669943169 L17.22583182269129,50.61130057114673 L31.969271499999998,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M31.969271499999998,65.8307285 L29.934733623259604,44.739008427229535 L26.096979356082812,53.12182669943169 L17.22583182269129,50.61130057114673 L31.969271499999998,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:503.5px;top:278.5px" width="28" height="217" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 7 216 C 17 166 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M6.949008,67.21769599999999 L12.133645885818328,46.67214830730177 L5.697860860010481,53.27371411410756 L-1.8103360000740958,47.92329544729128 L6.949008,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M6.949008,67.21769599999999 L12.133645885818328,46.67214830730177 L5.697860860010481,53.27371411410756 L-1.8103360000740958,47.92329544729128 L6.949008,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:749.5px;top:600.5px" width="175.5" height="90" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 154.5 89 C 164.5 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.65924675,167.0637915 L14.38572379899711,146.66262828298443 L7.777508617375644,153.09158559450762 L0.41351789350473034,147.5443664156088 L8.65924675,167.0637915" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.65924675,167.0637915 L14.38572379899711,146.66262828298443 L7.777508617375644,153.09158559450762 L0.41351789350473034,147.5443664156088 L8.65924675,167.0637915" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:510px;top:534.5px" width="21.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 10.5 50 0.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M133.171875,61.03125 L117.25972762131161,47.0382672658257 L120.19478463478434,55.778143713903475 L112.00662133521507,60.01535763104136 L133.171875,61.03125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M133.171875,61.03125 L117.25972762131161,47.0382672658257 L120.19478463478434,55.778143713903475 L112.00662133521507,60.01535763104136 L133.171875,61.03125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:902.5px;top:729.5px" width="22.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 11.5 50 1.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.7747343749999995,66.78168750000002 L4.918836648297567,47.038107153227145 L-2.286251050858403,52.790212093809444 L-9.072638757893003,46.54962382908555 L-2.7747343749999995,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.7747343749999995,66.78168750000002 L4.918836648297567,47.038107153227145 L-2.286251050858403,52.790212093809444 L-9.072638757893003,46.54962382908555 L-2.7747343749999995,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 504px; top: 142px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 504px; top: 269px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 504px; top: 229px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 694px; top: 269px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 479px; top: 397px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 479px; top: 357px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected endpointDrag" style="position: absolute; height: 20px; width: 20px; left: 511px; top: 525px; visibility: visible;" dragid="jsPlumb_1_772" elid="jsPlumb_1_626"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 511px; top: 485px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 510.5px; top: 653px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 510.5px; top: 613px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 699px; top: 525px; visibility: visible;" dragid="jsPlumb_1_762" elid="jsPlumb_1_632"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 697.5px; top: 909px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 700px; top: 653px; visibility: visible;" dragid="jsPlumb_1_720" elid="jsPlumb_1_638"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 699.5px; top: 781px; visibility: visible;" dragid="jsPlumb_1_742" elid="jsPlumb_1_671"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:699px;top:662.5px" width="21.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 10.5 50 0.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.6935781249999997,66.78168750000002 L5.255142286972582,47.139441095571364 L-2.0238641657164482,52.79771513115072 L-8.72883008187672,46.46972713628781 L-2.6935781249999997,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.6935781249999997,66.78168750000002 L5.255142286972582,47.139441095571364 L-2.0238641657164482,52.79771513115072 L-8.72883008187672,46.46972713628781 L-2.6935781249999997,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:900px;top:857.5px" width="23.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 12.5 50 2.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.7747343749999995,66.78168750000002 L4.918836648297567,47.038107153227145 L-2.286251050858403,52.790212093809444 L-9.072638757893003,46.54962382908555 L-2.7747343749999995,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 699.5px; top: 741px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:697px;top:790.5px" width="23" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 12 50 2 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.612421875,66.78168750000002 L5.589799912231152,47.243940502122534 L-1.7618140918536094,52.80755187738454 L-8.384335710384322,46.39333271897615 L-2.612421875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.612421875,66.78168750000002 L5.589799912231152,47.243940502122534 L-1.7618140918536094,52.80755187738454 L-8.384335710384322,46.39333271897615 L-2.612421875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 746.5px; top: 720px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.6529999999999996,66.78168750000002 L5.422684726887218,47.19129913754225 L-1.8927913941925154,52.80234263424697 L-8.556660138865833,46.431090531734775 L-2.6529999999999996,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 697.5px; top: 869px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 746.5px; top: 680px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:698.5px;top:534.5px" width="22" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 1 88 C 11 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M3.7341562499999994,66.78168750000002 L9.900828592736769,46.50923939383077 L3.155021153255475,52.793671109542124 L-4.087187797721125,47.08837449057529 L3.7341562499999994,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 700px; top: 613px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 750px; top: 591px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 750px; top: 551px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 750px; top: 464px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 750px; top: 424px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 675.5px; top: 336px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 814px; top: 208px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 814px; top: 336px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 814px; top: 296px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 904.5px; top: 720px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 904.5px; top: 680px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 903px; top: 848px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 903px; top: 808px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 900px; top: 591px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 900.5px; top: 976px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 900.5px; top: 936px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:510.5px;top:534.5px" width="210" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 189 88 C 199 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M161.19121725,59.788559500000005 L144.31822748126,46.97051689342412 L147.87138359589835,55.47787145433246 L140.00753943559243,60.29035054752576 L161.19121725,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg></div></div></body></html>
  ]]>
     </visualization>
   </metadata>
