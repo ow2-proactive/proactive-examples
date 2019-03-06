@@ -12,6 +12,7 @@ algorithm = {
   'name': 'TPOT_Regressor',
   'is_supervised': True,
   'type': 'regression',
+  'automl': False,
   'generations': int(variables.get("GENERATIONS")),
   'cv': int(variables.get("CV")),
   'scoring': variables.get("SCORING"),

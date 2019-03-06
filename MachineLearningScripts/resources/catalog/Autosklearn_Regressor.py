@@ -12,6 +12,7 @@ algorithm = {
   'name': 'AutoSklearn_Regressor',
   'is_supervised': True,
   'type': 'regression',
+  'automl': False,
   'task_time': int(variables.get("TASK_TIME")),
   'run_time': int(variables.get("RUN_TIME")),
   'sampling': variables.get("SAMPLING"),

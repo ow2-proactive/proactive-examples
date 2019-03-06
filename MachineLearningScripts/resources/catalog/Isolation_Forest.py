@@ -1,3 +1,6 @@
+# you can use the following search space to optimize the hyperparameters
+# SEARCH_SPACE: {"contamination":choice([0,0.1,0.2,0.3])}
+
 __file__ = variables.get("PA_TASK_NAME")
 
 if str(variables.get("TASK_ENABLED")).lower() != 'true':
@@ -8,13 +11,17 @@ print("BEGIN " + __file__)
 
 import json
 
+input_variables = variables.get("INPUT_VARIABLES")
+scoring = variables.get("SCORING")
+
 algorithm = {
   'name': 'IsolationForest',
-  'is_supervised': False,
   'type': 'anomaly',
-  'n_jobs': int(variables.get("N_JOBS")),
-  'n_estimators': int(variables.get("N_ESTIMATORS"))
+  'is_supervised': False,
+  'input_variables': input_variables,
+  'scoring': scoring
 }
+print("algorithm: ", algorithm)
 
 algorithm_json = json.dumps(algorithm)
 resultMetadata.put("task.algorithm_json", algorithm_json)
