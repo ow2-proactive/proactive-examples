@@ -1,283 +1,28 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Image_Segmentation" projectName="4. Custom Pytorch Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Image_Segmentation" onTaskError="continueJobExecution" priority="normal" projectName="4. Custom Pytorch Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
-    <variable name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
-    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
+    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
   </variables>
   <description>
     <![CDATA[ Image Segmentation workflow uses a SegNet network to partition an image into multiple segments. ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="deep-learning-workflows"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/pytorch-logo-dark.png"/>
-    <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+<info name="bucketName" value="deep-learning-workflows"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/pytorch-logo-dark.png"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Export_Images" >
-      <description>
-        <![CDATA[ Download a zip file of your results ]]>
-      </description>
-      <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_images"/>
-      </genericInformation>
-      <depends>
-        <task ref="Predict_Image_Segmentation_Model"/>
-      </depends>
-      <inputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
-        <files  includes="$OUTPUT_FOLDER/**" accessMode="transferFromGlobalSpace"/>
-      </inputFiles>
-      <selection>
-        <script type="static">
-          <code language="python">
-            <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr" >
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Export_Images")
-
-import os
-import cv2
-import json
-import glob
-import uuid  
-import torch 
-import numpy
-import torch
-import shutil
-import random
-import zipfile
-import pandas as pd
-
-from PIL import Image
-from os.path import join, exists
-from os import remove, listdir, makedirs
-
-import torch
-import torch.nn as nn
-import torch.nn.init as init
-import torch.nn.functional as F
-from torch.utils.data import Dataset 
-
-from torch.utils import model_zoo
-from ast import literal_eval as make_tuple
-from os.path import basename, splitext, exists, join, isfile
-
-from torch.optim import SGD, Adam
-from torch.autograd import Variable
-from torch.utils.data import DataLoader
-from torchvision.transforms import Compose
-from torchvision import datasets, models, transforms
-from torchvision.transforms import ToTensor, ToPILImage, Normalize, Scale
-
-if 'variables' in locals():
-  DATASET_PATH   = variables.get("DATASET_PATH")
-  NET_TRANSFORM  = variables.get("NET_TRANSFORM")
-  CNN_TRANSFORM  = variables.get("CNN_TRANSFORM")
-  PREDICT_DATA   = variables.get("PREDICT_DATA_JSON")
-  SHUFFLE = variables.get("SHUFFLE")
-  BATCH_SIZE = int(str(variables.get("BATCH_SIZE")))
-  NUM_WORKERS = int(str(variables.get("NUM_WORKERS")))
-  DATASET_TYPE = variables.get("DATASET_TYPE")  
-  IMG_SIZE   = variables.get("IMG_SIZE") 
-
-#CLASSIFICATION
-if DATASET_TYPE == 'CLASSIFICATION':
-	# Load CNN transform
-	# data_transforms
-	if CNN_TRANSFORM != None:
-		assert CNN_TRANSFORM is not None
-		exec(CNN_TRANSFORM)   
-        
-	# Load dataset
-	image_dataset = {x: 
-		datasets.ImageFolder(join(DATASET_PATH, x), data_transforms[x]) 
-  		for x in ['test']}
-
-	data_loader = {x: 
-		DataLoader(image_dataset[x], batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS) 
-		for x in ['test']}        
-        
-	# Get an unique ID
-	ID = str(uuid.uuid4())
-
-	# Define localspace
-	LOCALSPACE = join('results', ID)
-	os.makedirs(LOCALSPACE, exist_ok=True)
-    
-	if PREDICT_DATA != None: 
-		prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
-		df = pd.DataFrame(prediction_result)
-		preds = df['Predictions']
-        
-		for index, elem in enumerate(preds):
-			# check if folder exist
-			os.makedirs(join(LOCALSPACE,  preds[index]), exist_ok=True)       
-			shutil.copy2(data_loader['test'].dataset.imgs[index][0], LOCALSPACE + '/' + preds[index])
-            
-		FILE_NAME = '.zip'  
-		FILE_PATH = join(LOCALSPACE, FILE_NAME)
-		print("FILE_PATH: " + FILE_PATH)  
-             
-		def zipdir(_path, _ziph):
-			# ziph is zipfile handle
-			for root, dirs, files in os.walk(_path):
-				for file in files:
-					_ziph.write(join(root, file))   
-            
-		zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
-		zipdir(LOCALSPACE, zipf)
-		zipf.close()
-  
-		assert isfile(FILE_PATH) == True   
-        
-		# Read the whole file at once
-		FILE_BIN = None
-		with open(FILE_PATH, "rb") as binary_file:
-			FILE_BIN = binary_file.read()
-		assert FILE_BIN is not None  
-               
-		if 'variables' in locals():
-			result = FILE_BIN
-			resultMetadata.put("file.extension", ".zip")
-			resultMetadata.put("file.name", "result.zip")
-			resultMetadata.put("content.type", "application/octet-stream") 
-			print("END Export_Images")
-	else:
-		print("It is not possible to export the images")   
-        
-#DETECTION / SEGMENTATION     
-if DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
-    IMG_SIZE = tuple(IMG_SIZE)
-    # Get an unique ID
-    ID = str(uuid.uuid4())
-    # Define localspace
-    LOCALSPACE = join('results', ID)
-    os.makedirs(LOCALSPACE, exist_ok=True)
-    if PREDICT_DATA != None: 
-        prediction_result  = pd.read_json(PREDICT_DATA, orient='split')
-        df = pd.DataFrame(prediction_result)
-        os.makedirs(join(LOCALSPACE, 'images'), exist_ok=True)
-        os.makedirs(join(LOCALSPACE, 'outputs'), exist_ok=True)
-        imgs = df['Image Paths']
-        preds = df['Outputs']
-        for index, elem in enumerate(preds): 
-        	shutil.copy2(imgs[index], LOCALSPACE + '/' + 'images') 
-        	shutil.copy2(elem, LOCALSPACE + '/' + 'outputs') 
-            
-        FILE_NAME = '.zip' 
-        FILE_PATH = join(LOCALSPACE, FILE_NAME)
-        print("FILE_PATH: " + FILE_PATH) 
-        
-        def zipdir(_path, _ziph):
-        	# ziph is zipfile handle
-        	for root, dirs, files in os.walk(_path):
-        		for file in files:
-        			_ziph.write(join(root, file))  
-                    
-        zipf = zipfile.ZipFile(FILE_PATH, 'w', zipfile.ZIP_DEFLATED)
-        zipdir(LOCALSPACE, zipf)
-        zipf.close()
-        
-        assert isfile(FILE_PATH) == True 
-        
-		# Read the whole file at once
-        FILE_BIN = None
-        with open(FILE_PATH, "rb") as binary_file:
-        	FILE_BIN = binary_file.read()
-        assert FILE_BIN is not None  
-        
-        if 'variables' in locals():
-        	result = FILE_BIN
-        	resultMetadata.put("file.extension", ".zip")
-        	resultMetadata.put("file.name", "result.zip")
-        	resultMetadata.put("content.type", "application/octet-stream") 
-        	print("END Export_Images")
-    else:
-        print("It is not possible to export the images")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-      <metadata>
-        <positionTop>
-            691.9921875
-        </positionTop>
-        <positionLeft>
-            1040.48828125
-        </positionLeft>
-      </metadata>
-    </task>
-    <task name="Import_Model" >
+    <task name="Import_Model">
       <description>
         <![CDATA[ Import a trained model by a deep learning algorithm. ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="MODEL_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_segnet.zip" inherited="true" />
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" name="MODEL_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_segnet.zip"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png"/>
@@ -309,7 +54,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -341,116 +86,32 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Import_Model")
-
-import wget
-import uuid
-import shutil
-import zipfile
-
-from os.path import join, exists
-from os import remove, listdir, makedirs
-
-# Pre-trained models
-# Text:  https://s3.eu-west-2.amazonaws.com/activeeon-public/models/basic_sentiment_analysis.zip
-# Image: https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_resnet18.zip
-
-# Load a trained model on ResNet-18 with two classes [ants, bees]
-#MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_resnet18.zip' ##CLASSIFICATION MODEL
-
-# Load a trained model on SegNet with five classes 
-#MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_segnet.zip'##SEGMENTATION MODEL
-
-# Load a trained model on SDD with twenty-one classes 
-MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/sdd_voc.zip'##OBJECT DETECTION MODEL ON PASCAL VOC DATASET
-
-
-if 'variables' in locals():
-  MODEL_URL = variables.get("MODEL_URL")
-
-print("MODEL_URL:   " + MODEL_URL)
-assert MODEL_URL is not None
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Create an empty dir
-MODEL_FOLDER = join('models', ID)
-if exists(MODEL_FOLDER):
-  shutil.rmtree(MODEL_FOLDER)
-makedirs(MODEL_FOLDER)
-print("MODEL_FOLDER: " + MODEL_FOLDER)
-
-print("Downloading...")
-filename = wget.download(MODEL_URL, MODEL_FOLDER)
-print("FILENAME: " + filename)
-print("OK")
-
-print("Extracting...")
-dataset_zip = zipfile.ZipFile(filename)
-dataset_zip.extractall(MODEL_FOLDER)
-dataset_zip.close()
-remove(filename)
-print("OK")
-
-MODEL_PATH = None
-LABELS_PATH = None
-TEXT_PATH = None 
-for file in listdir(MODEL_FOLDER):
-  if file.endswith(".pt") or file.endswith(".pth"):
-    MODEL_PATH = join(MODEL_FOLDER, file)
-  if file.endswith("label.pkl"):
-    LABELS_PATH = join(MODEL_FOLDER, file)
-  if file.endswith("text.pkl"):
-    TEXT_PATH = join(MODEL_FOLDER, file)
-  if file.endswith(".txt"):
-    LABELS_PATH = join(MODEL_FOLDER, file)
-
-assert MODEL_PATH is not None
-#assert LABELS_PATH is not None
-print(LABELS_PATH)
-print("Model information: ")
-print("MODEL_PATH:  " + MODEL_PATH)
-if LABELS_PATH != None:
-	print("LABELS_PATH: " + LABELS_PATH)
-print("TEXT_PATH:   " + str(TEXT_PATH))
-
-if 'variables' in locals():
-  variables.put("MODEL_PATH", MODEL_PATH)
-  variables.put("LABELS_PATH", LABELS_PATH)
-  variables.put("TEXT_PATH", TEXT_PATH)
-  variables.put("MODEL_FOLDER", MODEL_FOLDER)
-
-print("END Import_Model")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Import_Model/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
       <outputFiles>
-        <files  includes="$MODEL_FOLDER/**" accessMode="transferToGlobalSpace"/>
+        <files accessMode="transferToGlobalSpace" includes="$MODEL_FOLDER/**"/>
       </outputFiles>
       <metadata>
         <positionTop>
-            435.99609375
+            327.5
         </positionTop>
         <positionLeft>
-            971.484375
+            493
         </positionLeft>
       </metadata>
     </task>
-    <task name="SegNet" >
+    <task name="SegNet">
       <description>
         <![CDATA[ SegNet is a deep convolutional encoder-decoder architecture for robust semantic pixel-wise labelling.
 You can see more details in: http://mi.eng.cam.ac.uk/projects/segnet/ ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="IMG_SIZE" value="(64, 64)" inherited="true" />
-        <variable name="NUM_CLASSES" value="3" inherited="true" />
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" name="IMG_SIZE" value="(64, 64)"/>
+        <variable inherited="false" name="NUM_CLASSES" value="3"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_segmentation.png"/>
@@ -482,7 +143,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -514,247 +175,31 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN SegNet")
-
-import json
-from ast import literal_eval as make_tuple
-
-IMG_SIZE = variables.get("IMG_SIZE")
-NUM_CLASSES = int(str(variables.get("NUM_CLASSES")))
- 
-IMG_SIZE = make_tuple(IMG_SIZE)
-
-if NUM_CLASSES == 2:
-    NUM_CLASSES = NUM_CLASSES - 1       
-else:
-    NUM_CLASSES = NUM_CLASSES + 2   
-
-# Define the NET model
-NET_MODEL = """
-
-class SegNetEnc(nn.Module):
-
-    def __init__(self, in_channels, out_channels, num_layers):
-        super().__init__()
-
-        layers = [
-            nn.UpsamplingBilinear2d(scale_factor=2),
-            nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
-            nn.BatchNorm2d(in_channels // 2),
-            nn.ReLU(inplace=True),
-        ]
-        layers += [
-            nn.Conv2d(in_channels // 2, in_channels // 2, 3, padding=1),
-            nn.BatchNorm2d(in_channels // 2),
-            nn.ReLU(inplace=True),
-        ] * num_layers
-        layers += [
-            nn.Conv2d(in_channels // 2, out_channels, 3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        ]
-        self.encode = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.encode(x)
-
-
-class SegNet(nn.Module):
-
-    def __init__(self, num_classes):
-        super().__init__()
-
-        # should be vgg16bn but at the moment we have no pretrained bn models
-        decoders = list(models.vgg16(pretrained=True).features.children())
-
-        self.dec1 = nn.Sequential(*decoders[:5])
-        self.dec2 = nn.Sequential(*decoders[5:10])
-        self.dec3 = nn.Sequential(*decoders[10:17])
-        self.dec4 = nn.Sequential(*decoders[17:24])
-        self.dec5 = nn.Sequential(*decoders[24:])
-
-        # gives better results
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                m.requires_grad = False
-
-        self.enc5 = SegNetEnc(512, 512, 1)
-        self.enc4 = SegNetEnc(1024, 256, 1)
-        self.enc3 = SegNetEnc(512, 128, 1)
-        self.enc2 = SegNetEnc(256, 64, 0)
-        self.enc1 = nn.Sequential(
-            nn.UpsamplingBilinear2d(scale_factor=2),
-            nn.Conv2d(128, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-        )
-        self.final = nn.Conv2d(64, num_classes, 3, padding=1)
-
-    def forward(self, x):
-        dec1 = self.dec1(x)
-        dec2 = self.dec2(dec1)
-        dec3 = self.dec3(dec2)
-        dec4 = self.dec4(dec3)
-        dec5 = self.dec5(dec4)
-        enc5 = self.enc5(dec5)
-        enc4 = self.enc4(torch.cat([dec4, enc5], 1))
-        enc3 = self.enc3(torch.cat([dec3, enc4], 1))
-        enc2 = self.enc2(torch.cat([dec2, enc3], 1))
-        enc1 = self.enc1(torch.cat([dec1, enc2], 1))
-
-        return F.upsample_bilinear(self.final(enc1), x.size()[2:])
-        
-        
-METHOD_NAME = 'SegNet'        
-Net = SegNet    
-assert Net is not None, f'model {MODEL_NAME} not available'
-model = Net(NUM_CLASSES)
-        
-"""
-print(NET_MODEL)
-
-# Data augmentation and normalization for training
-# Just normalization for validation and test
-NET_TRANSFORM = """
-import numpy as np
-
-def colormap(n):
-    cmap=np.zeros([n, 3]).astype(np.uint8)
-
-    for i in np.arange(n):
-        r, g, b = np.zeros(3)
-
-        for j in np.arange(8):
-            r = r + (1<<(7-j))*((i&(1<<(3*j))) >> (3*j))
-            g = g + (1<<(7-j))*((i&(1<<(3*j+1))) >> (3*j+1))
-            b = b + (1<<(7-j))*((i&(1<<(3*j+2))) >> (3*j+2))
-
-        cmap[i,:] = np.array([r, g, b])
-
-    return cmap
-
-class Relabel:
-
-    def __init__(self, olabel, nlabel):
-        self.olabel = olabel
-        self.nlabel = nlabel
-
-    def __call__(self, tensor):
-        assert isinstance(tensor, torch.LongTensor), 'tensor needs to be LongTensor'
-        tensor[tensor == self.olabel] = self.nlabel
-        return tensor
-
-
-class ToLabel:
-
-    def __call__(self, image):
-        return torch.from_numpy(np.array(image)).long().unsqueeze(0)
-
-
-class Colorize:
-
-    def __init__(self, n=22):
-        self.cmap = colormap(256)
-        self.cmap[n] = self.cmap[-1]
-        self.cmap = torch.from_numpy(self.cmap[:n])
-
-    def __call__(self, gray_image):
-        size = gray_image.size()
-        color_image = torch.ByteTensor(3, size[1], size[2]).fill_(0)
-
-        for label in range(1, len(self.cmap)):
-            mask = gray_image[0] == label
-
-            color_image[0][mask] = self.cmap[label][0]
-            color_image[1][mask] = self.cmap[label][1]
-            color_image[2][mask] = self.cmap[label][2]
-
-        return color_image
-       
-if NUM_CLASSES == 1:
-    input_transform = Compose([Resize(IMG_SIZE),ToTensor()])
-    target_transform = Compose([Resize(IMG_SIZE),ToTensor()])
-else:
-    color_transform = Colorize()
-    image_transform = ToPILImage()
-    input_transform = Compose([
-            Resize(IMG_SIZE),   
-            ToTensor(),
-            Normalize([.485, .456, .406], [.229, .224, .225]),
-    ])
-    target_transform = Compose([
-            Resize(IMG_SIZE),     
-            ToLabel(),
-            Relabel(255, 21),
-    ])
-    
-"""
-print(NET_TRANSFORM)
-
-#CRITERION FUNCTION
-NET_CRITERION = """
-class CrossEntropyLoss2d(nn.Module):
-
-    def __init__(self, weight=None):
-        super().__init__()
-
-        self.loss = nn.NLLLoss(weight)
-        
-    def forward(self, outputs, targets):
-        return self.loss(F.log_softmax(outputs), targets)
-
-class BinaryCrossEntropyLoss2d(nn.Module):
-
-    def __init__(self, weight=None):
-        super().__init__()
-        
-        #self.loss = nn.BCELoss(weight)
-        self.loss = nn.BCEWithLogitsLoss(weight)
-
-    def forward(self, outputs, targets):
-        #return self.loss(nn.Sigmoid(outputs), targets)
-        return self.loss(outputs, targets)
-        
-"""
-print(NET_CRITERION)
-
-
-if 'variables' in locals():
-  variables.put("NET_MODEL", NET_MODEL)
-  variables.put("NET_TRANSFORM", NET_TRANSFORM)
-  variables.put("NET_CRITERION", NET_CRITERION)
-  variables.put("IMG_SIZE", IMG_SIZE)
-  variables.put("NUM_CLASSES", NUM_CLASSES)
-
-print("END SegNet")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/SegNet/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            435.99609375
+            327.5
         </positionTop>
         <positionLeft>
-            1109.4921875
+            631
         </positionLeft>
       </metadata>
     </task>
-    <task name="Import_Image_Dataset" >
+    <task name="Import_Image_Dataset">
       <description>
         <![CDATA[ Load and return an image dataset. ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip" inherited="true" />
-        <variable name="SPLIT_TRAIN" value="0.68" inherited="true" />
-        <variable name="SPLIT_VAL" value="0.30" inherited="true" />
-        <variable name="SPLIT_TEST" value="0.02" inherited="true" />
-        <variable name="DATASET_TYPE" value="Segmentation" inherited="true" model="PA:LIST(Classification, Detection, Segmentation)"/>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip"/>
+        <variable inherited="false" name="TRAIN_SPLIT" value="0.60"/>
+        <variable inherited="false" name="VAL_SPLIT" value="0.15"/>
+        <variable inherited="false" name="TEST_SPLIT" value="0.25"/>
+        <variable inherited="false" model="PA:LIST(Classification, Detection, Segmentation)" name="DATASET_TYPE" value="Segmentation"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_image.png"/>
@@ -786,7 +231,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -818,279 +263,45 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Import_Image_Dataset")
-
-import re
-import os
-import json
-import wget
-import uuid 
-import shutil
-import zipfile
-from os import remove, listdir, makedirs
-from os.path import basename, splitext, exists, join
-from sklearn.model_selection import train_test_split
- 
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/ants_vs_bees.zip'  #CLASSIFICATION DATASET
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/pascal_voc.zip'     #DTECTION DATASET
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/pascal_coco.zip'     #DTECTION DATASET
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip'        #SEGMENTATION DATASET
-
-SPLIT_SETS  = ['train','val','test']
-
-if 'variables' in locals():
-  if variables.get("DATASET_URL") is not None:
-    DATASET_URL = variables.get("DATASET_URL")
-  if variables.get("SPLIT_TRAIN") is not None:
-    SPLIT_TRAIN = float(str(variables.get("SPLIT_TRAIN")))
-  if variables.get("SPLIT_VAL") is not None:
-    SPLIT_VAL = float(str(variables.get("SPLIT_VAL")))
-  if variables.get("SPLIT_TEST") is not None:
-    SPLIT_TEST = float(str(variables.get("SPLIT_TEST")))
-  
-DATASET_TYPE = variables.get("DATASET_TYPE")
-DATASET_TYPE = DATASET_TYPE.upper()
-print(DATASET_TYPE)
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Define localspace
-LOCALSPACE = join('data', ID)
-if exists(LOCALSPACE):
-  shutil.rmtree(LOCALSPACE)
-makedirs(LOCALSPACE)
-
-print("LOCALSPACE:  " + LOCALSPACE)
-print("DATASET_URL: " + DATASET_URL)
-assert DATASET_URL is not None
-
-print("Split information: ")
-print("SPLIT_TRAIN: " + str(SPLIT_TRAIN))
-print("SPLIT_VAL:   " + str(SPLIT_VAL))
-print("SPLIT_TEST:  " + str(SPLIT_TEST))
-
-assert SPLIT_TRAIN >= 0.0
-assert SPLIT_VAL >= 0.0
-assert SPLIT_TEST >= 0.0
-assert (SPLIT_TRAIN + SPLIT_VAL + SPLIT_TEST) == 1.0
-if SPLIT_TRAIN == 0.0 and SPLIT_VAL > 0.0:
-  raise AssertionError("SPLIT_VAL cannot be defined when SPLIT_TRAIN equals zero") 
-
-DATASET_NAME = splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0]
-DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
-
-if exists(DATASET_PATH):
-  shutil.rmtree(DATASET_PATH)
-makedirs(DATASET_PATH)
-
-print("Dataset information: ")
-print("DATASET_NAME: " + DATASET_NAME)
-print("DATASET_PATH: " + DATASET_PATH)
-
-print("Downloading...")
-filename = wget.download(DATASET_URL, DATASET_PATH)
-print("FILENAME: " + filename)
-print("OK")
-
-print("Extracting...")
-dataset_zip = zipfile.ZipFile(filename)
-dataset_zip.extractall(DATASET_PATH)
-dataset_zip.close()
-remove(filename)
-print("OK")
-
-#CLASSIFICATION DATASET 
-if DATASET_TYPE == 'CLASSIFICATION':  
-    k = 0
-    images_list = []
-    images_label = []
-    labels_name = []
-    for root in listdir(DATASET_PATH):
-        if (not root.startswith('.')):
-            labels_name.append(root)
-            label_dir = join(DATASET_PATH, root)
-            print(label_dir)
-            files = listdir(label_dir)
-            files[:] = [join(label_dir,file) for file in files]
-            files_size = len(files)
-            files_label = [k] * files_size
-            images_list = images_list + files
-            images_label = images_label + files_label
-            k = k + 1
-
-
-    print("Splitting the dataset into train and test")
-    images_train, images_test, labels_train, labels_test = train_test_split(images_list, images_label, test_size=SPLIT_TEST, random_state=1)
-
-    images_val = []
-    labels_val = []
-    if SPLIT_TRAIN != 0.0 and SPLIT_VAL != 0.0:
-        print("Splitting the train into train and val")
-        images_train, images_val, labels_train, labels_val = train_test_split(images_train, labels_train, test_size=SPLIT_VAL, random_state=1)
-
-    images_split = {SPLIT_SETS[0] : images_train, SPLIT_SETS[1] : images_val, SPLIT_SETS[2] : images_test}
-    labels_split = {SPLIT_SETS[0] : labels_train, SPLIT_SETS[1] : labels_val, SPLIT_SETS[2] : labels_test}
-
-    def move_images(_path, _images_list, _labels_list, _labels_name):
-        if exists(_path):
-            shutil.rmtree(_path)
-        makedirs(_path)
-        for _label_name in _labels_name:
-            makedirs(join(_path, _label_name))
-        for _image_path, _image_label in zip(_images_list, _labels_list):
-            _image_path_dest = join(_path, _labels_name[_image_label], basename(_image_path))
-            print("Moving " + _image_path + " to " + _image_path_dest)
-            shutil.move(_image_path, _image_path_dest)
-
-    DATASET_LABELS = json.dumps(labels_name)
-    print("DATASET_LABELS: " + DATASET_LABELS)
-
-
-    for SPLIT_NAME in SPLIT_SETS:
-        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
-        print("SPLIT_PATH: " + SPLIT_PATH)
-        move_images(SPLIT_PATH, images_split[SPLIT_NAME], labels_split[SPLIT_NAME], labels_name)
-
-    if 'variables' in locals():
-        variables.put("DATASET_NAME", DATASET_NAME)
-        variables.put("DATASET_PATH", DATASET_PATH)
-        variables.put("DATASET_LABELS", DATASET_LABELS)
-        variables.put("DATASET_TYPE", DATASET_TYPE)        
-    
-    print("END Import_Image_Dataset")
-    
-#DETECTION / SEGMENTATION DATASET    
-elif DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
-    print(DATASET_TYPE)
-    k = 0
-    images_list = []
-    images_list_gt = []
-    labels_name = []              
-    num_folder = len(next(os.walk(DATASET_PATH))[1])
-
-
-    if num_folder == 2:
-        for root in listdir(DATASET_PATH):
-            labels_name.append(root)
-            label_dir = join(DATASET_PATH, root)
-            print(label_dir)
-            files = listdir(label_dir)
-            files[:] = [join(label_dir,file) for file in files]
-            files_size = len(files)
-            if k == 0:
-                images_list = images_list + files
-            if k == 1:
-                images_list_gt = images_list_gt + files  
-            k = k + 1   
-
-    try:
-        new_list = [x for x in images_list if re.search('.DS_Store', x)]
-        images_list.remove(''.join(new_list))
-    except:
-        pass            
-
-    try:
-        new_list_gt = [x for x in images_list_gt if re.search('.DS_Store', x)]
-        images_list_gt.remove(''.join(new_list_gt))    
-    except:
-        pass    
-    
-    images_list = sorted(images_list)
-    images_list_gt = sorted(images_list_gt)
-
-    print("Splitting the dataset into train and test")
-    images_train, images_test, images_train_gt, images_test_gt = train_test_split(images_list, images_list_gt, test_size=SPLIT_TEST, random_state=1)
-    
-    images_val = []
-
-    if SPLIT_TRAIN != 0.0 and SPLIT_VAL != 0.0:
-        print("Splitting the train into train and val")
-        images_train, images_val, images_train_gt, images_val_gt = train_test_split(images_train, images_train_gt, test_size=SPLIT_VAL, random_state=1)
-
-        images_split = {SPLIT_SETS[0] : images_train, SPLIT_SETS[1] : images_val, SPLIT_SETS[2] : images_test}
-        images_split_gt = {SPLIT_SETS[0] : images_train_gt, SPLIT_SETS[1] : images_val_gt, SPLIT_SETS[2] : images_test_gt}
-
-    for SPLIT_NAME in SPLIT_SETS:
-        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
-        print("SPLIT_PATH: " + SPLIT_PATH)
-
-            
-    def move_seg_images(_path, _images_list, _labels_name):
-        if exists(_path):
-            shutil.rmtree(_path)
-        makedirs(_path)
-        for _image_path in _images_list:
-            _image_path_dest = join(_path, basename(_image_path))
-            print("Moving " + _image_path + " to " + _image_path_dest)
-            shutil.move(_image_path, _image_path_dest)
-
-    k = 0
-    for bx in labels_name:
-        for SPLIT_NAME in SPLIT_SETS:
-            SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
-            if k == 0:
-                print("SPLIT_PATH: " + SPLIT_PATH)
-                move_seg_images(SPLIT_PATH + '/' + labels_name[0], images_split[SPLIT_NAME], labels_name)           
-            if k == 1:
-                print("SPLIT_PATH: " + SPLIT_PATH)
-                move_seg_images(SPLIT_PATH + '/' + labels_name[1], images_split_gt[SPLIT_NAME], labels_name)
-        k = k + 1            
-        
-    
-    if 'variables' in locals():
-        variables.put("DATASET_NAME", DATASET_NAME)
-        variables.put("DATASET_PATH", DATASET_PATH)
-        variables.put("DATASET_TYPE", DATASET_TYPE) 
-        
-    print("END Import_Image_Dataset")
-
-    if num_folder != 2:    
-        print('Please, check your dataset!')
-        
-else: 
-    print('Please, check your dataset type variable!')
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Import_Image_Dataset/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
       <outputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferToGlobalSpace"/>
+        <files accessMode="transferToGlobalSpace" includes="$DATASET_PATH/**"/>
       </outputFiles>
       <metadata>
         <positionTop>
-            435.99609375
+            327.5
         </positionTop>
         <positionLeft>
-            1265.48828125
+            787
         </positionLeft>
       </metadata>
     </task>
-    <task name="Predict_Image_Segmentation_Model" >
+    <task name="Predict_Image_Segmentation_Model">
       <description>
-        <![CDATA[ Predict a model using a deep learning algorithm. ]]>
+        <![CDATA[ Predict a model using an image segmentation network. ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="BATCH_SIZE" value="1" inherited="true" />
-        <variable name="NUM_WORKERS" value="1" inherited="true" />
-        <variable name="SHUFFLE" value="True" inherited="true" />
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" name="BATCH_SIZE" value="1"/>
+        <variable inherited="false" name="NUM_WORKERS" value="1"/>
+        <variable inherited="false" name="SHUFFLE" value="True"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
         <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_predict_image_segmentation_model"/>
       </genericInformation>
       <depends>
-        <task ref="Import_Image_Dataset"/>
-        <task ref="SegNet"/>
         <task ref="Import_Model"/>
+        <task ref="SegNet"/>
+        <task ref="Import_Image_Dataset"/>
       </depends>
       <inputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
-        <files  includes="$MODEL_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$MODEL_FOLDER/**"/>
       </inputFiles>
       <selection>
         <script type="static">
@@ -1118,7 +329,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -1150,261 +361,120 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Predict_Image_Segmentation_Model")
-
-import os
-import cv2
-import uuid  
-import torch 
-import random 
-import pandas as pd
-
-from PIL import Image
-from os.path import join, exists
-from os import remove, listdir, makedirs
-from ast import literal_eval as make_tuple
-
-import torch
-import torch.nn as nn
-import torch.nn.init as init
-import torch.nn.functional as F
-from torch.utils.data import Dataset 
-
-from torch.utils import model_zoo
-from torchvision import models
-  
-from argparse import ArgumentParser
-from torch.optim import SGD, Adam
-from torch.autograd import Variable
-from torchvision.transforms import Compose
-from torch.utils.data import DataLoader
-from torchvision.transforms import ToTensor, ToPILImage, Normalize, Resize
-
-if 'variables' in locals():
-  NUM_CLASSES = int(str(variables.get("NUM_CLASSES")))
-  DATASET_PATH  = variables.get("DATASET_PATH")
-  MODEL_PATH     = variables.get("MODEL_PATH")
-  NET_MODEL     = variables.get("NET_MODEL")
-  NET_TRANSFORM = variables.get("NET_TRANSFORM")
-  NET_CRITERION = variables.get("NET_CRITERION") 
-  IMG_SIZE = variables.get("IMG_SIZE")
-  SHUFFLE = variables.get("SHUFFLE")
-  BATCH_SIZE = int(str(variables.get("BATCH_SIZE")))
-  NUM_WORKERS = int(str(variables.get("NUM_WORKERS")))
-    
-IMG_SIZE = tuple(IMG_SIZE)
-
-assert DATASET_PATH is not None
-assert MODEL_PATH is not None
-assert NET_MODEL is not None
-assert NET_TRANSFORM is not None
-
-print(MODEL_PATH)
-# Load NET model
-exec(NET_MODEL)
-model.eval()
-
-# Load trained model
-model=torch.load(MODEL_PATH,map_location={'cuda:0': 'cpu'})
-
-# http://pytorch.org/docs/master/cuda.html#torch.cuda.is_available
-# Returns a bool indicating if CUDA is currently available.
-use_gpu = torch.cuda.is_available()
-if use_gpu:
-  model = model.cuda()
-
-# Load CNN transform
-# data_transforms
-exec(NET_TRANSFORM)
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Create an empty dir
-OUTPUT_FOLDER = join('output', ID)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True) 
-print("OUTPUT_FOLDER: " + OUTPUT_FOLDER)
-
-# VOC12 DATASET
-EXTENSIONS = ['.jpg', '.png']
-
-def load_image(file):
-  return Image.open(file)
-
-def is_image(filename):
-  return any(filename.endswith(ext) for ext in EXTENSIONS)
-
-def image_path(root, basename, extension):
-  return os.path.join(root, f'{basename}{extension}')
-
-def image_basename(filename):
-  return os.path.basename(os.path.splitext(filename)[0])
-
-class VOC12(Dataset):
-
-  def __init__(self, root, input_transform=None, target_transform=None):
-    self.images_root = os.path.join(root, 'images')
-    self.labels_root = os.path.join(root, 'classes')
-
-    self.filenames = [image_basename(f)
-      for f in os.listdir(self.labels_root) if is_image(f)]
-    self.filenames.sort()
-
-    self.input_transform = input_transform
-    self.target_transform = target_transform
-
-  def __getitem__(self, index):
-    filename = self.filenames[index]
-
-    with open(image_path(self.images_root, filename, '.jpg'), 'rb') as f:
-      image = load_image(f).convert('RGB')
-      file_name_image = image_path(self.images_root, filename, '.jpg')
-    with open(image_path(self.labels_root, filename, '.png'), 'rb') as f:
-      label = load_image(f).convert('P')
-      image_size = image.size
-
-    if self.input_transform is not None:
-      image = self.input_transform(image)
-    if self.target_transform is not None:
-      label = self.target_transform(label)
-
-    return image, label, image_size, file_name_image
-
-  def __len__(self):
-    return len(self.filenames)
-
-# Load dataset
-DATASET_TEST_PATH = join(DATASET_PATH, 'test')
-loader = DataLoader(VOC12(DATASET_TEST_PATH, input_transform, target_transform), 
-                    num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
-
-# Begin of the functions to generate mask segmenattion
-
-def random_color():
-  levels = range(32,256,32)
-  return tuple(random.choice(levels) for _ in range(3))
-
-def genetate_color():
-  color_list = []
-  for color in range(NUM_CLASSES):
-    color_list.append(random_color())
-  return color_list
- 
-def label_images(get_color, root):
-     for color in range(NUM_CLASSES):
-        img =  cv2.imread(os.path.join(OUTPUT_FOLDER, os.path.basename(root)))
-        img [np.where((img ==[color,color,color]).all(axis=2))] = get_color[color]
-        cv2.imwrite(os.path.join(OUTPUT_FOLDER, os.path.basename(root)), img) 
-
-def label_binary_images(get_color, root):
-     for color in range(NUM_CLASSES):
-        img =  cv2.imread(os.path.join(OUTPUT_FOLDER, os.path.basename(root)))
-        img [np.where((img !=[[0,0,0]]).all(axis=2))] = [3,3,3]
-        img [np.where((img ==[0,0,0]).all(axis=2))] =   [248,248,255]
-        cv2.imwrite(os.path.join(OUTPUT_FOLDER, os.path.basename(root)), img) 
-
-        
-# End of the functions to generate mask segmenattion  
-
-def predict_model(_model, loader, _use_gpu):
-  image_name = []
-  label_name = []
-  get_color = genetate_color() 
-
-  for i, (images, labels, image_size, filename_test_img) in enumerate(loader):
-    if use_gpu:
-      images = images.cuda()
-    inputs = Variable(images)
-    width, height = image_size
-    width = width.numpy()
-    height = height.numpy()
-    file_names = ''.join((filename_test_img))
-    
-    if NUM_CLASSES == 1:  
-      #outputs = model(Variable(images).unsqueeze(0))
-      outputs = model(inputs)
-      preds = outputs
-    else:  
-      outputs = model(inputs)
-      _, preds = torch.max(outputs.data, 1)
-    
-    to_img = ToPILImage()
-                       
-    if NUM_CLASSES == 1:  
-        if use_gpu:
-            out = preds.cpu().detach().numpy().squeeze(axis=0).astype(np.uint8).transpose((1, 2, 0))
-        else:
-            out = preds.detach().numpy().squeeze(axis=0).astype(np.uint8).transpose((1, 2, 0))
-
-    if NUM_CLASSES != 1:  
-        if use_gpu:
-            out = preds.cpu().numpy().astype(np.uint8).transpose((1, 2, 0))
-        else:
-            out = preds.numpy().astype(np.uint8).transpose((1, 2, 0))
-    
-    im = to_img(out)
-    imres = im.resize((int(width), int(height)))
-    imres.save(os.path.join(OUTPUT_FOLDER, os.path.basename(file_names)))
-
-    if NUM_CLASSES == 1:  
-      label_binary_images(get_color, file_names)  
-    else:
-      label_images(get_color, file_names)
-        
-    print('Segmenting: ', file_names)
-    
-    image_name.append(filename_test_img)
-    image_adress = os.path.join(OUTPUT_FOLDER, os.path.basename(file_names))
-    label_name.append(image_adress)
-  return image_name, label_name
-
-image_name, label_name = predict_model(model, loader, use_gpu)
-
-df_name = pd.DataFrame(image_name)
-df_image_name = pd.DataFrame(image_name)
-df_label_name = pd.DataFrame(label_name)
-df_name.columns = ['Image Paths']
-df_image_name.columns = ['Images']
-df_label_name.columns = ['Outputs']
-
-df = pd.concat([df_name, df_image_name, df_label_name], axis=1)
-
-if 'variables' in locals():
-  variables.put("PREDICT_DATA_JSON", df.to_json(orient='split'))
-  variables.put("BATCH_SIZE", BATCH_SIZE)
-  variables.put("NUM_WORKERS", NUM_WORKERS)
-  variables.put("SHUFFLE", True)
-  variables.put("OUTPUT_FOLDER", OUTPUT_FOLDER)
-  variables.put("NUM_CLASSES", NUM_CLASSES)
-
-print("END Predict_Image_Segmentation_Model")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Predict_Image_Segmentation_Model/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
+      <controlFlow block="none"/>
       <outputFiles>
-        <files  includes="$OUTPUT_FOLDER/**" accessMode="transferToGlobalSpace"/>
+        <files accessMode="transferToGlobalSpace" includes="$OUTPUT_FOLDER/**"/>
       </outputFiles>
       <metadata>
         <positionTop>
-            563.984375
+            455.5
         </positionTop>
         <positionLeft>
-            1109.4921875
+            631
         </positionLeft>
       </metadata>
     </task>
-    <task name="Preview_Results" >
+    <task name="Export_Images">
       <description>
-        <![CDATA[ Preview the predicted results ]]>
+        <![CDATA[ Download a zip file of your results. ]]>
       </description>
       <variables>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="OUTPUT_FILE" value="HTML" inherited="true" />
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_images"/>
+      </genericInformation>
+      <depends>
+        <task ref="Predict_Image_Segmentation_Model"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$OUTPUT_FOLDER/**"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Export_Images/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            583.5
+        </positionTop>
+        <positionLeft>
+            562
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Preview_Results">
+      <description>
+        <![CDATA[ Preview the predicted results. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" name="OUTPUT_FILE" value="HTML"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png"/>
@@ -1414,8 +484,8 @@ print("END Predict_Image_Segmentation_Model")
         <task ref="Predict_Image_Segmentation_Model"/>
       </depends>
       <inputFiles>
-        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
-        <files  includes="$OUTPUT_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$OUTPUT_FOLDER/**"/>
       </inputFiles>
       <selection>
         <script type="static">
@@ -1443,7 +513,7 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           </code>
         </script>
       </selection>
-      <forkEnvironment javaHome="/usr" >
+      <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
@@ -1475,174 +545,64 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Preview_Results")
-
-import base64
-import pandas as pd
-from PIL import Image
-from io import BytesIO
-
-if 'variables' in locals():
-  PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
-  OUTPUT_FILE = variables.get("OUTPUT_FILE")
-
-assert PREDICT_DATA is not None
-df = pd.read_json(PREDICT_DATA, orient='split')  
-
-# check the predictions
-if {'Predictions','Targets'}.issubset(df.columns):
-	pred_result =[]
-	for indice in range(len(df)):
-		if df['Predictions'][indice] == df['Targets'][indice]:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/tick_green.png?raw=true'
-			pred_result.append(result)
-		else:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/close_red.png?raw=true'
-			pred_result.append(result)
-	df_pred_image_url = pd.DataFrame(pred_result)
-	df['Results'] = df_pred_image_url
- 
-def get_thumbnail(path):
-  i = Image.open(path)
-  extension = i.format
-  i.thumbnail((200, 200), Image.LANCZOS)
-  return i, extension
-
-def image_base64(im):
-  if isinstance(im, str):
-    im, extension = get_thumbnail(im)
-  with BytesIO() as buffer:
-    im.save(buffer, extension)
-    return base64.b64encode(buffer.getvalue()).decode()
-
-def image_formatter(im):
-  extension = im.format
-  return f'<img src="data:image/extension;base64,{image_base64(im)}" height="200" width="200">'
-
-def image_formatter_url(im_url):
-  return """<img src="{0}" height="50" width="50"/>""".format(im_url)
-  
-
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-  result = df.to_html(escape=False, formatters=dict(Images=image_formatter, Outputs=image_formatter, Results=image_formatter_url))
-
-css_style="""
-table {
-  border: 1px solid #999999;
-  text-align: center;
-  border-collapse: collapse;
-  width: 100%; 
-}
-td {
-  border: 1px solid #999999;         
-  padding: 3px 2px;
-  font-size: 13px;
-  border-bottom: 1px solid #999999;
-  #border-bottom: 1px solid #FF8C00;  
-  border-bottom: 1px solid #0B6FA4;   
-}
-th {
-  font-size: 17px;
-  font-weight: bold;
-  color: #FFFFFF;
-  text-align: center;
-  background: #0B6FA4;
-  #background: #E7702A;       
-  #border-left: 2px solid #999999
-  border-bottom: 1px solid #FF8C00;            
-}
-"""
-result = """
-     
-            
-            
-            
-            
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <style>{0}</style>
-                </head>
-                <body>{1}</body></html>
-""".format(css_style, result)
-
-if OUTPUT_FILE == 'HTML':  
-    result = result.encode('utf-8')
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "result.html")
-    resultMetadata.put("content.type", "text/html")
-else:
-  print('It is not possible to preview the HTML format!')
-
-print("END Preview_Results")
-]]>
-              </code>
-            </script>
-          </scriptExecutable>
-          <controlFlow block="none"></controlFlow>
-          <metadata>
-            <positionTop>
-            691.9921875
-        </positionTop>
-            <positionLeft>
-            1184.4921875
-        </positionLeft>
-          </metadata>
-        </task>
-      </taskFlow>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Preview_Results/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
       <metadata>
-        <visualization>
-          <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        <positionTop>
+            583.5
+        </positionTop>
+        <positionLeft>
+            705.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:3573px;
-            height:4323px;
+            width:2864px;
+            height:3436px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-430.99609375px;left:-966.484375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_62" style="top: 692px; left: 1040.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png" width="20px">&nbsp;<span class="name">Export_Images</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_65" style="top: 436px; left: 971.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png" width="20px">&nbsp;<span class="name">Import_Model</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_68" style="top: 436px; left: 1109.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_segmentation.png" width="20px">&nbsp;<span class="name">SegNet</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_71" style="top: 436px; left: 1265.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_image.png" width="20px">&nbsp;<span class="name">Import_Image_Dataset</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_74" style="top: 564px; left: 1109.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Image_Segmentation_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_77" style="top: 692px; left: 1184.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><svg style="position:absolute;left:1081px;top:603.5px" width="139.5" height="90" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 89 C -10 39 128.5 50 118.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M13.698308625000001,62.27287425 L34.61330729138716,58.872457983566825 L25.998885089316154,55.58738110098612 L27.92781414237328,46.571881519250674 L13.698308625000001,62.27287425" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M13.698308625000001,62.27287425 L34.61330729138716,58.872457983566825 L25.998885089316154,55.58738110098612 L27.92781414237328,46.571881519250674 L13.698308625000001,62.27287425" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:1199.5px;top:475.5px" width="144" height="89" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 133 50 123 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M15.008256,60.999424000000005 L36.00595923570816,58.15399629486832 L27.481541057673454,54.64197483622212 L29.648510071930275,45.68071123719487 L15.008256,60.999424000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M15.008256,60.999424000000005 L36.00595923570816,58.15399629486832 L27.481541057673454,54.64197483622212 L29.648510071930275,45.68071123719487 L15.008256,60.999424000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:1149.5px;top:475.5px" width="71" height="89" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 50 88 C 60 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M47.68,64.44800000000001 L41.41237124575627,44.206536866150785 L39.35349791023281,53.193251537724066 L30.157622783480328,52.533038955917974 L47.68,64.44800000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M47.68,64.44800000000001 L41.41237124575627,44.206536866150785 L39.35349791023281,53.193251537724066 L30.157622783480328,52.533038955917974 L47.68,64.44800000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:1010.5px;top:475.5px" width="210" height="89" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 189 88 C 199 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M161.19121725,59.788559500000005 L144.31822748126,46.97051689342412 L147.87138359589835,55.47787145433246 L140.00753943559243,60.29035054752576 L161.19121725,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M161.19121725,59.788559500000005 L144.31822748126,46.97051689342412 L147.87138359589835,55.47787145433246 L140.00753943559243,60.29035054752576 L161.19121725,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:1199.5px;top:603.5px" width="51" height="90" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 30 89 C 40 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M30.149295000000002,66.74071675 L28.686015331493586,45.60168146899118 L24.622916904853763,53.877624386595016 L15.822922968088593,51.12805956413742 L30.149295000000002,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M30.149295000000002,66.74071675 L28.686015331493586,45.60168146899118 L24.622916904853763,53.877624386595016 L15.822922968088593,51.12805956413742 L30.149295000000002,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1081.5px; top: 723px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1081.5px; top: 683px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1011px; top: 466px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1150px; top: 466px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1323px; top: 466px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1200px; top: 594px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1200px; top: 554px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1230px; top: 723px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1230px; top: 683px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-322.5px;left:-488px"><div class="task ui-draggable" id="jsPlumb_1_889" style="top: 327.5px; left: 493px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png" width="20px">&nbsp;<span class="name">Import_Model</span></a></div><div class="task ui-draggable" id="jsPlumb_1_892" style="top: 327.5px; left: 631px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_segmentation.png" width="20px">&nbsp;<span class="name">SegNet</span></a></div><div class="task ui-draggable active-task" id="jsPlumb_1_898" style="top: 327.5px; left: 787px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_image.png" width="20px">&nbsp;<span class="name">Import_Image_Dataset</span></a></div><div class="task ui-draggable" id="jsPlumb_1_901" style="top: 455.5px; left: 631px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Image_Segmentation_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_904" style="top: 583.5px; left: 562px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_images.png" width="20px">&nbsp;<span class="name">Export_Images</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_907" style="top: 583.5px; left: 705.5px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 533px; top: 358px; visibility: visible;" dragid="jsPlumb_1_911" elid="jsPlumb_1_889"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 671px; top: 358px; visibility: visible;" dragid="jsPlumb_1_925" elid="jsPlumb_1_892"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 845.5px; top: 358px; visibility: visible;" dragid="jsPlumb_1_937" elid="jsPlumb_1_898"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 720.5px; top: 486px; visibility: visible;" dragid="jsPlumb_1_963" elid="jsPlumb_1_901"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 603px; top: 614px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 750.5px; top: 614px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:532.5px;top:367.5px" width="208.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 187.5 88 C 197.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M159.934085625,59.788559500000005 L143.09037171683312,46.93207079663212 L146.6241172793056,55.44750632863551 L138.74931854546864,60.24203914232649 L159.934085625,59.788559500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 720.5px; top: 446px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:670.5px;top:367.5px" width="70.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 49.5 88 C 59.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M47.232000000000006,64.44800000000001 L41.055671160390844,44.17849181492033 L38.95631207744238,53.1558350433394 L29.763506203730234,52.45417973747795 L47.232000000000006,64.44800000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:720px;top:367.5px" width="146" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 135 50 125 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M15.298559999999998,60.999424000000005 L36.31367419856907,58.28557521624271 L27.81142145833212,54.72022834095366 L30.03447853952272,45.77271375791059 L15.298559999999998,60.999424000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:602.5px;top:495.5px" width="138.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 127.5 50 117.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M13.558589374999999,61.4125935 L34.48334291075885,58.07272981000494 L25.87846542932731,54.7627322979889 L27.83348170874775,45.75285375567763 L13.558589374999999,61.4125935" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 603px; top: 574px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:720px;top:495.5px" width="51" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 30 88 C 40 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M30.149295000000002,65.8307285 L28.583909256055367,44.69900903676998 L24.560839508460937,52.99448429777766 L15.747665053833021,50.287464528309044 L30.149295000000002,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 750.5px; top: 574px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
-        </visualization>
-      </metadata>
-    </job>
+    </visualization>
+  </metadata>
+</job>
