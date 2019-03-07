@@ -8,12 +8,17 @@ print("BEGIN " + __file__)
 
 import json
 
+input_variables = variables.get("INPUT_VARIABLES")
+scoring = variables.get("SCORING")
+
 algorithm = {
   'name': 'LinearRegression',
-  'is_supervised': True,
   'type': 'regression',
-  'n_jobs': int(variables.get("N_JOBS"))
+  'is_supervised': True,
+  'input_variables': input_variables,
+  'scoring': scoring
 }
+print("algorithm: ", algorithm)
 
 algorithm_json = json.dumps(algorithm)
 resultMetadata.put("task.algorithm_json", algorithm_json)

@@ -9,6 +9,8 @@ print("BEGIN " + __file__)
 import sys, bz2, uuid, json
 import random, pickle
 import pandas as pd
+import numpy as np
+from sklearn.model_selection import cross_val_score
 
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
@@ -20,6 +22,7 @@ input_variables = {
   'task.dataframe_id_train': None,
   'task.algorithm_json': None
 }
+
 for key in input_variables.keys():
   for res in results:
     value = res.getMetadata().get(key)
@@ -53,63 +56,63 @@ class obj(object):
         setattr(self, a, obj(b) if isinstance(b, dict) else b)
 #-------------------------------------------------------------
 alg = obj(algorithm)
+loss = 0
+try:
+    vars = json.loads(alg.input_variables)
+except:
+    vars = None
+try:
+    automl = alg.automl
+except:
+    automl = True
 try:
     if alg.sampling:
         print(alg.sampling + "exists")
 except:
     alg.sampling=False
 model = None
+print("alg.is_supervised",alg.is_supervised)
+print("alg.name",alg.name)
+print("alg.type",alg.type)
 if alg.is_supervised:
   #-------------------------------------------------------------
   # Classification algorithms
   #
   if alg.name == 'TPOT_Classifier':
     from tpot import TPOTClassifier
-    model = TPOTClassifier(
+    model = TPOTClassifier(        
         generations=alg.generations,
         cv=alg.cv,
         scoring=alg.scoring,
-        verbosity=alg.verbosity
-    )
-  if alg.name == 'AutoSklearn_Classifier':
+        verbosity=alg.verbosity)
+  elif alg.name == 'AutoSklearn_Classifier':
     from autosklearn import classification
     if alg.sampling.lower()=='true':
-    	model = classification.AutoSklearnClassifier(
-        	time_left_for_this_task=alg.task_time,
-        	per_run_time_limit=alg.run_time,
-        	resampling_strategy= "".join(alg.sampling_strategy),
-        	resampling_strategy_arguments={'folds':int(alg.folds)}
-        	#feat_type = {Numerical,Numerical,Numerical,Numerical,Categorical}
-    	)
+      model = classification.AutoSklearnClassifier(
+          time_left_for_this_task=alg.task_time,
+          per_run_time_limit=alg.run_time,
+          resampling_strategy= "".join(alg.sampling_strategy),
+          resampling_strategy_arguments={'folds':int(alg.folds)}
+          #feat_type = {Numerical,Numerical,Numerical,Numerical,Categorical}
+      )
     else:
         model = classification.AutoSklearnClassifier(
-        	time_left_for_this_task=alg.task_time,
-        	per_run_time_limit=alg.run_time
-    	)
-  if alg.name == 'SupportVectorMachines':
+          time_left_for_this_task=alg.task_time,
+          per_run_time_limit=alg.run_time
+      )
+  elif alg.name == 'SupportVectorMachines':
     from sklearn.svm import SVC
-    model = SVC(
-      C=alg.C, 
-      kernel=alg.kernel
-    )
-   
-  if alg.name == 'GaussianNaiveBayes':
+    model = SVC(**vars)   
+  elif alg.name == 'GaussianNaiveBayes':
     from sklearn.naive_bayes import GaussianNB
-    model = GaussianNB()
-  
-  if alg.name == 'LogisticRegression':
+    model = GaussianNB(**vars)  
+  elif alg.name == 'LogisticRegression':
     from sklearn.linear_model import LogisticRegression
-    model = LogisticRegression(
-      penalty=alg.penalty, 
-      solver=alg.solver, 
-      max_iter=alg.max_iter, 
-      n_jobs=alg.n_jobs
-    )
+    model = LogisticRegression(**vars)
 
   #-------------------------------------------------------------
-  # Regression algorithms
-    
-  if alg.name == 'TPOT_Regressor':
+  # Regression algorithms   
+  elif alg.name == 'TPOT_Regressor':
     from tpot import TPOTRegressor
     model = TPOTRegressor(
         generations=alg.generations,
@@ -117,79 +120,48 @@ if alg.is_supervised:
         scoring=alg.scoring,
         verbosity=alg.verbosity
     )
-  if alg.name == 'AutoSklearn_Regressor':
+  elif alg.name == 'AutoSklearn_Regressor':
     from autosklearn import regression
     print("alg.sampling",alg.sampling_strategy)
     if alg.sampling.lower()=='true':
-    	model = regression.AutoSklearnRegressor(
-        	time_left_for_this_task=alg.task_time,
-        	per_run_time_limit=alg.run_time,
-        	resampling_strategy= "".join(alg.sampling_strategy),
-        	resampling_strategy_arguments={'folds':int(alg.folds)}
-        	#feat_type = {Numerical,Numerical,Numerical,Numerical,Categorical}
-    	)
+      model = regression.AutoSklearnRegressor(
+          time_left_for_this_task=alg.task_time,
+          per_run_time_limit=alg.run_time,
+          resampling_strategy= "".join(alg.sampling_strategy),
+          resampling_strategy_arguments={'folds':int(alg.folds)}
+          #feat_type = {Numerical,Numerical,Numerical,Numerical,Categorical}
+      )
     else:
         model = regression.AutoSklearnRegressor(
-        	time_left_for_this_task=alg.task_time,
-        	per_run_time_limit=alg.run_time
-    	)
-  if alg.name == 'LinearRegression':
+          time_left_for_this_task=alg.task_time,
+          per_run_time_limit=alg.run_time
+      )
+  elif alg.name == 'LinearRegression':
     from sklearn.linear_model import LinearRegression
-    model = LinearRegression(
-      n_jobs=alg.n_jobs
-    )
-
-  if alg.name == 'SupportVectorRegression':
+    model = LinearRegression(**vars)
+  elif alg.name == 'SupportVectorRegression':
     from sklearn.svm import SVR
-    model = SVR(
-      C=alg.C, 
-      kernel=alg.kernel, 
-      epsilon=alg.epsilon
-    )
-  
-  if alg.name == 'BayesianRidgeRegression':
+    model = SVR(**vars)
+  elif alg.name == 'BayesianRidgeRegression':
     from sklearn.linear_model import BayesianRidge
-    model = BayesianRidge(
-      alpha_1=alg.alpha_1, 
-      alpha_2=alg.alpha_2, 
-      lambda_1=alg.lambda_1, 
-      lambda_2=alg.lambda_2, 
-      n_iter=alg.n_iter
-    )
+    model = BayesianRidge(**vars)
 else:
   #-------------------------------------------------------------
   # Anomaly detection algorithms
   if alg.name == 'OneClassSVM':
     from sklearn import svm
-    model = svm.OneClassSVM(
-      nu=alg.nu, 
-      kernel=alg.kernel, 
-      gamma=alg.gamma
-    ) 
-  
-  if alg.name == 'IsolationForest':
+    model = svm.OneClassSVM(**vars) 
+  elif alg.name == 'IsolationForest':
     from sklearn.ensemble import IsolationForest
-    model = IsolationForest(
-      n_estimators=alg.n_estimators, 
-      n_jobs=alg.n_jobs
-    )
-  
+    model = IsolationForest(**vars)
   #-------------------------------------------------------------
   # Clustering algorithms
-  if alg.name == 'MeanShift':
+  elif alg.name == 'MeanShift':
     from sklearn.cluster import MeanShift
-    model = MeanShift(
-      cluster_all=alg.cluster_all, 
-      n_jobs=alg.n_jobs
-    ) 
-    
-  if alg.name == 'KMeans':
+    model = MeanShift(**vars)  
+  elif alg.name == 'KMeans':
     from sklearn.cluster import KMeans
-    model = KMeans(
-      n_clusters=alg.n_clusters, 
-      max_iter=alg.max_iterations, 
-      n_jobs=alg.n_jobs
-    )
+    model = KMeans(**vars)
 
 #-------------------------------------------------------------
 if model is not None:
@@ -199,13 +171,24 @@ if model is not None:
     dataframe_label = dataframe.filter(columns, axis=1)
   else:
     dataframe_train = dataframe
-
+    
   if alg.is_supervised:
+    print(dataframe_train.head())
+    print(dataframe_label.head())
     model.fit(dataframe_train.values, dataframe_label.values.ravel())
+    if alg.type == 'classification' or alg.type == 'anomaly' and automl:
+      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+      loss = 1 - np.mean(scores)
+    elif alg.type == 'regression' and automl:
+      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+      loss = 1 - np.mean(scores)
     if alg.sampling:
-        model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
+      model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
   else:
     model.fit(dataframe_train.values)
+    if is_labeled_data:
+        scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+        loss = 1 - np.mean(scores)
   if alg.name == 'TPOT_Regressor' or alg.name =='TPOT_Classifier':
     model = model.fitted_pipeline_
   model_bin = pickle.dumps(model)
@@ -236,38 +219,18 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 
-LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
-LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
-if LIMIT_OUTPUT_VIEW > 0:
-  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
-  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+token = variables.get("TOKEN")
+# Convert from JSON to dict
+token = json.loads(token)
 
-#============================== Preview results ===============================
-#***************# HTML PREVIEW STYLING #***************#
-styles = [
-    dict(selector="th", props=[("font-weight", "bold"),
-                               ("text-align", "center"),
-                               ("font-size", "15px"),
-                               ("background", "#0B6FA4"),
-                               ("color", "#FFFFFF")]),
-                               ("padding", "3px 7px"),
-    dict(selector="td", props=[("text-align", "right"),
-                               ("padding", "3px 3px"),
-                               ("border", "1px solid #999999"),
-                               ("font-size", "13px"),
-                               ("border-bottom", "1px solid #0B6FA4")]),
-    dict(selector="table", props=[("border", "1px solid #999999"),
-                               ("text-align", "center"),
-                               ("width", "100%"),
-                               ("border-collapse", "collapse")])
-]
-#******************************************************#
+# return the loss value
+result_map = {
+    'token': token,
+    'loss': loss
+}
 
-with pd.option_context('display.max_colwidth', -1):
-  result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
-  resultMetadata.put("file.extension", ".html")
-  resultMetadata.put("file.name", "output.html")
-  resultMetadata.put("content.type", "text/html")
-#==============================================================================
+result_map = json.dumps(result_map)
+resultMap.put("RESULT_JSON", result_map)
+print('result_map: ', result_map)
 
 print("END " + __file__)

@@ -11,6 +11,7 @@ import json
 algorithm = {
   'name': 'TPOT_Classifier',
   'is_supervised': True,
+  'automl': False,
   'type': 'classification',
   'generations': int(variables.get("GENERATIONS")),
   'cv': int(variables.get("CV")),
