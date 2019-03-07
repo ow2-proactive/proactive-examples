@@ -8,16 +8,17 @@ print("BEGIN " + __file__)
 
 import json
 
+input_variables = variables.get("INPUT_VARIABLES")
+scoring = variables.get("SCORING")
+
 algorithm = {
   'name': 'BayesianRidgeRegression',
-  'is_supervised': True,
   'type': 'regression',
-  'alpha_1': float(variables.get("ALPHA_1")),
-  'alpha_2': float(variables.get("ALPHA_2")),
-  'lambda_1': float(variables.get("LAMBDA_1")),
-  'lambda_2': float(variables.get("LAMBDA_2")),
-  'n_iter': int(variables.get("N_ITERATIONS"))
+  'is_supervised': True,
+  'input_variables': input_variables,
+  'scoring': scoring
 }
+print("algorithm: ", algorithm)
 
 algorithm_json = json.dumps(algorithm)
 resultMetadata.put("task.algorithm_json", algorithm_json)

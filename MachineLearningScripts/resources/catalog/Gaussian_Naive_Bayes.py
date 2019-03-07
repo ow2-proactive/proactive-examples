@@ -8,10 +8,15 @@ print("BEGIN " + __file__)
 
 import json
 
+input_variables = variables.get("INPUT_VARIABLES")
+scoring = variables.get("SCORING")
+
 algorithm = {
   'name': 'GaussianNaiveBayes',
   'is_supervised': True,
   'type': 'classification',
+  'input_variables': input_variables,
+  'scoring': scoring
 }
 
 algorithm_json = json.dumps(algorithm)

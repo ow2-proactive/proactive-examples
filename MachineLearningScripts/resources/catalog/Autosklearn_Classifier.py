@@ -11,6 +11,7 @@ import json
 algorithm = {
   'name': 'AutoSklearn_Classifier',
   'is_supervised': True,
+  'automl': False,
   'type': 'classification',
   'task_time': int(variables.get("TASK_TIME")),
   'run_time': int(variables.get("RUN_TIME")),
