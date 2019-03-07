@@ -74,6 +74,7 @@ model = None
 print("alg.is_supervised",alg.is_supervised)
 print("alg.name",alg.name)
 print("alg.type",alg.type)
+
 if alg.is_supervised:
   #-------------------------------------------------------------
   # Classification algorithms
@@ -176,17 +177,17 @@ if model is not None:
     print(dataframe_train.head())
     print(dataframe_label.head())
     model.fit(dataframe_train.values, dataframe_label.values.ravel())
-    if alg.type == 'classification' or alg.type == 'anomaly' and automl:
+    if (alg.type == 'classification' or alg.type == 'anomaly') and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
-    elif alg.type == 'regression' and automl:
+    if alg.type == 'regression' and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
     if alg.sampling:
       model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
   else:
     model.fit(dataframe_train.values)
-    if is_labeled_data:
+    if is_labeled_data and automl:
         scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
         loss = 1 - np.mean(scores)
   if alg.name == 'TPOT_Regressor' or alg.name =='TPOT_Classifier':
