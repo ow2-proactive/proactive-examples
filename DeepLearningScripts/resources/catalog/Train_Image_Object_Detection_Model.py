@@ -448,7 +448,7 @@ if (NET_NAME == 'SSD'):
                                   pin_memory=True)
            
 
-###############################IF VISDOM IS ENABLED###############################
+	###############################IF VISDOM IS ENABLED###############################
     if VISDOM_ENABLED is not None:
         visdom_endpoint = VISDOM_ENABLED.replace("http://", "")
 
@@ -469,7 +469,7 @@ if (NET_NAME == 'SSD'):
 
         win_train = viz.text("Training:\n")  
       
-##################################################################################  
+        ##################################################################################  
 
     def train_model(model, optimizer, criterion, start_iter, max_iter, data_loader, use_gpu):
         # loss counters
@@ -480,6 +480,9 @@ if (NET_NAME == 'SSD'):
     
         since = time.time() 
         batch_iterator = None
+        best_model = model
+        best_loss = None
+        
     
         for iteration in range(START_ITERATION, MAX_ITERATION):
             if (not batch_iterator) or (iteration % epoch_size == 0):
@@ -522,7 +525,7 @@ if (NET_NAME == 'SSD'):
             conf_loss += loss_c.item()
             
             
-	  ##################################################IF VISDOM IS ENABLED###########################################
+            ###############################IF VISDOM IS ENABLED###############################
             if VISDOM_ENABLED is not None:
                 viz.text('-' * 10, win=win_train, append=True) 
                 viz.text('Epoch {}/{}'.format(epoch, epoch), win=win_train, append=True)     
@@ -534,13 +537,19 @@ if (NET_NAME == 'SSD'):
                 elif epoch != 1:
                 	viz.line(Y = np.array([loss.item()]), X = np.array([epoch]), win = win_global_loss_train, update='append')
                
-	  ####################################################################################################################    
+            ####################################################################################
+            
         
             print('iter ' + repr(iteration) + ' || Loss: %.4f ||' % (loss.item()), end=' ')
             time_elapsed = time.time() - since
        
+            if best_loss is None or loss.item() < best_loss:
+                best_loss = loss.item()
+                best_model = model
+        
+
         print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
-        return model
+        return best_model
     
     # Return the model 
     model = train_model(model, optimizer_ft, criterion_ft, START_ITERATION, MAX_ITERATION, data_loader, use_gpu)
@@ -775,7 +784,7 @@ if (NET_NAME == 'YOLO'):
 
     optimizer_ft = SGD(model.parameters(), lr=LEARNING_RATE/BATCH_SIZE, momentum=MOMENTUM, dampening=0, weight_decay=WEIGHT_DECAY*BATCH_SIZE)   
     
-###############################IF VISDOM IS ENABLED###############################
+    ###############################IF VISDOM IS ENABLED###############################
     if VISDOM_ENABLED is not None:
         visdom_endpoint = VISDOM_ENABLED.replace("http://", "")
 
@@ -806,11 +815,13 @@ if (NET_NAME == 'YOLO'):
 
         win_train = viz.text("Training:\n")  
       
-##################################################################################      
+    ##################################################################################      
     
 
     def train_model(model, optimizer, num_epochs):
       since = time.time() 
+      best_model = model
+      best_loss = None
 
       for epoch in range(1, NUM_EPOCHS+1):     
             
@@ -827,11 +838,20 @@ if (NET_NAME == 'YOLO'):
               loss.backward()
               optimizer.step()
             
-	  ##################################################IF VISDOM IS ENABLED###########################################
+            
+              print('[Epoch %d/%d, Batch %d/%d] [Losses -  x: %f, y: %f, w: %f, h: %f, conf: %f, cls: %f, total: %f, recall: %.5f]' %
+                                    (epoch, epoch, batch_i, len(loader),
+                                    model.losses['x'], model.losses['y'], model.losses['w'],
+                                    model.losses['h'], model.losses['conf'], model.losses['cls'],
+                                    loss.item(), model.losses['recall']))
+                
+                
+          ###############################IF VISDOM IS ENABLED###############################
           if VISDOM_ENABLED is not None:
               viz.text('-' * 10, win=win_train, append=True) 
               viz.text('Epoch {}/{}'.format(epoch, epoch), win=win_train, append=True)     
-              viz.text('Losses - x: {:.4f} y: {:.4f} w: {:.4f} h: {:.4f} conf: {:.4f} cls: {:.4f} total: {:.4f} recall:                      	                         	{:.4f}'.format(model.losses['x'], model.losses['y'], model.losses['w'], model.losses['h'], model.losses['conf'],                               			model.losses['cls'], loss.item(), model.losses['recall']), win=win_train, append=True)         
+              viz.text('Losses - x: {:.4f} y: {:.4f} w: {:.4f} h: {:.4f} conf: {:.4f} cls: {:.4f} total: {:.4f} recall:                                                                      					    {:.4f}'.format(model.losses['x'], model.losses['y'], model.losses['w'], model.losses['h'], model.losses['conf'], model.losses['cls'], loss.item(),
+                model.losses['recall']), win=win_train, append=True)         
           
               # plot loss and accuracy per epoch
               if epoch == 1:
@@ -841,20 +861,21 @@ if (NET_NAME == 'YOLO'):
                   viz.line(Y = np.array([loss.item()]), X = np.array([epoch]), win = win_global_loss_train, update='append')
                   viz.line(Y = np.array([model.losses['recall']]), X = np.array([epoch]), win = win_global_recall_train, update='append')      
                
-	  ####################################################################################################################    
+          ####################################################################################             
 
-              print('[Epoch %d/%d, Batch %d/%d] [Losses -  x: %f, y: %f, w: %f, h: %f, conf: %f, cls: %f, total: %f, recall: %.5f]' %
-                                    (epoch, epoch, batch_i, len(loader),
-                                    model.losses['x'], model.losses['y'], model.losses['w'],
-                                    model.losses['h'], model.losses['conf'], model.losses['cls'],
-                                    loss.item(), model.losses['recall']))
-              model.seen += images.size(0)
+          if best_loss is None or loss.item() < best_loss:
+              best_loss = loss.item()
+              best_model = model  
             
+          model.seen += images.size(0)
+        
       time_elapsed = time.time() - since
+    
       print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
      
-      return model
+      return best_model
   
+
     # Return the best model              
     model = train_model(model, optimizer_ft, num_epochs=NUM_EPOCHS)
 
