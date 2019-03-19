@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Himmelblau_Function" onTaskError="continueJobExecution" priority="normal" projectName="3. Objective Function Examples" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+  <variables>
+    <variable name="INPUT_VARIABLES" value="{&quot;x&quot;: 3.5976705887960527, &quot;y&quot;: -1.8471754188451843}"/>
+  </variables>
+  <description>
+    <![CDATA[ Python script used as objective function for hyperparameter optmization algorithms. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="auto-ml-optimization"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/himmelblau_function.png"/>
+<info name="Documentation" value="https://en.wikipedia.org/wiki/Himmelblau%27s_function"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task name="Himmelblau_Function">
+      <description>
+        <![CDATA[ The simplest task, ran by a Python engine. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" name="INPUT_VARIABLES" value="{&quot;x&quot;: 3.5976705887960527, &quot;y&quot;: -1.8471754188451843}"/>
+        <variable inherited="true" name="TOKEN" value="{&quot;_token_id&quot;: 0}"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+      </variables>
+      <genericInformation>
+        <info name="PYTHON_COMMAND" value="/usr/local/bin/python3"/>
+        <info name="task.documentation" value="https://en.wikipedia.org/wiki/Himmelblau%27s_function"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/himmelblau_function.png"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+params_encoded = variables.get('params_encoded')
+token_encoded = variables.get('token_encoded')
+
+// If encoded variables are found
+if ((params_encoded != null && params_encoded.length() > 0) &&
+    (token_encoded != null && token_encoded.length() > 0))
+{
+    println "Found encoded variables:"
+    println "params_encoded: " + params_encoded
+    println "token_encoded: " + token_encoded
+    
+    byte[] params_decoded = params_encoded.decodeBase64()
+    byte[] token_decoded = token_encoded.decodeBase64()
+    
+    input_variables = new String(params_decoded)
+    token = new String(token_decoded)
+    
+    variables.put('INPUT_VARIABLES', input_variables)
+    variables.put('TOKEN', token)
+}
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+# 
+# Himmelblau's function is multimodal with 4 defined minimums in [-6, 6]^2, used to test the performance of optimization algorithms.
+# https://en.wikipedia.org/wiki/Himmelblau%27s_function
+#
+import json
+import numpy as np
+
+# Get token and input variables
+token = variables.get('TOKEN')
+input_variables = variables.get('INPUT_VARIABLES')
+
+# Get current job ID
+PA_JOB_ID = variables.get("PA_JOB_ID")
+
+# Check parent job ID
+PARENT_JOB_ID = genericInformation.get('PARENT_JOB_ID')
+
+# Convert from JSON to dict
+token = json.loads(token)
+input_variables = json.loads(input_variables)
+print("token: ", token, ", input_variables: ", input_variables)
+
+# Himmelblau's function
+def objective_function(x, y):
+    return (x**2 + y - 11)**2 + (x + y**2 - 7)**2
+
+# Calculate the loss for the sampled point (minimized)
+loss = objective_function(**input_variables)
+print('loss: ', loss)
+
+# Check Visdom support
+VISDOM_ENDPOINT = variables.get("VISDOM_ENDPOINT") if variables.get("VISDOM_ENDPOINT") else None #results[0].__str__()
+if VISDOM_ENDPOINT is not None:
+    from visdom import Visdom
+    
+    VISDOM_ENDPOINT = VISDOM_ENDPOINT.replace("http://", "")
+    print("VISDOM_ENDPOINT: ", VISDOM_ENDPOINT)
+    (VISDOM_HOST, VISDOM_PORT) = VISDOM_ENDPOINT.split(":")
+    
+    print("VISDOM_HOST: ", VISDOM_HOST)
+    print("VISDOM_PORT: ", VISDOM_PORT)
+    
+    print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
+    vis = Visdom(server="http://"+VISDOM_HOST, port=int(VISDOM_PORT))
+    assert vis.check_connection()
+    
+    env = 'main'
+    if PARENT_JOB_ID is not None:
+    	env = 'job_id_' + PARENT_JOB_ID
+	
+    # plot params
+    x = input_variables['x']
+    y = input_variables['y']
+    
+    win_params = 'win_params'
+    append = True if vis.win_exists(win_params, env=env) else False
+    if not append:
+        vis.text("List of hyperparameters:\n", append=append, env=env, win=win_params)
+        append = True
+    vis.text("Job ID: {}, x: {:.4f}, y: {:.4f}\n".format(PA_JOB_ID, x, y), append=append, env=env, win=win_params)
+    
+    # plot scatter
+    win_scatter = 'win_scatter'
+    update = 'append' if vis.win_exists(win_scatter, env=env) else None
+    vis.scatter(
+        X=[[x, y]],
+        Y=[1],
+        opts=dict(
+            #legend=['params'],
+            markersize=10,
+            markersymbol='cross-thin-open',
+            title='Hyperparameters value',
+            xlabel='X',
+            ylabel='Y',
+            markercolor=np.floor([255]),
+        ),
+        env=env,
+        win=win_scatter,
+        update=update
+    )
+    
+    # plot surface
+    X = np.linspace(-10, 10, 100)
+    X = np.tile(X, (100, 1))
+    Y = X.transpose()
+    Z = objective_function(X, Y)
+
+    win_surface = 'win_surface'
+    if not vis.win_exists(win_surface, env=env):
+        vis.surf(X=Z, opts=dict(colormap='Hot'), env=env, win=win_surface)
+    else:
+        print('The surface plot is already done')
+# end Visdom
+
+# return the loss value
+result = {
+    'token': token,
+    'loss': loss
+}
+result = json.dumps(result)
+resultMap.put("RESULT_JSON", result)
+print('result: ', result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            194.70486450195312
+        </positionTop>
+        <positionLeft>
+            177.37847900390625
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2351px;
+            height:3002px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-189.70486450195312px;left:-172.37847900390625px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1004" style="top: 194.712px; left: 177.396px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/himmelblau_function.png" width="20px">&nbsp;<span class="name">Himmelblau_Function</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 232.896px; top: 224.712px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

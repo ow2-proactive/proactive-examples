@@ -1,0 +1,678 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Breast_Cancer_Detection_Using_AutoSklearn_Classifier" projectName="2. Basic AutoML" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  <variables>
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
+  </variables>
+  <description>
+    <![CDATA[ Detect Breast Cancer using AutoSklearn Classifier ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="machine-learning-workflows"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/AutoML.png"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_load_boston_dataset"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Load_Breast_Cancer_Dataset" >
+      <description>
+        <![CDATA[ Load and return the breast_cancer dataset. ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="LIMIT_OUTPUT_VIEW" value="-1" inherited="false" model="PA:Integer"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/load_dataset.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_load_boston_dataset"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+if str(variables.get("TASK_ENABLED")).lower() != 'true':
+  print("Task " + __file__ + " disabled")
+  quit()
+
+print("BEGIN " + __file__)
+
+import sys, bz2, uuid
+import pandas as pd
+import numpy as np
+
+from sklearn.datasets import load_breast_cancer
+cancer = load_breast_cancer()
+dataframe_load = pd.DataFrame(cancer.data)
+dataframe_load.columns = cancer.feature_names 
+data_label = cancer.target
+dataframe = dataframe_load.assign(LABEL=data_label)
+
+dataframe_json = dataframe.to_json(orient='split').encode()
+compressed_data = bz2.compress(dataframe_json)
+
+dataframe_id = str(uuid.uuid4())
+variables.put(dataframe_id, compressed_data)
+
+print("dataframe id: ", dataframe_id)
+print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
+print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+print(dataframe.head())
+
+resultMetadata.put("task.name", __file__)
+resultMetadata.put("task.dataframe_id", dataframe_id)
+
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+
+#============================== Preview results ===============================
+#***************# HTML PREVIEW STYLING #***************#
+styles = [
+    dict(selector="th", props=[("font-weight", "bold"),
+                               ("text-align", "center"),
+                               ("font-size", "15px"),
+                               ("background", "#0B6FA4"),
+                               ("color", "#FFFFFF")]),
+                               ("padding", "3px 7px"),
+    dict(selector="td", props=[("text-align", "right"),
+                               ("padding", "3px 3px"),
+                               ("border", "1px solid #999999"),
+                               ("font-size", "13px"),
+                               ("border-bottom", "1px solid #0B6FA4")]),
+    dict(selector="table", props=[("border", "1px solid #999999"),
+                               ("text-align", "center"),
+                               ("width", "100%"),
+                               ("border-collapse", "collapse")])
+]
+#******************************************************#
+
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "output.html")
+  resultMetadata.put("content.type", "text/html")
+#==============================================================================
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("PREVIOUS_PA_TASK_NAME", variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            89
+        </positionTop>
+        <positionLeft>
+            457.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Split_Data" >
+      <description>
+        <![CDATA[ Separate data into training and testing sets. ]]>
+      </description>
+      <variables>
+        <variable name="TRAIN_SIZE" value="0.7" inherited="false" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_split_data"/>
+      </genericInformation>
+      <depends>
+        <task ref="Load_Breast_Cancer_Dataset"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/machine-learning-scripts/resources/Split_Data/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            218
+        </positionTop>
+        <positionLeft>
+            457.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Predict_Model" >
+      <description>
+        <![CDATA[ Generate predictions using a trained model. ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="LABEL_COLUMN" value="LABEL" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/predict.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_predict_model"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split_Data"/>
+        <task ref="Start_Visdom_Service"/>
+        <task ref="Train_Model"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/machine-learning-scripts/resources/Predict_Model/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            473
+        </positionTop>
+        <positionLeft>
+            461.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start_Visdom_Service" 
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ Start the Visdom server as a service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Visdom" inherited="false" />
+        <variable name="INSTANCE_NAME" value="visdom-server" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("ENDPOINT_VISDOM",variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME")))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            339
+        </positionTop>
+        <positionLeft>
+            340.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Visdom_Visualize_Results" >
+      <description>
+        <![CDATA[ Plot the different results obtained by a predictive model using Visdom ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" />
+        <variable name="TARGET_CLASS" value="1" inherited="false" />
+        <variable name="VISDOM_ENDPOINT" value="$ENDPOINT_VISDOM" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_visdom_visualize_results"/>
+      </genericInformation>
+      <depends>
+        <task ref="Predict_Model"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters
+  containerName = variables.get("DOCKER_IMAGE")
+  dockerRunCommand =  'docker run '
+  dockerParameters = '--rm '
+  # Prepare ProActive home volume
+  paHomeHost = variables.get("PA_SCHEDULER_HOME")
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+  # Prepare working directory (For Dataspaces and serialized task file)
+  workspaceHost = localspace
+  workspaceContainer = localspace
+  workspaceVolume = '-v '+localspace +':'+localspace+' '
+  # Prepare container working directory
+  containerWorkingDirectory = '-w '+workspaceContainer+' '
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/machine-learning-scripts/resources/Visdom_Visualize_Results/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            601
+        </positionTop>
+        <positionLeft>
+            461.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Visdom_Service_Actions" 
+    
+    onTaskError="cancelJob" >
+      <description>
+        <![CDATA[ This task manages the life-cycle of Visdom PCA service. It allows to trigger three possible actions: Pause_Visdom, Resume_Visdom and Finish_Visdom.
+It requires the following variables:
+INSTANCE_ID: if used alone or;
+INSTANCE_NAME: if used within the same workflow as a Visdom_Service_Start task. In this case there is no need for an INSTANCE_ID.
+ACTION: the action to execute on the Visdom service among the aforementioned actions. ]]>
+      </description>
+      <variables>
+        <variable name="INSTANCE_NAME" value="visdom-server" inherited="false" />
+        <variable name="ACTION" value="Finish_Visdom" inherited="false" model="PA:LIST(Pause_Visdom, Resume_Visdom, Finish_Visdom)"/>
+        <variable name="INSTANCE_ID" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="WebValidation"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Action/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            857
+        </positionTop>
+        <positionLeft>
+            461.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="WebValidation" 
+    
+    onTaskError="pauseJob" >
+      <description>
+        <![CDATA[ Task to pause the job and send a validation message to the notification service ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/web_validation.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Visdom_Visualize_Results"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/notification-tools/resources/Web_Validation_Script/raw" language="groovy">
+            <arguments>
+              <argument value="Put your web validation message here"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            729
+        </positionTop>
+        <positionLeft>
+            461.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="AutoSklearn_Classifier" >
+      <description>
+        <![CDATA[ AutoSklearn Classifier leverages recent advantages in Bayesian optimization, meta-learning and ensemble construction. ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="TASK_TIME" value="30" inherited="false" model="PA:Integer"/>
+        <variable name="RUN_TIME" value="27" inherited="false" model="PA:Integer"/>
+        <variable name="SAMPLING" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="FOLDS" value="5" inherited="false" model="PA:Integer"/>
+        <variable name="RESAMPLING_STRATEGY" value="cv" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/AutoML.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_autosklearn_classifier"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/machine-learning-scripts/resources/Autosklearn_Classifier/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            219.5
+        </positionTop>
+        <positionLeft>
+            695.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Train_Model" >
+      <description>
+        <![CDATA[ Train a classification/clustering/anomaly detection model ]]>
+      </description>
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" />
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true" />
+        <variable name="TASK_ENABLED" value="True" inherited="false" />
+        <variable name="LABEL_COLUMN" value="LABEL" inherited="false" />
+        <variable name="TOKEN" value="{&quot;_token_id&quot;: 0}" inherited="false" />
+        <variable name="N_SPLITS" value="5" inherited="false" model="PA:Integer"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/train.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_train_model"/>
+      </genericInformation>
+      <depends>
+        <task ref="AutoSklearn_Classifier"/>
+        <task ref="Split_Data"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+token_encoded = variables.get('token_encoded')
+
+// If encoded variables are found
+if (token_encoded != null && token_encoded.length() > 0)
+{
+    println "Found encoded variables:"
+    println "token_encoded: " + token_encoded
+    byte[] token_decoded = token_encoded.decodeBase64()
+    token = new String(token_decoded)
+    variables.put('TOKEN', token)
+}
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/machine-learning-scripts/resources/Train_Model/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            339.5
+        </positionTop>
+        <positionLeft>
+            616
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2864px;
+            height:3372px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-84px;left:-335.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_4047" style="top: 89px; left: 457.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/load_dataset.png" width="20px">&nbsp;<span class="name">Load_Breast_Cancer_Dataset</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4050" style="top: 218px; left: 457.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png" width="20px">&nbsp;<span class="name">Split_Data</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4053" style="top: 473px; left: 461.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/predict.png" width="20px">&nbsp;<span class="name">Predict_Model</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_4056" style="top: 339px; left: 340.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4059" style="top: 601px; left: 461.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Visdom_Visualize_Results</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4062" style="top: 857px; left: 461.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Visdom_Service_Actions</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4065" style="top: 729px; left: 461.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_validation.png" width="20px">&nbsp;<span class="name">WebValidation</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_4068" style="top: 219.5px; left: 695.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/AutoML.png" width="20px">&nbsp;<span class="name">AutoSklearn_Classifier</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4071" style="top: 339.5px; left: 616px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/train.png" width="20px">&nbsp;<span class="name">Train_Model</span></a></div><svg style="position:absolute;left:497.5px;top:128.5px" width="55.5" height="90" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 44.5 50 34.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.400538999999998,66.269502 L15.585922542268877,51.490999820340875 L6.644668572892407,53.739105123726276 L3.0555256659951464,45.24687024744847 L0.400538999999998,66.269502" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.400538999999998,66.269502 L15.585922542268877,51.490999820340875 L6.644668572892407,53.739105123726276 L3.0555256659951464,45.24687024744847 L0.400538999999998,66.269502" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:497.5px;top:257.5px" width="25" height="216" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4 215 C 14 165 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M6.1449835,166.22570375 L12.185480200676672,145.91530248342937 L5.4788804979188095,152.24155891412897 L-1.798664635194359,146.58140548551054 L6.1449835,166.22570375" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M6.1449835,166.22570375 L12.185480200676672,145.91530248342937 L5.4788804979188095,152.24155891412897 L-1.798664635194359,146.58140548551054 L6.1449835,166.22570375" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:397px;top:378.5px" width="125.5" height="95" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 104.5 94 C 114.5 44 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M93.327773,67.024496 L80.58107236936331,50.09754639196588 L81.68430476355097,59.25084515713327 L72.8074215264966,61.7410146284149 L93.327773,67.024496" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M93.327773,67.024496 L80.58107236936331,50.09754639196588 L81.68430476355097,59.25084515713327 L72.8074215264966,61.7410146284149 L93.327773,67.024496" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:501.5px;top:379.5px" width="175" height="94" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 93 C -10 43 164 50 154 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M21.25,64.40625 L42.387021300375636,62.914160677115284 L34.10554835292311,58.86234555045761 L36.84311685083324,50.058612324192175 L21.25,64.40625" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M21.25,64.40625 L42.387021300375636,62.914160677115284 L34.10554835292311,58.86234555045761 L36.84311685083324,50.058612324192175 L21.25,64.40625" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:501.5px;top:512.5px" width="47" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 26 88 C 36 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M26.509342000000004,65.8307285 L25.911972524203918,44.649530476531474 L21.51374988524985,52.752347123734594 L12.833591147938504,49.64512259128163 L26.509342000000004,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M26.509342000000004,65.8307285 L25.911972524203918,44.649530476531474 L21.51374988524985,52.752347123734594 L12.833591147938504,49.64512259128163 L26.509342000000004,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:501.5px;top:768.5px" width="43.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 22.5 88 C 32.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M23.40936,66.303232 L23.83038624209553,45.1177950938735 L19.047922429813696,52.999929315276646 L10.52708355737218,49.47923266405979 L23.40936,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M23.40936,66.303232 L23.83038624209553,45.1177950938735 L19.047922429813696,52.999929315276646 L10.52708355737218,49.47923266405979 L23.40936,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:501.5px;top:640.5px" width="47" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 36 50 26 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-0.5093420000000015,65.8307285 L13.166408852061494,49.64512259128163 L4.486250114750149,52.75234712373459 L0.08802747579607573,44.649530476531474 L-0.5093420000000015,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-0.5093420000000015,65.8307285 L13.166408852061494,49.64512259128163 L4.486250114750149,52.75234712373459 L0.08802747579607573,44.649530476531474 L-0.5093420000000015,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:655.5px;top:259.5px" width="118" height="81" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 80 C -10 30 107 50 97 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M9.644906249999998,55.2865625 L30.433535371526677,51.183770859225035 L21.71337523269827,48.19064420751313 L23.337617079039806,39.11530187652677 L9.644906249999998,55.2865625" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M9.644906249999998,55.2865625 L30.433535371526677,51.183770859225035 L21.71337523269827,48.19064420751313 L23.337617079039806,39.11530187652677 L9.644906249999998,55.2865625" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:497.5px;top:257.5px" width="179" height="83" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 158 82 C 168 32 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M136.125,55.125 L119.59714295207385,41.86491171208435 L122.92391174691524,50.463319087038705 L114.93546203911256,55.0659999651691 L136.125,55.125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M136.125,55.125 L119.59714295207385,41.86491171208435 L122.92391174691524,50.463319087038705 L114.93546203911256,55.0659999651691 L136.125,55.125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 532.5px; top: 119px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 498px; top: 248px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 498px; top: 208px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 502px; top: 503px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 502px; top: 463px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 397.5px; top: 369px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 528px; top: 631px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 528px; top: 591px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 524.5px; top: 887px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 524.5px; top: 847px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 502px; top: 759px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 502px; top: 719px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 753px; top: 250px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 656px; top: 370px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 656px; top: 330px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

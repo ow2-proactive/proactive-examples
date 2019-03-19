@@ -1,37 +1,35 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="IMDB_Sentiment_Analysis" onTaskError="continueJobExecution" priority="normal" projectName="4. Custom AI workflows - Pytorch library" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="IMDB_Sentiment_Analysis" onTaskError="continueJobExecution" priority="normal" projectName="4. Custom Pytorch Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
     <variable name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
   </variables>
   <description>
-    <![CDATA[ This workflow trains a model for opinions identification and categorization expressed in a piece of text, especially in order to determine the opinion of IMDB users regarding specific movies [positive or negative]. ]]>
+    <![CDATA[ IMDB Sentiment Analysis workflow trains a model for opinions identification and categorization expressed in a piece of text, especially in order to determine the opinion of IMDB users regarding specific movies [positive or negative]. ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="deep-learning-workflows-dev2"/>
-<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/sentiment_analysis.png"/>
+<info name="bucketName" value="deep-learning-workflows"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/pytorch-logo-dark.png"/>
 <info name="Documentation" value="https://ow2-proactive.github.io/proactive-examples/MachineLearning/resources/doc/V1/automated-machine-learning-activeeon.pdf"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
     <task name="Import_Text_Dataset">
       <description>
-        <![CDATA[ Import a text dataset from the location given by $DATASET_URL. If it is a zip file, it will be automatically extracted.
-Split the dataset into train, test and validation sets. If $TOY_MODE is activated, it will only extract a small subset of the dataset.
-The text is tokenized using $TOKENIZER ]]>
+        <![CDATA[ Load and return a text dataset. ]]>
       </description>
       <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
         <variable inherited="false" name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/IMDB.zip"/>
         <variable inherited="false" name="TRAIN_SPLIT" value="0.6"/>
         <variable inherited="false" name="TEST_SPLIT" value="0.3"/>
-        <variable inherited="false" name="VALIDATION_SPLIT" value="0.1"/>
+        <variable inherited="false" name="VAL_SPLIT" value="0.1"/>
         <variable inherited="false" model="PA:BOOLEAN" name="TOY_MODE" value="True"/>
         <variable inherited="false" model="PA:LIST(str.split,moses,spacy,revtok,subword)" name="TOKENIZER" value="str.split"/>
         <variable inherited="false" name="SENTENCE_SEPARATOR" value="\r"/>
         <variable inherited="false" name="CHARSET" value="utf-8"/>
-        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
         <variable inherited="false" model="PA:BOOLEAN" name="IS_LABELED_DATA" value="True"/>
       </variables>
       <genericInformation>
@@ -96,209 +94,7 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Import_Text_Dataset")
-
-import os
-import wget
-import zipfile
-import shutil
-import random
-import codecs
-import numpy as np
-import pandas as pd
-from torchtext import data
-#import spacy
-
-from os import remove, listdir, makedirs
-from os.path import basename, splitext, exists, join
-from sklearn.model_selection import train_test_split
-  
-### PHASE 1 ################
-
-DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/DL32.zip'
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/IMDB.zip'
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/unlabeled-IMDB.zip'
-GLOBALSPACE = 'text_data/'
-TRAIN_SPLIT = round(0.6, 3)
-TEST_SPLIT  = round(0.3, 3)
-VALIDATION_SPLIT = round(0.1, 3)
-TOY_MODE = 'True'
-TOKENIZER = "spacy"
-SENTENCE_SEPARATOR = '\r'
-CHARSET = 'utf-8'
-IS_LABELED_DATA = 'True'
-DATASET_ITERATOR_UNL = None
-
-# READ TASK VARIABLES
-if 'variables' in locals():
-  
-  if variables.get("DATASET_URL") is not None:
-    DATASET_URL = variables.get("DATASET_URL")
-  if variables.get("TRAIN_SPLIT") is not None:
-    TRAIN_SPLIT = float(str(variables.get("TRAIN_SPLIT")))
-  if variables.get("TEST_SPLIT") is not None:
-    TEST_SPLIT = float(str(variables.get("TEST_SPLIT")))
-  if variables.get("VALIDATION_SPLIT") is not None:
-    VALIDATION_SPLIT = float(str(variables.get("VALIDATION_SPLIT")))
-  if variables.get("TOY_MODE") is not None:
-    TOY_MODE = variables.get("TOY_MODE")
-  if variables.get("TOKENIZER") is not None:
-    TOKENIZER = str(variables.get("TOKENIZER"))
-  if variables.get("SENTENCE_SEPARATOR") is not None:
-    SENTENCE_SEPARATOR = variables.get("SENTENCE_SEPARATOR")
-  if variables.get("CHARSET") is not None:
-    CHARSET = str(variables.get("CHARSET"))
-  if variables.get("IS_LABELED_DATA") is not None:
-    IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-
-print("Split information:")
-print("TRAIN_SPLIT:      " + str(TRAIN_SPLIT))
-print("TEST_SPLIT:       " + str(TEST_SPLIT))
-print("VALIDATION_SPLIT: " + str(VALIDATION_SPLIT))
-
-assert TRAIN_SPLIT >= 0.0
-assert TEST_SPLIT >= 0.0
-assert VALIDATION_SPLIT >= 0.0
-assert round(TRAIN_SPLIT + TEST_SPLIT + VALIDATION_SPLIT, 3) == 1
-if TRAIN_SPLIT == 0.0 and VALIDATION_SPLIT > 0.0:
-  raise AssertionError("VALIDATION_SPLIT cannot be defined when TRAIN_SPLIT equals zero") 
-
-DATASET_PATH = os.path.join(GLOBALSPACE,splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0])
-
-if exists(DATASET_PATH):
-  shutil.rmtree(DATASET_PATH)
-makedirs(DATASET_PATH)
-
-print("DATASET_URL:  " + DATASET_URL)
-print("DATASET_PATH: " + DATASET_PATH)
-
-# DOWNLOAD AND EXTRACT DATASET
-print("Downloading...")
-filename = wget.download(DATASET_URL, DATASET_PATH)
-print("FILENAME: " + filename)
-print("OK")
-
-print("Extracting...")
-dataset_zip = zipfile.ZipFile(filename)
-dataset_zip.extractall(DATASET_PATH)
-dataset_zip.close()
-remove(filename)
-print("OK")
-
-### PHASE 2 ################
-
-# EXTRACT LABELS
-if IS_LABELED_DATA=='True':
-    textfolders = [os.path.join(root, name)
-             for root, dirs, files in os.walk(DATASET_PATH)
-             for name in dirs]
-
-    labels = [os.path.join(name)
-             for root, dirs, files in os.walk(DATASET_PATH)
-             for name in dirs]
-    print('labels to be predicted',labels)
-    class_files = [os.path.join(root, name)
-             for i in range(0,len(textfolders))
-             for root, dirs, files in os.walk(textfolders[i])
-             for name in files]
-else:
-    DATASET_PATH = os.path.join(DATASET_PATH,'unlabeled')
-    labels = ['unlabeled']
-    class_files = [os.path.join(DATASET_PATH, name)
-            for root, dirs, files in os.walk(DATASET_PATH)
-            for name in files]
-    #assert(len(class_files)==0)
-
-
-
-### PHASE 3 ################
-
-### SPLIT DATASET
-import codecs
-import random
-import pandas as pd
-
-sent_classes={}
-n_class=0
-toy_dataset_size = 2000
-
-
-train_data = []
-val_data = []
-test_data = []
-
-for i in range(len(class_files)):
-    if class_files[i].endswith('.DS_Store'):
-        continue
-    print('loading MR data from',class_files[i])
-    sent_classes[labels[n_class]] = codecs.open(class_files[i], 'r', CHARSET).read().strip().splitlines()
-    print('length of class',len(sent_classes[labels[n_class]]))
-    random.shuffle(sent_classes[labels[n_class]])
-    file_len = len(sent_classes[labels[n_class]])
-    if TOY_MODE=='True':
-        class_ent_len = int(toy_dataset_size/len(labels))
-        if (file_len<class_ent_len):
-            class_ent_len = file_len
-    else:
-        class_ent_len = file_len
-    
-    train_data = train_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][:int(class_ent_len*TRAIN_SPLIT)]]
-    val_data = val_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][int(class_ent_len*TRAIN_SPLIT+1):int(class_ent_len*(TRAIN_SPLIT+VALIDATION_SPLIT)+1)]]
-    test_data = test_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][int(class_ent_len*(TRAIN_SPLIT+VALIDATION_SPLIT)+2):class_ent_len]]
-    n_class = n_class+1
-
-train_frame = pd.DataFrame(train_data, columns = ["text","label"])
-val_frame = pd.DataFrame(val_data, columns = ["text","label"])
-test_frame = pd.DataFrame(test_data, columns = ["text","label"])
-
-train_frame['text'].replace('', np.nan, inplace=True)
-train_frame.dropna(subset=['text'], inplace=True)
-val_frame['text'].replace('', np.nan, inplace=True)
-val_frame.dropna(subset=['text'], inplace=True)
-test_frame['text'].replace('', np.nan, inplace=True)
-test_frame.dropna(subset=['text'], inplace=True)
-
-train_path = os.path.join(DATASET_PATH,"train.csv")
-val_path = os.path.join(DATASET_PATH,"val.csv")
-test_path = os.path.join(DATASET_PATH,"test.csv")
-
-train_frame.to_csv(train_path, encoding=CHARSET,index=False, header=False)
-val_frame.to_csv(val_path, encoding=CHARSET, index=False, header=False)
-test_frame.to_csv(test_path, encoding=CHARSET, index=False, header=False)
-print(train_path)
-
-### PHASE 4 ###################
-
-DATASET_ITERATOR="""
-text_field = data.Field(lower=True)#, tokenize=TOKENIZER)
-label_field = data.Field(sequential=False)
-#Dataset of columns stored in CSV, TSV, or JSON format
-train, val, test = data.TabularDataset.splits(path=DATASET_PATH, train='train.csv',
-                                                  validation='val.csv', test='test.csv', format='csv',
-                                                  fields=[('text', text_field), ('label', label_field)])
-train_iter, val_iter, test_iter = data.BucketIterator.splits((train, val, test),
-                                                              repeat=False,
-                                                             batch_sizes=(BATCH_SIZE,len(val),len(test)), sort_key=lambda x: len(x.text), device=DEVICE)
-if variables.get(DATASET_ITERATOR_UNL) is None:
-    text_field.build_vocab(train)
-    label_field.build_vocab(train)
-    VOCAB_SIZE=len(text_field.vocab)
-    LABEL_SIZE=len(label_field.vocab)
-"""
-if 'variables' in locals():
-    if IS_LABELED_DATA == 'True':
-        variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
-        variables.put("DATASET_PATH",DATASET_PATH)
-    else:
-        variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR)
-        variables.put("DATASET_PATH_UNL",DATASET_PATH)
-    variables.put("TOKENIZER",TOKENIZER)
-    variables.put("IS_LABELED_DATA",IS_LABELED_DATA)
-print("END Import_Text_Dataset")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Import_Text_Dataset/raw"/>
         </script>
       </scriptExecutable>
       <controlFlow block="none"/>
@@ -307,24 +103,25 @@ print("END Import_Text_Dataset")
       </outputFiles>
       <metadata>
         <positionTop>
-            371.5
+            263.5
         </positionTop>
         <positionLeft>
-            648.75
+            489.25
         </positionLeft>
       </metadata>
     </task>
     <task name="RNN">
       <description>
-        <![CDATA[ Simple RNN Model ]]>
+        <![CDATA[ A Recurrent Neural Network (RNN) is a class of artificial neural network where connections between units form a directed cycle.
+You can see more details in: http://pytorch.org/docs/0.3.1/nn.html#torch.nn.RNN ]]>
       </description>
       <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
         <variable inherited="false" name="EMBEDDING_DIM" value="50"/>
         <variable inherited="false" name="HIDDEN_DIM" value="40"/>
         <variable inherited="false" name="BATCH_SIZE" value="2"/>
         <variable inherited="false" name="DROPOUT" value="0.5"/>
-        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png"/>
@@ -388,114 +185,34 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Create a RNN model")
-import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
-
-BATCH_SIZE=2
-HIDDEN_DIM=50
-EMBEDDING_DIM=50
-DROPOUT=0.5
-
-if 'variables' in locals():  
-  if variables.get("BATCH_SIZE") is not None:
-    BATCH_SIZE = variables.get("BATCH_SIZE")
-  else:
-    print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
-  if variables.get("HIDDEN_DIM") is not None:
-    HIDDEN_DIM = variables.get("HIDDEN_DIM")
-  else:
-    print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
-  if variables.get("EMBEDDING_DIM") is not None:
-    EMBEDDING_DIM = variables.get("EMBEDDING_DIM")
-  else:
-    print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
-  if variables.get("DROPOUT") is not None:
-    DROPOUT = variables.get("DROPOUT")
-  else:
-    print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
-
-
-MODEL_TYPE = 'RNN'
-MODEL_CLASS = """
-class RNN(nn.Module):
-
-    def __init__(self, embedding_dim, hidden_dim, vocab_size, label_size, use_gpu, batch_size, dropout=0.5):
-        super(RNN, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.use_gpu = use_gpu
-        self.batch_size = batch_size
-        self.dropout = dropout
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.RNN = nn.RNN(input_size=embedding_dim, hidden_size=hidden_dim)
-        self.hidden2label = nn.Linear(hidden_dim, label_size)
-        self.hidden = self.init_hidden()
-
-    def init_hidden(self):
-        if self.use_gpu:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
-        else:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
-
-    def forward(self, sentence):
-        x = self.embeddings(sentence).view(len(sentence), self.batch_size, -1)
-        rnn_out, self.hidden = self.RNN(x, self.hidden)
-        y = self.hidden2label(rnn_out[-1])
-        log_probs = F.log_softmax(y)
-        return log_probs"""
-    
-MODEL_DEF = """
-MODEL = RNN(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=BATCH_SIZE)
-"""
-print(MODEL_DEF)
-
-# Forward model
-try:
-    variables.put("MODEL_CLASS", MODEL_CLASS)
-    variables.put("MODEL_DEF", MODEL_DEF)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
-    variables.put("HIDDEN_DIM", HIDDEN_DIM)
-    variables.put("EMBEDDING_DIM", EMBEDDING_DIM)
-    variables.put("DROPOUT", DROPOUT)
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END RNN model built")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/RNN/raw"/>
         </script>
       </scriptExecutable>
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            371.5
+            263.5
         </positionTop>
         <positionLeft>
-            800.234375
+            640.75
         </positionLeft>
       </metadata>
     </task>
     <task name="Train_Text_Classification_Model">
       <description>
-        <![CDATA[ Train a text-oriented model using deep learning architectures ]]>
+        <![CDATA[ Train a model using a text classification network. ]]>
       </description>
       <variables>
-        <variable inherited="true" name="LEARNING_RATE" value="0.001"/>
-        <variable inherited="true" model="PA:List(Adam,RMS, SGD, Adagrad, Adadelta)" name="OPTIMIZER" value="Adam"/>
-        <variable inherited="true" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" name="LOSS_FUNCTION" value="NLLLoss"/>
-        <variable inherited="true" model="PA:Integer" name="EPOCHS" value="10"/>
-        <variable inherited="true" model="PA:Boolean" name="TRAINABLE" value="False"/>
-        <variable inherited="true" model="PA:List(42B, 840B, twitter.27B,6B)" name="GLOVE" value="6B"/>
         <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
         <variable inherited="true" name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
         <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
         <variable inherited="true" model="PA:Boolean" name="USE_GPU" value="False"/>
+        <variable inherited="false" name="LEARNING_RATE" value="0.001"/>
+        <variable inherited="false" model="PA:List(Adam,RMS, SGD, Adagrad, Adadelta)" name="OPTIMIZER" value="Adam"/>
+        <variable inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" name="LOSS_FUNCTION" value="NLLLoss"/>
+        <variable inherited="false" model="PA:Integer" name="EPOCHS" value="10"/>
+        <variable inherited="false" model="PA:Boolean" name="TRAINABLE" value="False"/>
+        <variable inherited="false" model="PA:List(42B, 840B, twitter.27B,6B)" name="GLOVE" value="6B"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
@@ -549,324 +266,7 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Train_Text_Classification_Model")
-
-import os
-import uuid
-import time
-import torch
-import shutil
-import numpy as np
-import time, random
-import pandas as pd
-import torch.nn as nn
-from tqdm import tqdm
-import dill as pickle
-from itertools import *
-from torchtext import data
-import torch.optim as optim
-from torchtext import vocab
-from os.path import join, exists
-import torch.nn.functional as F
-from torch.autograd import Variable
-from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
-
-
-MODEL_ONNX_TYPE = True
-
-#-------------------------evaluate function definition--------------------------
-def evaluate(model, test, data_iter, label_field, loss_function, name):
-    model.eval()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    i=0
-    acc = 0
-    pd.options.display.max_colwidth = 500
-    result =  pd.DataFrame(columns=['text','prediction','label'])
-    for batch in data_iter:
-        i=i+1
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = len(test)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        for i in range(model.batch_size):
-            test_fields = vars(test[i])
-            test_text = test_fields["text"]
-            test_label = test_fields["label"]
-            prede_label = pred_label[i]
-            gd_label = label[i]
-            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
-        pred_res += [x for x in pred_label]
-        if name is 'test_labeled':
-            loss = loss_function(pred, label)
-            avg_loss += loss.item()
-    if name is 'test_labeled':
-        avg_loss /= len(test)
-        pred_res = torch.LongTensor(pred_res)
-        acc = get_accuracy(truth_res, pred_res)
-        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
-    return acc, result
-
-#-------------------------get_accuracy function definition--------------------------
-def get_accuracy(truth, pred):
-     assert len(truth)==len(pred)
-     right = 0
-     for i in range(len(truth)):
-        if truth[i]==pred[i]:
-            right += 1.0
-     return right/len(truth)
-     
-#-------------------------train function definition--------------------------     
-def train_epoch_progress(model, train_iter, train, loss_function, optimizer, text_field, label_field, batch_size, epoch):
-    #model.train()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    count = 0
-    for batch in train_iter:
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = batch_size
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        pred_res += [np.float64(x) for x in pred_label]
-        model.zero_grad()
-        loss = loss_function(pred, label)
-        avg_loss += loss.item()
-        count += 1
-        loss.backward()
-        optimizer.step()
-    avg_loss /= len(train)
-    pred_res = torch.LongTensor(pred_res)
-    acc = get_accuracy(truth_res, pred_res)
-    return avg_loss, acc
-
-#-------------------------main code --------------------------
-
-#--------Get the task parameters--------
-
-#True or False
-TRAINABLE = 'False'
-#42B, 840B, twitter.27B, 6B
-GLOVE = '6B'
-LEARNING_RATE = '0.0001'
-#Adam,RMS, SGD, Adagrad, Adadelta
-OPTIMIZER = 'Adam'
-EPOCHS = 2
-#L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
-LOSS_FUNCTION = 'NLLLoss'
-#BATCH_SIZE (int)
-BATCH_SIZE = 2
-#True or False
-USE_GPU = 'False'
-
-if 'variables' in locals():
-    #True or False
-    if variables.get("TRAINABLE") is not None:
-        TRAINABLE = variables.get("TRAINABLE")
-    else:
-        print("TRAINABLE not defined by the user. Using the default value:"+TRAINABLE)
-    #42B, 840B, twitter.27B, 6B
-    if variables.get("GLOVE") is not None:
-        GLOVE = variables.get("GLOVE")
-    else:
-        print("GLOVE not defined by the user. Using the default value:"+GLOVE)
-    if variables.get("LEARNING_RATE") is not None:
-        LEARNING_RATE = variables.get("LEARNING_RATE")
-    else:
-        print("LEARNING_RATE not defined by the user. Using the default value:"+LEARNING_RATE)
-    #Adam,RMS, SGD, Adagrad, Adadelta
-    if variables.get("OPTIMIZER") is not None:
-        OPTIMIZER = variables.get("OPTIMIZER")
-    else:
-        print("OPTIMIZER not defined by the user. Using the default value:"+OPTIMIZER)
-    if variables.get("EPOCHS") is not None:
-        EPOCHS = int(variables.get("EPOCHS"))
-    else:
-        print("EPOCHS not defined by the user. Using the default value:"+EPOCHS)
-    #L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
-    if variables.get("LOSS_FUNCTION") is not None:
-        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
-    else:
-        print("LOSS_FUNCTION not defined by the user. Using the default value:"+LOSS_FUNCTION)
-    #BATCH_SIZE
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = int(variables.get("BATCH_SIZE"))
-    else:
-        print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
-    if variables.get("EMBEDDING_DIM") is not None:
-        EMBEDDING_DIM = int(variables.get('EMBEDDING_DIM'))
-    else:
-        print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
-    if variables.get("HIDDEN_DIM") is not None:
-        HIDDEN_DIM = int(variables.get('HIDDEN_DIM'))
-    else:
-        print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
-    if variables.get("DROPOUT") is not None:
-        DROPOUT = float(variables.get('DROPOUT'))
-    else:
-        print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
-    if variables.get("USE_GPU") is not None:
-        USE_GPU = variables.get('USE_GPU')
-    else:
-        print("USE_GPU not defined by the user. Using the default value:"+USE_GPU)
-    if variables.get("TOKENIZER") is not None:
-        TOKENIZER = variables.get('TOKENIZER')
-    else:
-        print("TOKENIZER not defined by the user. Using the default value:"+TOKENIZER)
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get('IS_LABELED_DATA')
-    else:
-        print("IS_LABELED_DATA not defined by the user. Using the default value:"+IS_LABELED_DATA)
-
-#--------Define GPU or CPU environment-------- 
-
-if (USE_GPU == 'True' and torch.cuda.is_available()):
-    USE_GPU = 1
-    DEVICE = 1
-    print('GPU ressource will be used')
-else:
-    USE_GPU = 0
-    DEVICE = -1
-    print('GPU ressource will not be used')
-        
-#--------Load Dataset--------
-DATASET_ITERATOR_UNL = None
-if 'variables' in locals():
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if IS_LABELED_DATA == 'True':
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-    else:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH_UNL")
-    if DATASET_ITERATOR is not None:
-        exec(DATASET_ITERATOR)
-
-#--------Load Model---------
-
-if 'variables' in locals():
-    if variables.get("MODEL_CLASS") is not None:
-        MODEL_CLASS = variables.get("MODEL_CLASS")
-    if variables.get("MODEL_DEF") is not None:
-        MODEL_DEF = variables.get("MODEL_DEF")
-        
-if MODEL_CLASS is not None:
-    exec(MODEL_CLASS)
-if MODEL_DEF is not None:
-    exec(MODEL_DEF)
-else:
-    raise Exception('CLASS MODEL not defined!')
-  
-#-------Main--------
-
-timestamp = str(int(time.time()))
-best_dev_acc = 0.0
-best_tr_acc = 0.0
-
-if USE_GPU:
-    MODEL = MODEL.cuda()
-    
-print('Load word embeddings...')
-
-text_field.vocab.load_vectors(vectors=GloVe(name=GLOVE, dim=EMBEDDING_DIM))
-MODEL.embeddings.weight.data = text_field.vocab.vectors
-if TRAINABLE=='False':
-    MODEL.embeddings.weight.requires_grad=False
-    
-best_model = MODEL
-
-#optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE)
-OPTIM = """optimizer =  optim."""+OPTIMIZER+"""(filter(lambda p: p.requires_grad, MODEL.parameters()), lr="""+LEARNING_RATE+""")"""
-exec(OPTIM)
-LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
-exec(LOSS)
-
-print('Training...')
-for epoch in range(EPOCHS):
-    print(str(MODEL))
-    avg_loss, tr_acc = train_epoch_progress(MODEL, train_iter, train, loss_function, optimizer, text_field, label_field, BATCH_SIZE, epoch)
-    tqdm.write('Train: loss %.2f acc %.1f' % (avg_loss, tr_acc*100))
-    if len(val)>0:
-        dev_acc, results = evaluate(MODEL, val, val_iter, label_field, loss_function, 'test_labeled')
-        if dev_acc > best_dev_acc:
-            best_dev_acc = dev_acc
-            BEST_MODEL = MODEL
-    else:
-        if tr_acc > best_tr_acc:
-            best_tr_acc = tr_acc
-            BEST_MODEL = MODEL
-            
-# Get an unique ID
-file_id = str(uuid.uuid4())
-MODEL_FOLDER = 'text_models/'
-MODEL_FOLDER =  os.path.join(MODEL_FOLDER, file_id)
-os.makedirs(MODEL_FOLDER, exist_ok=True)
-
-# Save trained model
-print('Saving trained model...')
-MODEL_FILE= file_id + ".pt"
-MODEL_PATH = os.path.join(MODEL_FOLDER, MODEL_FILE)
-torch.save(BEST_MODEL, MODEL_PATH)
-
-# Save labels
-print('Saving labels to a text file...')
-LABELS_FILENAME = file_id + "_label.pkl"
-LABELS_PATH = os.path.join(MODEL_FOLDER, LABELS_FILENAME)
-pickle.dump(label_field, open(LABELS_PATH,'wb'))
-
-# Save text
-print('Saving text vocab to a text file...')
-TEXT_FILENAME = file_id + "_text.pkl"
-print(TEXT_FILENAME)
-TEXT_PATH = os.path.join(MODEL_FOLDER, TEXT_FILENAME)
-pickle.dump(text_field, open(TEXT_PATH,'wb'))
-
-# Save onnx trained model
-if MODEL_ONNX_TYPE:
-  MODEL_ONNX_PATH = None
-  print('This network does not yet support the ONNX format!')
-
-    
-    
-#----------variables to send----------------
-# Forward model
-try:
-    variables.put("MODEL_PATH", MODEL_PATH)
-    variables.put("MODEL_ONNX_PATH", MODEL_ONNX_PATH)
-    variables.put("LABELS_PATH", LABELS_PATH)
-    variables.put("TEXT_PATH", TEXT_PATH)
-    variables.put("MODEL_FOLDER", MODEL_FOLDER)
-    variables.put("EVALUATE", EVALUATE)
-    variables.put("ACCURACY", ACCURACY)
-    variables.put("LOSS",LOSS)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
-    variables.put("DATASET_PATH",DATASET_PATH)
-    variables.put("USE_GPU",USE_GPU)
-    variables.put("DEVICE",DEVICE)
-    variables.put("VOCAB_SIZE", VOCAB_SIZE)
-    variables.put("LABEL_SIZE", LABEL_SIZE)
-    if IS_LABELED_DATA=='True':
-        variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
-    else:
-        variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR_UNL)
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-  
-print("END Train_Text_Classification_Model")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Train_Text_Classification_Model/raw"/>
         </script>
       </scriptExecutable>
       <controlFlow block="none"/>
@@ -876,10 +276,10 @@ print("END Train_Text_Classification_Model")
       </outputFiles>
       <metadata>
         <positionTop>
-            499.484375
+            391.5
         </positionTop>
         <positionLeft>
-            724.484375
+            565
         </positionLeft>
       </metadata>
     </task>
@@ -890,7 +290,7 @@ print("END Train_Text_Classification_Model")
       <variables>
         <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
         <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-        <variable inherited="true" model="PA:LIST(Pytorch, ONNX)" name="MODEL_TYPE" value="Pytorch"/>
+        <variable inherited="false" model="PA:LIST(PyTorch, ONNX)" name="MODEL_TYPE" value="PyTorch"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png"/>
@@ -960,319 +360,27 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Export_Model")
-
-import os
-import uuid
-import zipfile
-import shutil
-
-from os import remove, listdir, makedirs
-from os.path import exists, join, isfile
-
-if 'variables' in locals():
-  MODEL_PATH  = variables.get("MODEL_PATH")
-  MODEL_TYPE = variables.get("MODEL_TYPE")
-  MODEL_ONNX_PATH  = variables.get("MODEL_ONNX_PATH")
-  LABELS_PATH = variables.get("LABELS_PATH")
-  TEXT_PATH   = variables.get("TEXT_PATH")
-
-assert MODEL_PATH is not None
-
-MODEL_TYPE = MODEL_TYPE.upper()
-
-if MODEL_TYPE == 'ONNX' and MODEL_ONNX_PATH is not None:
-	MODEL_PATH = MODEL_ONNX_PATH
-elif MODEL_TYPE == 'ONNX' and MODEL_ONNX_PATH is None:
-	print('This network does not yet support the ONNX format!')
-elif MODEL_TYPE == 'PYTORCH':
-	MODEL_PATH = MODEL_PATH
-else:
-	print('Please check the [MODEL_TYPE] parameter!')    
-    
-'''
-assert MODEL_DIR_PATH is not None
-assert exists(MODEL_DIR_PATH) == True
-
-def zipdir(_path, _ziph):
-  # ziph is zipfile handle
-  for root, dirs, files in os.walk(_path):
-    for file in files:
-      _ziph.write(join(root, file))
-
-zipf = zipfile.ZipFile('model.zip', 'w', zipfile.ZIP_DEFLATED)
-zipdir(MODEL_DIR_PATH, zipf)
-zipf.close()
-'''
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-FILE_NAME = ID + '.zip'
-
-zipf = zipfile.ZipFile(FILE_NAME, 'w', zipfile.ZIP_DEFLATED)
-zipf.write(MODEL_PATH)
-if LABELS_PATH is not None:
-  zipf.write(LABELS_PATH)
-if TEXT_PATH is not None:
-  zipf.write(TEXT_PATH)  
-zipf.close()
-
-assert isfile(FILE_NAME) == True
-
-# Read the whole file at once
-FILE_BIN = None
-with open(FILE_NAME, "rb") as binary_file:
-  FILE_BIN = binary_file.read()
-assert FILE_BIN is not None
-
-if 'variables' in locals():
-  result = FILE_BIN
-  resultMetadata.put("file.extension", ".zip")
-  resultMetadata.put("file.name", "model.zip")
-  resultMetadata.put("content.type", "application/octet-stream")
-
-print("END Export_Model")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Download_Model/raw"/>
         </script>
       </scriptExecutable>
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            627.5
+            519.5
         </positionTop>
         <positionLeft>
-            630.75
-        </positionLeft>
-      </metadata>
-    </task>
-    <task name="Predict_Text_Classification_Model">
-      <description>
-        <![CDATA[ Predict results based on new data ]]>
-      </description>
-      <variables>
-        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-        <variable inherited="true" name="GPU_CUDA_PATH" value="/usr/local/cuda"/>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-        <variable inherited="true" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" name="LOSS_FUNCTION" value="NLLLoss"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Train_Text_Classification_Model"/>
-      </depends>
-      <inputFiles>
-        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
-        <files accessMode="transferFromGlobalSpace" includes="$MODEL_FOLDER/**"/>
-      </inputFiles>
-      <selection>
-        <script type="static">
-          <code language="javascript">
-            <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Predict_Text_Classification_Model")
-
-import os
-import torch
-import pandas as pd
-import torch.nn as nn
-import dill as pickle
-from itertools import *
-import time, random
-from tqdm import tqdm
-from torchtext import data
-from torchtext import vocab
-import torch.optim as optim
-from torchtext import datasets
-import torch.nn.functional as F
-from torch.autograd import Variable
-from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
-
-pd.options.display.max_colwidth = 500
-DEVICE = -1
-#-------------------------main code --------------------------
-DATASET_ITERATOR_UNL = None
-DATASET_ITERATOR = None
-#--------Get varaiables from previous tasks--------
-if 'variables' in locals():
-    if variables.get("MODEL_PATH") is not None:
-        MODEL_PATH = variables.get("MODEL_PATH")
-    if variables.get("LOSS_FUNCTION") is not None:
-        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = variables.get("BATCH_SIZE")
-    if variables.get("USE_GPU") is not None:
-        USE_GPU = variables.get("USE_GPU")
-    if variables.get("DEVICE") is not None:
-        DEVICE = variables.get("DEVICE") 
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if variables.get("vocab_size") is not None:
-        vocab_size = variables.get("vocab_size")
-    if variables.get("label_size") is not None:
-        label_size = variables.get("label_size")
-    if variables.get("BATCH_SIZE") is not None:
-        label_size = variables.get("BATCH_SIZE")
-    if variables.get("MODEL_CLASS") is not None:
-        MODEL_CLASS = variables.get("MODEL_CLASS")
-    if variables.get("MODEL_DEF") is not None:
-        MODEL_DEF = variables.get("MODEL_DEF")
-
-
-#--------Load Dataset--------
-
-if 'variables' in locals():
-    if variables.get("DATASET_PATH") is not None:
-        DATASET_PATH = variables.get("DATASET_PATH")
-    if variables.get("DATASET_ITERATOR") is not None:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR)
-    if variables.get("DATASET_ITERATOR_UNL") is not None:
-        DATASET_ITERATOR_UNL = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR_UNL)
-    #Load model files
-    if variables.get("LABELS_PATH") is not None:
-        LABELS_PATH = variables.get("LABELS_PATH")
-    if variables.get("TEXT_PATH") is not None:
-        TEXT_PATH = variables.get("TEXT_PATH")
-   
-#-------Main--------
-def evaluate(model, test, data_iter, label_field, loss_function, name):
-    model.eval()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    i=0
-    acc = 0
-    pd.options.display.max_colwidth = 500
-    result =  pd.DataFrame(columns=['text','Predictions','Targets'])
-    for batch in data_iter:
-        i=i+1
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = len(test)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        for i in range(model.batch_size):
-            test_fields = vars(test[i])
-            test_text = test_fields["text"]
-            test_label = test_fields["label"]
-            prede_label = pred_label[i]
-            gd_label = label[i]
-            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
-        pred_res += [x for x in pred_label]
-        if name is 'test_labeled':
-            loss = loss_function(pred, label)
-            avg_loss += loss.item()
-    if name is 'test_labeled':
-        avg_loss /= len(test)
-        pred_res = torch.LongTensor(pred_res)
-        acc = get_accuracy(truth_res, pred_res)
-        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
-    return acc, result
-    
-def get_accuracy(truth, pred):
-     assert len(truth)==len(pred)
-     right = 0
-     for i in range(len(truth)):
-         if truth[i]==pred[i]:
-             right += 1.0
-     return right/len(truth)
-     
-LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
-
-exec(LOSS)
-
-
-label_field = pickle.load(open(LABELS_PATH,'rb'))
-text_field = pickle.load(open(TEXT_PATH,'rb'))
-exec(MODEL_CLASS)
-
-MODEL=torch.load(MODEL_PATH)
-if variables.get("DATASET_ITERATOR_UNL") is not None:
-    print('I am testing the unlabeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_unlabeled')
-else:
-    print('I am testing the labeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_labeled')
-
-#------plot results-----
-# Forward results for preview 
-try:
-    variables.put("PREDICT_DATA_JSON", results.to_json(orient='split'))
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END Predict_Text_Classification_Model")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-      <metadata>
-        <positionTop>
-            627.5
-        </positionTop>
-        <positionLeft>
-            818.234375
+            471.25
         </positionLeft>
       </metadata>
     </task>
     <task name="Preview_Results">
       <description>
-        <![CDATA[ Preview the predicted results ]]>
+        <![CDATA[ Preview the predicted results. ]]>
       </description>
       <variables>
         <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
         <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-        <variable inherited="true" name="OUTPUT_FILE" value="HTML"/>
+        <variable inherited="false" name="OUTPUT_FILE" value="HTML"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png"/>
@@ -1343,173 +451,159 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Preview_Results")
-
-import base64
-import pandas as pd
-from PIL import Image
-from io import BytesIO
-
-if 'variables' in locals():
-  PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
-  OUTPUT_FILE = variables.get("OUTPUT_FILE")
-
-assert PREDICT_DATA is not None
-df = pd.read_json(PREDICT_DATA, orient='split')  
-
-# check the predictions
-if {'Predictions','Targets'}.issubset(df.columns):
-	pred_result =[]
-	for indice in range(len(df)):
-		if df['Predictions'][indice] == df['Targets'][indice]:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/tick_green.png?raw=true'
-			pred_result.append(result)
-		else:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/close_red.png?raw=true'
-			pred_result.append(result)
-	df_pred_image_url = pd.DataFrame(pred_result)
-	df['Results'] = df_pred_image_url
- 
-def get_thumbnail(path):
-  i = Image.open(path)
-  extension = i.format
-  i.thumbnail((200, 200), Image.LANCZOS)
-  return i, extension
-
-def image_base64(im):
-  if isinstance(im, str):
-    im, extension = get_thumbnail(im)
-  with BytesIO() as buffer:
-    im.save(buffer, extension)
-    return base64.b64encode(buffer.getvalue()).decode()
-
-def image_formatter(im):
-  extension = im.format
-  return f'<img src="data:image/extension;base64,{image_base64(im)}" height="200" width="200">'
-
-def image_formatter_url(im_url):
-  return """<img src="{0}" height="50" width="50"/>""".format(im_url)
-  
-
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-  result = df.to_html(escape=False, formatters=dict(Images=image_formatter, Outputs=image_formatter, Results=image_formatter_url))
-
-css_style="""
-table {
-  border: 1px solid #999999;
-  text-align: center;
-  border-collapse: collapse;
-  width: 100%; 
-}
-td {
-  border: 1px solid #999999;         
-  padding: 3px 2px;
-  font-size: 13px;
-  border-bottom: 1px solid #999999;
-  #border-bottom: 1px solid #FF8C00;  
-  border-bottom: 1px solid #0B6FA4;   
-}
-th {
-  font-size: 17px;
-  font-weight: bold;
-  color: #FFFFFF;
-  text-align: center;
-  background: #0B6FA4;
-  #background: #E7702A;       
-  #border-left: 2px solid #999999
-  border-bottom: 1px solid #FF8C00;            
-}
-"""
-result = """
-     
-            
-            
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <style>{0}</style>
-                </head>
-                <body>{1}</body></html>
-""".format(css_style, result)
-
-if OUTPUT_FILE == 'HTML':  
-    result = result.encode('utf-8')
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "result.html")
-    resultMetadata.put("content.type", "text/html")
-else:
-  print('It is not possible to preview the HTML format!')
-
-print("END Preview_Results")
-]]>
-              </code>
-            </script>
-          </scriptExecutable>
-          <controlFlow block="none"/>
-          <metadata>
-            <positionTop>
-            756.5
-        </positionTop>
-            <positionLeft>
-            885.25
-        </positionLeft>
-          </metadata>
-        </task>
-      </taskFlow>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Preview_Results/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
       <metadata>
-        <visualization>
-          <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        <positionTop>
+            647.5
+        </positionTop>
+        <positionLeft>
+            658.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Predict_Text_Classification_Model">
+      <description>
+        <![CDATA[ Predict a model using a text classification network. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" name="LOSS_FUNCTION" value="NLLLoss"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Train_Text_Classification_Model"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
+        <files accessMode="transferFromGlobalSpace" includes="$MODEL_FOLDER/**"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="javascript">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Predict_Text_Classification_Model/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            519.5
+        </positionTop>
+        <positionLeft>
+            658.75
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1427px;
-            height:812px;
+            width:2864px;
+            height:3436px;
             }
-        </style></head><body><div style="position:relative;top:-219.5px;left:-212.75px"><div class="task ui-draggable" id="jsPlumb_1_296" style="top: 269.5px; left: 330.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png" width="20px">&nbsp;<span class="name">Import_Text_Dataset</span></a></div><div class="task ui-draggable" id="jsPlumb_1_299" style="top: 269.5px; left: 482.234px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png" width="20px">&nbsp;<span class="name">RNN</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_302" style="top: 397.484px; left: 406.484px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png" width="20px">&nbsp;<span class="name">Train_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_305" style="top: 525.5px; left: 312.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png" width="20px">&nbsp;<span class="name">Download_Model</span></a></div><div class="task ui-draggable" id="jsPlumb_1_308" style="top: 525.5px; left: 500.234px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_311" style="top: 654.5px; left: 567.25px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><svg style="position:absolute;left:384px;top:309.5px" width="122" height="88" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 101 87 C 111 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M90.298054,60.965058 L77.02839201723509,44.444886364597295 L78.41724737317675,53.55922017460624 L69.62255419184135,56.32569299142054 L90.298054,60.965058" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M90.298054,60.965058 L77.02839201723509,44.444886364597295 L78.41724737317675,53.55922017460624 L69.62255419184135,56.32569299142054 L90.298054,60.965058" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:485px;top:309.5px" width="57.5" height="88" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 87 C -10 37 46.5 50 36.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M0.5897029999999984,64.45866600000001 L16.245695407290114,50.17966387299988 L7.2363303175840095,52.13704494994552 L3.9240743572356216,43.533036555415876 L0.5897029999999984,64.45866600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M0.5897029999999984,64.45866600000001 L16.245695407290114,50.17966387299988 L7.2363303175840095,52.13704494994552 L3.9240743572356216,43.533036555415876 L0.5897029999999984,64.45866600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:358.5px;top:436.5px" width="147.5" height="90" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 136.5 50 126.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M15.516288,61.85427200000001 L36.52729230510467,59.10878514137674 L28.019681080811196,55.55624362067981 L30.229263925784473,46.60539206056555 L15.516288,61.85427200000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M15.516288,61.85427200000001 L36.52729230510467,59.10878514137674 L28.019681080811196,55.55624362067981 L30.229263925784473,46.60539206056555 L15.516288,61.85427200000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:485px;top:436.5px" width="119" height="90" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 98 89 C 108 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M87.701152,62.696326 L74.87876093870904,45.826640541422954 L76.02298123808013,54.97490594566802 L67.15734088437705,57.50481130334281 L87.701152,62.696326" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M87.701152,62.696326 L74.87876093870904,45.826640541422954 L76.02298123808013,54.97490594566802 L67.15734088437705,57.50481130334281 L87.701152,62.696326" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 384.5px; top: 300px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 522px; top: 300px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 485.5px; top: 427px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 485.5px; top: 387px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 359px; top: 556px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 359px; top: 516px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 583.5px; top: 556px; visibility: visible;" dragid="jsPlumb_1_325" elid="jsPlumb_1_308"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 583.5px; top: 516px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 613px; top: 685px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:583px;top:565.5px" width="50.5" height="90" pointer-events="none" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 29.5 89 C 39.5 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" d="M29.694300875,66.74071675 L28.348853261728145,45.59385479083592 L24.23969552151626,53.847025252304455 L15.455161764032596,51.04846014431966 L29.694300875,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 613px; top: 645px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-          xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></body></html>
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-258.5px;left:-466.25px"><div class="task ui-draggable active-task" id="jsPlumb_1_231" style="top: 263.5px; left: 489.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png" width="20px">&nbsp;<span class="name">Import_Text_Dataset</span></a></div><div class="task ui-draggable" id="jsPlumb_1_234" style="top: 263.5px; left: 640.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png" width="20px">&nbsp;<span class="name">RNN</span></a></div><div class="task ui-draggable" id="jsPlumb_1_237" style="top: 391.5px; left: 565px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png" width="20px">&nbsp;<span class="name">Train_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_240" style="top: 519.5px; left: 471.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png" width="20px">&nbsp;<span class="name">Download_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_243" style="top: 647.5px; left: 658.75px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><div class="task ui-draggable" id="jsPlumb_1_246" style="top: 519.5px; left: 658.75px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Text_Classification_Model</span></a></div><svg style="position:absolute;left:542px;top:303.5px" width="122.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 101.5 88 C 111.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M90.73087100000001,61.830692 L77.53854889082004,45.248694612241145 L78.8847998762344,54.36941872188677 L70.07727561270681,57.09476573600676 L90.73087100000001,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M90.73087100000001,61.830692 L77.53854889082004,45.248694612241145 L78.8847998762344,54.36941872188677 L70.07727561270681,57.09476573600676 L90.73087100000001,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:643.5px;top:303.5px" width="58" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 47 50 37 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.6369939999999978,65.364084 L16.287082124974148,51.078610900359834 L7.2785269871448195,53.039716284751194 L3.9627144097253364,44.437077913215006 L0.6369939999999978,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.6369939999999978,65.364084 L16.287082124974148,51.078610900359834 L7.2785269871448195,53.039716284751194 L3.9627144097253364,44.437077913215006 L0.6369939999999978,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:516.5px;top:431.5px" width="148" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 137 50 127 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M15.588863999999997,60.999424000000005 L36.62017047610894,58.414052090974465 L28.139864815648103,54.79681337820529 L30.41755985431422,45.863051275326356 L15.588863999999997,60.999424000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M15.588863999999997,60.999424000000005 L36.62017047610894,58.414052090974465 L28.139864815648103,54.79681337820529 L30.41755985431422,45.863051275326356 L15.588863999999997,60.999424000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 542.5px; top: 294px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 681px; top: 294px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected endpointDrag" style="position: absolute; height: 20px; width: 20px; left: 644px; top: 422px; visibility: visible;" dragid="jsPlumb_1_257" elid="jsPlumb_1_237"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 644px; top: 382px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 517px; top: 550px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 517px; top: 510px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 703.5px; top: 678px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 742.5px; top: 550px; visibility: visible;" dragid="jsPlumb_1_269" elid="jsPlumb_1_246"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:643.5px;top:431.5px" width="119.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 98.5 88 C 108.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M88.13396900000001,61.830692 L75.15923071428756,45.07789622086905 L76.38630595689463,54.21541701969522 L67.54395573398278,56.82555926397443 L88.13396900000001,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 742.5px; top: 510px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:703px;top:559.5px" width="60" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 49 50 39 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.8261579999999977,65.364084 L16.769100218015062,51.4061975757224 L7.721817134665953,53.1800828058726 L4.58509902388766,44.510538441056454 L0.8261579999999977,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 703.5px; top: 638px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
-        </visualization>
-      </metadata>
-    </job>
+    </visualization>
+  </metadata>
+</job>

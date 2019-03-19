@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="SQL_Pooled_Connection_Query" projectName="2. SQL" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  <variables>
+    <variable name="RDBMS_NAME" value="HSQLDB" model="PA:LIST(PostgreSQL, MySQL, Greenplum, SQL Server, Oracle, HSQLDB)"/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow is a template that demonstrates how to use pooled connections to SQL databases across multiple SQL tasks (basically when running several Tasks concurrently on the same machine). The workflow template is based on the replicate control flow where the split task is Open_Pooled_Connection, the process task is Execute_Query_Statements and finally the merge task is Merge_Result_Set. It is executed using a single variable
+$RDBMS_NAME which allows the user to choose the relational database management system e.g. PostgreSQL, MySQL, Greenplum, HSQLDB, Oracle...
+
+To allow the persistence of a single connection across multiple tasks executions, the scheduler should be configured in non-forked mode to execute tasks in a single JVM rather than starting a dedicated JVM to run the task (In $PROACTIVE_HOME/config/scheduler/settings.ini, please set pa.scheduler.task.fork=false).
+Besides, you have to download the jdbc connector jar file of the used rdbms, and copy it into the addons directory ($PROACTIVE_HOME/addons) of the scheduler. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
+    <info name="Documentation" value="https://doc.activeeon.com/dev/user/ProActiveUserGuide.html#_database_connections_pooling"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Open_Pooled_Connection" >
+      <description>
+        <![CDATA[ This task allows to open a pooled connection to any SQL database.
+If it requires a password, you have to add it using the following third-party credential: {key: rdbms_protocol://<username>@<host>:<port>, value: RDBMS_PASSWORD}.
+Please refer to the User documentation to learn how to add third-party credentials.
+This task is executed with the following variables:
+$RDBMS_NAME (required) is the name of the relational database management system e.g. PostgreSQL, MySQL, Greenplum, HSQLDB, Oracle...
+$HOST (required) is the server host. Default value is localhost.
+$USERNAME (required) is the username used for accessing the SQL database.
+$PORT (optional) is the listening port.
+$DATABASE (required) is the database name.
+$POOL_PROPERTY (optional) HikariCP offers many data source properties that can be used to configure the DB pooled connection such as autoCommit, maximumPoolSize, maxLifetime, idleTimeout .... You can add as many properties as you want. For each one, add a new task variable where the variable name is the property name having "POOL_"  as a prefix (e.g. POOL_autoCommit, POOL_maximumPoolSize) and the variable value is the property value. For more info, please refer to https://github.com/brettwooldridge/HikariCP. ]]>
+      </description>
+      <variables>
+        <variable name="RDBMS_NAME" value="" inherited="true" />
+        <variable name="HOST" value="localhost" inherited="false" />
+        <variable name="PORT" value="" inherited="false" />
+        <variable name="USERNAME" value="scheduler" inherited="false" />
+        <variable name="DATABASE" value="scheduler" inherited="false" />
+        <variable name="POOL_autoCommit" value="True" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/dev/user/ProActiveUserGuide.html#_database_connections_pooling"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.sql.ResultSet
+import org.ow2.proactive.scheduler.examples.connectionpooling.*
+import groovy.ui.SystemOutputInterceptor
+    
+/**
+* This method initializes the default data base properties (port, connection protocol and drivers, etc)
+*/
+def init(String protocol, String port, String dataSourceClassName){
+    RDBMS_PROTOCOL = protocol
+    RDBMS_DEFAULT_PORT = port
+    RDBMS_DATA_SOURCE_CLASS_NAME = dataSourceClassName
+}
+
+// Retrieve the DBMS name
+RDBMS_NAME = variables.get("RDBMS_NAME")
+println("BEGIN Pooled Connection to " + RDBMS_NAME + " database")
+
+RDBMS_PROTOCOL = ""
+RDBMS_DEFAULT_PORT = ""
+RDBMS_DATA_SOURCE_CLASS_NAME = ""
+
+if (RDBMS_NAME.equals("PostgreSQL")){
+    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
+} else if (RDBMS_NAME.equals("MySQL")){
+    init("mysql", "3306", "com.mysql.cj.jdbc.Driver")
+} else if (RDBMS_NAME.equals("Greenplum")){
+    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
+} else if (RDBMS_NAME.equals("SQL Server")){
+    init("sqlserver", "1433", "com.microsoft.sqlserver.jdbc.SQLServerDataSource")
+} else if (RDBMS_NAME.equals("Oracle")){
+    init("oracle" ,"1521", "oracle.jdbc.pool.OracleDataSource")
+} else if (RDBMS_NAME.equals("HSQLDB")){
+    init("hsqldb:hsql" ,"9001", "org.hsqldb.jdbc.JDBCDataSource")
+} else {
+    throw new IllegalArgumentException("You must specify a valid RDBMS name in the script arguments amongst PostgreSQL, MySQL, Greenplum, SQL Server, HSQLDB or Oracle")
+}
+     
+host = variables.get("HOST")
+if (!host) {
+    throw new IllegalArgumentException("ERROR: HOST variable is not provided by the user. Empty value is not allowed.")
+}
+
+username = variables.get("USERNAME")
+if (!username) {
+    throw new IllegalArgumentException("ERROR: USERNAME variable is not provided by the user. Empty value is not allowed.")
+}
+
+port = variables.get("PORT")
+if (!port) {
+    port = RDBMS_DEFAULT_PORT
+    println("WARNING: PORT variable is not provided by the user. Using the default value:" + RDBMS_DEFAULT_PORT)
+}
+
+database = variables.get("DATABASE")
+if (!database) {
+    throw new IllegalArgumentException("ERROR: DATABASE variable is not provided by the user. Empty value is not allowed.")
+}
+
+// This key is used for getting the password from 3rd party credentials.
+CREDENTIALS_KEY = RDBMS_PROTOCOL + "://" + username + "@" + host + ":" + port
+CREDENTIALS_KEY_MSG = RDBMS_PROTOCOL + "://<username>@<host>:<port>"
+password = credentials.get(CREDENTIALS_KEY)
+if (!password) {
+    println("WARNING: Your didn't add your password to 3rd-party credentials under the key :\"" + CREDENTIALS_KEY + "\"");
+}
+
+//Construct the jdbc URL
+jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + "/"+ database
+//Oracle is a particular case
+if(RDBMS_PROTOCOL.equals("oracle")){
+    jdbcUrl = "jdbc:oracle:thin:@//" + host + ":" + port + "/"+ database
+}
+interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
+interceptor.start()
+if(password){
+    dbConnectionDetailsBuilder = new DBConnectionDetails.Builder().jdbcUrl(jdbcUrl).username(username).password(password)
+}else{
+    dbConnectionDetailsBuilder = new DBConnectionDetails.Builder().jdbcUrl(jdbcUrl).username(username)
+}
+//Add (optional) data source properties to configure the DB pooled connection
+variables.entrySet().each { var -> 
+    if (var.getKey().startsWith("POOL_")){
+        dbConnectionDetailsBuilder.addDataSourceProperty(var.getKey().replace("POOL_", ""), var.getValue())
+    }}
+
+//Open the pooled connection to the database
+dbConnectionDetails = dbConnectionDetailsBuilder.build()
+variables.put("dbConnectionDetails", dbConnectionDetails)
+
+interceptor.stop()
+
+println("END Pooled Connection to " + RDBMS_NAME + " database")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=5
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+    </task>
+    <task name="Execute_Query_Statements" >
+      <description>
+        <![CDATA[ This task allows to execute any SQL query statements on an SQL database.
+If it requires a password, you have to add it using the following third-party credential: {key: rdbms_protocol://<username>@<host>:<port>, value: RDBMS_PASSWORD}.
+Please refer to the User documentation to learn how to add third-party credentials.
+This task is executed with the following variables:
+$SQL_STATEMENTS is a string composed of a set of query statements (SELECT statement). ]]>
+      </description>
+      <variables>
+        <variable name="SQL_STATEMENTS" value="select * from JOB_DATA" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/dev/user/ProActiveUserGuide.html#_database_connections_pooling"/>
+      </genericInformation>
+      <depends>
+        <task ref="Open_Pooled_Connection"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.sql.ResultSet
+import org.ow2.proactive.scheduler.examples.connectionpooling.*
+import groovy.ui.SystemOutputInterceptor
+
+
+// Retrieve the DBMS name
+RDBMS_NAME = variables.get("RDBMS_NAME")
+println("BEGIN execute query in " + RDBMS_NAME + " database")
+
+sqlStatements = variables.get("SQL_STATEMENTS")   
+if (!sqlStatements){
+    throw new IllegalArgumentException("ERROR: SQL_STATEMENTS variable is not provided by the user. Empty value is not allowed.")
+}
+
+
+interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
+interceptor.start()
+
+dbConnectionDetails = variables.get("dbConnectionDetails")
+dBConnectionPoolsHolder = DBConnectionPoolsHolder.getInstance();
+ResultSet rs = dBConnectionPoolsHolder.executeQuery(dbConnectionDetails, sqlStatements)
+variables.put("ResultSet", rs)
+
+interceptor.stop()
+
+println("END execute query in " + RDBMS_NAME + " database")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+    <task name="Merge_Result_Set" >
+      <description>
+        <![CDATA[ As a merge operation, we simply print the ResultSet from previous tasks.
+For more info about ResultSet, please refer to https://docs.oracle.com/javase/9/docs/api/java/sql/ResultSet.html ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/dev/user/ProActiveUserGuide.html#_database_connections_pooling"/>
+      </genericInformation>
+      <depends>
+        <task ref="Execute_Query_Statements"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.sql.ResultSet
+import java.sql.ResultSetMetaData
+
+ResultSet rs = variables.get("ResultSet")
+ResultSetMetaData rsmd = rs.getMetaData();
+
+while (rs.next()) {
+    for (int i = 1; i <= rsmd.getColumnCount(); i++) {
+        String columnValue = rs.getString(i);
+        print(rsmd.getColumnName(i) + " = " + columnValue + ",  ");
+    }
+    println("")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2134px;
+            height:2176px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-195px;left:-458.5px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_94" style="top: 200px; left: 463.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png" width="20px">&nbsp;<span class="name">Open_Pooled_Connection</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_97" style="top: 328px; left: 463.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png" width="20px">&nbsp;<span class="name">Execute_Query_Statements</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_100" style="top: 456px; left: 463.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png" width="20px">&nbsp;<span class="name">Merge_Result_Set</span></a></div><svg style="position:absolute;left:575.1px;top:229.5px" width="26.600000000000023" height="99" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 5.600000000000023 88 C 15.600000000000023 88 -10 -10 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M7.87512690000002,77.41936575 L12.982743866927905,56.85453536122338 L6.571740202092891,63.480169822123855 L-0.9564520609482345,58.157922059130506 L7.87512690000002,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M7.87512690000002,77.41936575 L12.982743866927905,56.85453536122338 L6.571740202092891,63.480169822123855 L-0.9564520609482345,58.157922059130506 L7.87512690000002,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_108" style="position: absolute; transform: translate(-50%, -50%); left: 587.9px; top: 279.75px;">replicate</div><svg style="position:absolute;left:529.5px;top:239.5px" width="24.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 3.5 88 C 13.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M6.031265625,66.78168750000002 L11.53929128462053,46.32046433683204 L5.000190602067454,52.819707543808825 L-2.422688671570663,47.35153935976458 L6.031265625,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M6.031265625,66.78168750000002 L11.53929128462053,46.32046433683204 L5.000190602067454,52.819707543808825 L-2.422688671570663,47.35153935976458 L6.031265625,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:512px;top:367.5px" width="42" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 31 50 21 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-1.037664000000001,66.303232 L11.540878098668895,49.25095125307308 L3.0845370566335255,52.92386510732942 L-1.8384887940016794,45.128750196439555 L-1.037664000000001,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-1.037664000000001,66.303232 L11.540878098668895,49.25095125307308 L3.0845370566335255,52.92386510732942 L-1.8384887940016794,45.128750196439555 L-1.037664000000001,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 530px; top: 230px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 575.6px; top: 230px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 533.5px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 581.2px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 533.5px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 512.5px; top: 486px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 512.5px; top: 446px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
