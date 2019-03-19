@@ -110,7 +110,22 @@ if alg.is_supervised:
   elif alg.name == 'LogisticRegression':
     from sklearn.linear_model import LogisticRegression
     model = LogisticRegression(**vars)
-
+  elif alg.name == 'AdaBoost' and alg.type == 'classification':
+    from sklearn.ensemble import AdaBoostClassifier
+    model = AdaBoostClassifier(**vars)
+  elif alg.name == 'GradientBoosting' and alg.type == 'classification':
+    from sklearn.ensemble import GradientBoostingClassifier
+    model = GradientBoostingClassifier(**vars)
+  elif alg.name == 'RandomForest' and alg.type == 'classification':
+    from sklearn.ensemble import RandomForestClassifier
+    model = RandomForestClassifier(**vars)
+  elif alg.name == 'XGBoost' and alg.type == 'classification':
+    from xgboost.sklearn import XGBClassifier
+    model = XGBClassifier(**vars)   
+  elif alg.name == 'CatBoost' and alg.type == 'classification':
+    from catboost import CatBoostClassifier
+    model = CatBoostClassifier(**vars)       
+ 
   #-------------------------------------------------------------
   # Regression algorithms   
   elif alg.name == 'TPOT_Regressor':
@@ -146,6 +161,22 @@ if alg.is_supervised:
   elif alg.name == 'BayesianRidgeRegression':
     from sklearn.linear_model import BayesianRidge
     model = BayesianRidge(**vars)
+  elif alg.name == 'AdaBoost' and alg.type == 'regression':
+    from sklearn.ensemble import AdaBoostRegressor        
+    model = AdaBoostRegressor(**vars)
+  elif alg.name == 'GradientBoosting' and alg.type == 'regression':
+    from sklearn.ensemble import GradientBoostingRegressor
+    model = GradientBoostingRegressor(**vars)
+  elif alg.name == 'RandomForest' and alg.type == 'regression':
+    from sklearn.ensemble import RandomForestRegressor
+    #model = RandomForestRegressor(**vars)
+    model=  RandomForestRegressor(n_estimators = 1000, random_state = 42)
+  elif alg.name == 'XGBoost' and alg.type == 'regression':
+    from xgboost.sklearn import XGBRegressor
+    model = XGBRegressor(**vars)   
+  elif alg.name == 'CatBoost' and alg.type == 'regression':
+    from catboost import CatBoostRegressor
+    model = CatBoostRegressor(**vars)     
 else:
   #-------------------------------------------------------------
   # Anomaly detection algorithms
