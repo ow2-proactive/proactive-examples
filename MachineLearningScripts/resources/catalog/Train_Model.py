@@ -71,9 +71,10 @@ try:
 except:
     alg.sampling=False
 model = None
-print("alg.is_supervised",alg.is_supervised)
-print("alg.name",alg.name)
-print("alg.type",alg.type)
+
+print("alg.is_supervised: ", alg.is_supervised)
+print("alg.name: ", alg.name)
+print("alg.type: ", alg.type)
 
 if alg.is_supervised:
   #-------------------------------------------------------------
@@ -169,8 +170,7 @@ if alg.is_supervised:
     model = GradientBoostingRegressor(**vars)
   elif alg.name == 'RandomForest' and alg.type == 'regression':
     from sklearn.ensemble import RandomForestRegressor
-    #model = RandomForestRegressor(**vars)
-    model=  RandomForestRegressor(n_estimators = 1000, random_state = 42)
+    model = RandomForestRegressor(**vars)
   elif alg.name == 'XGBoost' and alg.type == 'regression':
     from xgboost.sklearn import XGBRegressor
     model = XGBRegressor(**vars)   
