@@ -6,6 +6,8 @@ if str(variables.get("TASK_ENABLED")).lower() != 'true':
 
 print("BEGIN " + __file__)
 
+import xml.sax.saxutils as saxutils 
+from termcolor import colored
 import os, sys, bz2, uuid, json
 import random, pickle, sklearn
 import numpy as np
@@ -105,7 +107,9 @@ if is_labeled_data:
   # CLASSIFICATION AND ANOMALY DETECTION SCORE
   #
   if alg.type == 'classification' or alg.type == 'anomaly':
-    dataframe['accuracy'] = np.where((dataframe[LABEL_COLUMN] == dataframe['predictions']), 1, 0)
+    reponse_good = '&#9989;'
+    reponse_bad = '&#10060;'   
+    dataframe['results'] = np.where((dataframe[LABEL_COLUMN] == dataframe['predictions']), saxutils.unescape(reponse_good), saxutils.unescape(reponse_bad))
     accuracy_score_result = accuracy_score(dataframe_label.values.ravel(), predictions)
     precision_score_result = precision_score(dataframe_label.values.ravel(), predictions, average='micro')
     confusion_matrix_result = confusion_matrix(dataframe_label.values.ravel(), predictions)
