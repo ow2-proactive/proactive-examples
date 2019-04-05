@@ -2,6 +2,9 @@
 <job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Visdom_Realtime_Digit_Classification" onTaskError="cancelJob" priority="normal" projectName="2. Visdom Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable model="PA:Boolean" name="DOCKER_GPU_ENABLED" value="False"/>
+    <variable model="PA:LIST(activeeon/dlm3,activeeon/cuda)" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+    <variable model="PA:LIST(,CPU,GPU)" name="NODE_SOURCE_NAME" value=""/>
   </variables>
   <description>
     <![CDATA[ Show an example of realtime plotting using the Visdom server for training a convolutional neural network (CNN) for MNIST digit classification. ]]>
@@ -17,41 +20,90 @@
       <description>
         <![CDATA[ The simplest task, ran by a python engine. ]]>
       </description>
-      <variables>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-        <variable inherited="false" name="VISDOM_ENDPOINT" value=""/>
-      </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
       </genericInformation>
       <depends>
         <task ref="Start_Visdom_Service"/>
       </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+selected = false
+NODE_SOURCE_NAME = variables.get("NODE_SOURCE_NAME")
+if (NODE_SOURCE_NAME) {
+	selected = (System.getProperty("proactive.node.nodesource").equals(NODE_SOURCE_NAME));
+} else {
+    selected = true
+}
+]]>
+          </code>
+        </script>
+      </selection>
       <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
             <code language="python">
               <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters
-  containerName = 'activeeon/dlm3'
-  dockerRunCommand =  'docker run '
-  dockerParameters = '--rm '
-  # Prepare ProActive home volume
-  paHomeHost = variables.get("PA_SCHEDULER_HOME")
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-  # Prepare working directory (For Dataspaces and serialized task file)
-  workspaceHost = localspace
-  workspaceContainer = localspace
-  workspaceVolume = '-v '+localspace +':'+localspace+' '
-  # Prepare container working directory
-  containerWorkingDirectory = '-w '+workspaceContainer+' '
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+#%% fork environment (python)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+    if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+        DOCKER_ENABLED = False
+
+DOCKER_IMAGE = 'activeeon/dlm3'
+if variables.get("DOCKER_IMAGE") is not None:
+    DOCKER_IMAGE = variables.get("DOCKER_IMAGE")
+
+DOCKER_GPU_ENABLED = False
+if variables.get("DOCKER_GPU_ENABLED") is not None:
+    if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'true':
+        DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+    if os.path.isdir(CUDA_HOME) == True:
+        CUDA_ENABLED = True
 else:
-  print("Fork environment disabled")
+    if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+        CUDA_ENABLED = True
+
+DOCKER_RUN_CMD = 'docker run '
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+    DOCKER_RUN_CMD += '--runtime=nvidia '
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_IMAGE:       ' + DOCKER_IMAGE)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+    # Prepare Docker parameters
+    containerName = DOCKER_IMAGE
+    dockerRunCommand =  DOCKER_RUN_CMD
+    dockerParameters = '--rm '
+    # Prepare ProActive home volume
+    paHomeHost = variables.get("PA_SCHEDULER_HOME")
+    paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+    proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+    # Prepare working directory (For Dataspaces and serialized task file)
+    workspaceHost = localspace
+    workspaceContainer = localspace
+    workspaceVolume = '-v '+localspace +':'+localspace+' '
+    # Prepare container working directory
+    containerWorkingDirectory = '-w '+workspaceContainer+' '
+    # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+    preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+
+    print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+    print("Fork environment disabled")
 ]]>
             </code>
           </script>
@@ -250,7 +302,6 @@ def test(epoch):
 for epoch in range(1, args.epochs+1):
     train(epoch)
     test(epoch)
-
 ]]>
           </code>
         </script>
@@ -258,10 +309,10 @@ for epoch in range(1, args.epochs+1):
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            281.4062805175781
+            280.316650390625
         </positionTop>
         <positionLeft>
-            328.732666015625
+            328.7166442871094
         </positionLeft>
       </metadata>
     </task>
@@ -294,10 +345,10 @@ variables.put("ENDPOINT_VISDOM",variables.get("ENDPOINT_" + variables.get("INSTA
       </post>
       <metadata>
         <positionTop>
-            122.51736450195312
+            122.43333435058594
         </positionTop>
         <positionLeft>
-            298.90625
+            298.8999938964844
         </positionLeft>
       </metadata>
     </task>
@@ -308,17 +359,18 @@ variables.put("ENDPOINT_VISDOM",variables.get("ENDPOINT_" + variables.get("INSTA
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2351px;
-            height:3002px;
+            width:2683px;
+            height:3635px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-117.51736450195312px;left:-293.90625px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_275" style="top: 281.407px; left: 328.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Train_CNN</span></a></div><div class="task ui-draggable" id="jsPlumb_1_278" style="top: 122.524px; left: 298.906px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_Service</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 369px; top: 311px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 356.906px; top: 152.524px; visibility: visible;" dragid="jsPlumb_1_282" elid="jsPlumb_1_278"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:356.40625px;top:162.02432250976562px" width="33.09375" height="119.47567749023438" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 12.09375 118.47567749023438 C 22.09375 68.47567749023438 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-117.43333435058594px;left:-293.8999938964844px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 280.316px; left: 328.717px;" id="jsPlumb_1_314"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Train_CNN</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 122.433px; left: 298.9px;" id="jsPlumb_1_317"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_Service</span></a></div><svg style="position:absolute;left:355px;top:161.5px" width="34.5" height="119" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 13.5 118 C 23.5 68 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M13.604407312500001,90.56245185675049 L17.438804014941848,69.72264854845837 L11.447013888159443,76.7296772394652 L3.6060293976565605,71.88004197279894 L13.604407312500001,90.56245185675049" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 369px; top: 271px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M14.850657000000002,90.140896 L18.38436646409238,69.24800492615901 L12.494165518283856,76.34064426691197 L4.584114731004348,71.60449640787516 L14.850657000000002,90.140896" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M14.850657000000002,90.140896 L18.38436646409238,69.24800492615901 L12.494165518283856,76.34064426691197 L4.584114731004348,71.60449640787516 L14.850657000000002,90.140896" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div style="position: absolute; height: 20px; width: 20px; left: 369px; top: 310px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 369px; top: 270px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 355.5px; top: 152px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
