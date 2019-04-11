@@ -2,6 +2,7 @@ print("BEGIN Predict_Text_Classification_Model")
 
 import os
 import torch
+import numpy as np
 import pandas as pd
 import torch.nn as nn
 import dill as pickle
@@ -14,6 +15,7 @@ import torch.optim as optim
 from torchtext import datasets
 import torch.nn.functional as F
 from torch.autograd import Variable
+import xml.sax.saxutils as saxutils 
 from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
 
 pd.options.display.max_colwidth = 500
@@ -127,6 +129,10 @@ if variables.get("DATASET_ITERATOR_UNL") is not None:
 else:
     print('I am testing the labeled dataset')
     test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_labeled')
+
+reponse_good = '&#9989;'
+reponse_bad = '&#10060;'
+results['Results'] = np.where((results['Predictions'] == results['Targets']), saxutils.unescape(reponse_good), saxutils.unescape(reponse_bad)) 
 
 #------plot results-----
 # Forward results for preview 
