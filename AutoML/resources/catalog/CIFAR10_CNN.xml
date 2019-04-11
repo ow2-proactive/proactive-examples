@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="CIFAR10_CNN" onTaskError="cancelJob" priority="normal" projectName="2. Objective ML Examples" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
-    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+    <variable model="PA:LIST(,CPU,GPU)" name="NODE_SOURCE_NAME" value=""/>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable model="PA:Boolean" name="DOCKER_GPU_ENABLED" value="False"/>
+    <variable model="PA:LIST(activeeon/dlm3,activeeon/cuda,activeeon/tensorflow:latest,activeeon/tensorflow:latest-gpu)" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
     <variable name="INPUT_VARIABLES" value=""/>
     <variable name="SEARCH_SPACE" value="{&quot;OPTIMIZER&quot;: choice([&quot;Adam&quot;, &quot;SGD&quot;, &quot;RMSprop&quot;]),&quot;LEARNING_RATE&quot;: choice([0.0001, 0.00025]), &quot;BATCH_SIZE&quot;: choice([32, 64]), &quot;WEIGHT_DECAY&quot;: choice([0.0005, 0.005])}"/>
   </variables>
@@ -22,8 +24,6 @@
 You can see more details in: https://github.com/prakritidev/DeepLearning/blob/master/Keras/Convolutional%20Neural%20Network/CIFAR10_cnn.py ]]>
       </description>
       <variables>
-        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
-        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
         <variable inherited="false" name="NUM_EPOCHS" value="3"/>
         <variable inherited="false" name="BATCH_SIZE" value="32"/>
         <variable inherited="false" name="LEARNING_RATE" value="0.0001"/>
@@ -37,26 +37,15 @@ You can see more details in: https://github.com/prakritidev/DeepLearning/blob/ma
       </genericInformation>
       <selection>
         <script type="static">
-          <code language="python">
+          <code language="groovy">
             <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+selected = false
+NODE_SOURCE_NAME = variables.get("NODE_SOURCE_NAME")
+if (NODE_SOURCE_NAME) {
+	selected = (System.getProperty("proactive.node.nodesource").equals(NODE_SOURCE_NAME));
+} else {
+    selected = true
+}
 ]]>
           </code>
         </script>
@@ -66,26 +55,64 @@ selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLE
           <script>
             <code language="python">
               <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+#%% fork environment (python)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+    if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+        DOCKER_ENABLED = False
+
+DOCKER_IMAGE = 'activeeon/dlm3'
+if variables.get("DOCKER_IMAGE") is not None:
+    DOCKER_IMAGE = variables.get("DOCKER_IMAGE")
+
+DOCKER_GPU_ENABLED = False
+if variables.get("DOCKER_GPU_ENABLED") is not None:
+    if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'true':
+        DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+    if os.path.isdir(CUDA_HOME) == True:
+        CUDA_ENABLED = True
 else:
-  print("Fork environment disabled")
+    if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+        CUDA_ENABLED = True
+
+DOCKER_RUN_CMD = 'docker run '
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+    DOCKER_RUN_CMD += '--runtime=nvidia '
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_IMAGE:       ' + DOCKER_IMAGE)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+    # Prepare Docker parameters
+    containerName = DOCKER_IMAGE
+    dockerRunCommand =  DOCKER_RUN_CMD
+    dockerParameters = '--rm '
+    # Prepare ProActive home volume
+    paHomeHost = variables.get("PA_SCHEDULER_HOME")
+    paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+    proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+    # Prepare working directory (For Dataspaces and serialized task file)
+    workspaceHost = localspace
+    workspaceContainer = localspace
+    workspaceVolume = '-v '+localspace +':'+localspace+' '
+    # Prepare container working directory
+    containerWorkingDirectory = '-w '+workspaceContainer+' '
+    # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+    preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+
+    print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+    print("Fork environment disabled")
 ]]>
             </code>
           </script>
@@ -292,8 +319,10 @@ else:
 
 # Score trained model.
 scores = model.evaluate(x_test, y_test, verbose=1)
-print('Test loss:', scores[0])
-print('Test accuracy:', scores[1])
+loss = scores[0]
+acc = scores[1]
+print('Test loss:', loss)
+print('Test accuracy:', acc)
 
 ######################## AUTOML SETTINGS ##########################
 #"""
@@ -302,10 +331,14 @@ token = variables.get("TOKEN")
 token = json.loads(token)
 
 # Return the loss value
-result_map = {'token': token, 'loss':  scores[0]}
+result_map = {'token': token, 'loss':  loss}
 print('result_map: ', result_map)
 
 resultMap.put("RESULT_JSON", json.dumps(result_map))
+
+# To appear in Job Analytics
+resultMap.put("LOSS", str(loss))
+resultMap.put("ACCURACY", str(acc))
 #"""
 ###################################################################
 
@@ -317,10 +350,10 @@ print("END CIFAR10_CNN")
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            258.3507080078125
+            173.16668701171875
         </positionTop>
         <positionLeft>
-            475.74652099609375
+            255.71664428710938
         </positionLeft>
       </metadata>
     </task>
@@ -331,10 +364,10 @@ print("END CIFAR10_CNN")
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2351px;
-            height:3002px;
+            width:2683px;
+            height:3635px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-253.3507080078125px;left:-470.74652099609375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_770" style="top: 258.368px; left: 475.747px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/keras.png" width="20px">&nbsp;<span class="name">CIFAR10_CNN</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 517px; top: 289px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-168.16668701171875px;left:-250.71664428710938px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 173.172px; left: 255.719px;" id="jsPlumb_1_100"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/keras.png" width="20px">&nbsp;<span class="name">CIFAR10_CNN</span></a></div><div style="position: absolute; height: 20px; width: 20px; left: 297px; top: 203px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
