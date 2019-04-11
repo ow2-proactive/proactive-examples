@@ -4,6 +4,7 @@ import base64
 import pandas as pd
 from PIL import Image
 from io import BytesIO
+import xml.sax.saxutils as saxutils 
 
 if 'variables' in locals():
   PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
@@ -12,19 +13,6 @@ if 'variables' in locals():
 assert PREDICT_DATA is not None
 df = pd.read_json(PREDICT_DATA, orient='split')  
 
-# check the predictions
-if {'Predictions','Targets'}.issubset(df.columns):
-	pred_result =[]
-	for indice in range(len(df)):
-		if df['Predictions'][indice] == df['Targets'][indice]:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/tick_green.png?raw=true'
-			pred_result.append(result)
-		else:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/close_red.png?raw=true'
-			pred_result.append(result)
-	df_pred_image_url = pd.DataFrame(pred_result)
-	df['Results'] = df_pred_image_url
- 
 def get_thumbnail(path):
   i = Image.open(path)
   extension = i.format
@@ -48,8 +36,7 @@ def image_formatter_url(im_url):
 
 result = ''
 with pd.option_context('display.max_colwidth', -1):
-  result = df.to_html(escape=False, formatters=dict(Images=image_formatter, Outputs=image_formatter, Results=image_formatter_url))
-
+  result = df.to_html(escape=False, formatters=dict(Images=image_formatter, Outputs=image_formatter))
 css_style="""
 table {
   border: 1px solid #999999;

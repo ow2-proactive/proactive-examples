@@ -3,9 +3,11 @@ print("BEGIN Predict_Image_Classification_Model")
 import os
 import torch
 import json
+import numpy as np
 import pandas as pd
 from os.path import join
 from torch.autograd import Variable
+import xml.sax.saxutils as saxutils 
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
@@ -94,6 +96,9 @@ for index, elem in enumerate(image_target):
   image_input.append(dir_image_temp)
   image_name.append(com_data_name)
 
+reponse_good = '&#9989;'
+reponse_bad = '&#10060;'
+
 df_preds = pd.DataFrame(preds)
 df_label = pd.DataFrame(label_test)
 df_name = pd.DataFrame(image_name)
@@ -102,9 +107,9 @@ df_label.columns = ['Targets']
 df_name.columns = ['Image Names']
 df_test_image = pd.DataFrame(image_input)
 df_test_image.columns = ['Images']
-
 df = pd.concat([df_test_image, df_name, df_label, df_preds], axis=1)
-
+df['Results'] = np.where((df['Predictions'] == df['Targets']), saxutils.unescape(reponse_good), saxutils.unescape(reponse_bad)) 
+    
 if 'variables' in locals():
   variables.put("PREDICT_DATA_JSON", df.to_json(orient='split'))
   variables.put("BATCH_SIZE", BATCH_SIZE)

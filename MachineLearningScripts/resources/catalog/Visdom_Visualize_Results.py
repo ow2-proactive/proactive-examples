@@ -77,9 +77,9 @@ assert vis.check_connection()
 
 columns = []
 if alg.type == 'classification' and is_labeled_data:
-  columns = [LABEL_COLUMN, "predictions","accuracy"]
+  columns = [LABEL_COLUMN, "predictions", "results"]
 elif alg.type == 'regression' and is_labeled_data:
-  columns = [LABEL_COLUMN, "predictions","absolute_error"]
+  columns = [LABEL_COLUMN, "predictions", "absolute_error"]
 elif alg.type == 'clustering' and is_labeled_data:
   columns = [LABEL_COLUMN, "predictions"]
 else:
