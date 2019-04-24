@@ -9,6 +9,7 @@ print("BEGIN " + __file__)
 import pandas as pd
 import numpy as np
 import bz2
+import pantab
 
 OUTPUT_TYPE = variables.get("OUTPUT_TYPE")
 assert OUTPUT_TYPE is not None and OUTPUT_TYPE is not ""
@@ -73,6 +74,18 @@ if OUTPUT_TYPE == "JSON":
   resultMetadata.put("file.extension", ".json")
   resultMetadata.put("file.name", "dataframe.json")
   resultMetadata.put("content.type", "application/json")
+    
+if OUTPUT_TYPE == "TABLEAU":
+  result = dataframe.to_json(orient='split')
+  pantab.frame_to_hyper(dataframe, "dataframe.hyper")
+  FILE_BIN = None
+  with open("dataframe.hyper", "rb") as binary_file:
+      FILE_BIN = binary_file.read()
+  assert FILE_BIN is not None  
+  result = FILE_BIN
+  resultMetadata.put("file.extension", ".hyper")
+  resultMetadata.put("file.name", "dataframe.hyper")
+  resultMetadata.put("content.type", "application/octet-stream") 
 
 if OUTPUT_TYPE == "HTML":
   LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
