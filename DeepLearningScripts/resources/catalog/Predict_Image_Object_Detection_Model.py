@@ -165,6 +165,7 @@ if (NET_NAME == 'SSD'):
         unique_labels = []
         image_name = []
         label_name = []
+        img_out_name  = []
         color_list = genetate_color(_num_pred) 
     
         for img_paths in glob.glob(os.path.join(loader, "*")):
@@ -209,11 +210,12 @@ if (NET_NAME == 'SSD'):
             
              image_name.append(img_paths)
              label_name.append(label_paths)
-        return image_name, label_name
+             img_out_name.append(img_name)
+        return image_name, label_name, img_out_name
 
 
     if os.path.isfile(filename):
-        image_name, label_name = predict_model(model, loader, use_gpu, num_pred)
+        image_name, label_name, img_name = predict_model(model, loader, use_gpu, num_pred)
     else:
         print("Please, you need to add a class file")
         
@@ -329,6 +331,7 @@ if (NET_NAME == 'YOLO'):
         color_list = genetate_color(num_pred)  
         image_name = []
         label_name = []
+        img_out_name  = []
         
         for img_i, (path, detections) in enumerate(zip(imgs, img_detections)): 
             #print ("(%d) Image: '%s'" % (img_i, path))
@@ -369,20 +372,21 @@ if (NET_NAME == 'YOLO'):
                cv2.imwrite(os.path.join(OUTPUT_FOLDER) + '/' + img_name, img)
             
             label_paths = os.path.join(OUTPUT_FOLDER, img_name)
-            image_name.append(path)
+            image_name.append(path)            
             label_name.append(label_paths)
-        return image_name, label_name
+            img_out_name.append(img_name)
+        return image_name, label_name, img_out_name
                 
     if os.path.isfile(filename):
         imgs, img_detections = predict_model(model, loader, use_gpu)
-        image_name, label_name = img_labeled(imgs, img_detections, num_pred)
+        image_name, label_name, img_name = img_labeled(imgs, img_detections, num_pred)
     else:
         print("Please, you need to add a class file")
         
-df_name = pd.DataFrame(image_name)
+df_name = pd.DataFrame(img_name)
 df_image_name = pd.DataFrame(image_name)
 df_label_name = pd.DataFrame(label_name)
-df_name.columns = ['Image Paths']
+df_name.columns = ['Image Names']
 df_image_name.columns = ['Images']
 df_label_name.columns = ['Outputs']
 
