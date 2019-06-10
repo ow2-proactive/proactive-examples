@@ -12,6 +12,7 @@ import numpy as np
 
 from visdom import Visdom
 from sklearn.metrics import *
+from pandas.api.types import is_string_dtype
 
 input_variables = {
   'task.dataframe_id': None,
@@ -127,7 +128,7 @@ if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'
   model_ps = precision_score(dataframe_labels_values, dataframe_predictions_values, average='micro')
   model_fpr = None
   model_tpr = None
-  if len(classes) == 2:
+  if len(classes) == 2 and not is_string_dtype(dataframe[LABEL_COLUMN]):
     model_fpr, model_tpr, _ = roc_curve(dataframe_labels_values, dataframe_predictions_values)
 
 #-------------------------------------------------------------
