@@ -12,7 +12,7 @@ if os.path.isfile('/.dockerenv'):
     DOCKER_ENABLED = False
 
 # check if DOCKER_GPU_ENABLED variable is set
-DOCKER_GPU_ENABLED = False
+DOCKER_GPU_ENABLED = True
 if variables.get("DOCKER_GPU_ENABLED") is not None:
     if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'false':
         DOCKER_GPU_ENABLED = False
