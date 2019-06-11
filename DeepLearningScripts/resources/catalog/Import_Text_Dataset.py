@@ -180,7 +180,7 @@ train, val, test = data.TabularDataset.splits(path=DATASET_PATH, train='train.cs
                                                   fields=[('text', text_field), ('label', label_field)])
 train_iter, val_iter, test_iter = data.BucketIterator.splits((train, val, test),
                                                               repeat=False,
-                                                             batch_sizes=(BATCH_SIZE,len(val),len(test)), sort_key=lambda x: len(x.text), device=DEVICE)
+                                                             batch_sizes=(len(train),len(val),len(test)), sort_key=lambda x: len(x.text), device=DEVICE)
 if variables.get(DATASET_ITERATOR_UNL) is None:
     text_field.build_vocab(train)
     label_field.build_vocab(train)
