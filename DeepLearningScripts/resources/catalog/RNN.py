@@ -10,10 +10,6 @@ EMBEDDING_DIM=50
 DROPOUT=0.5
 
 if 'variables' in locals():  
-  if variables.get("BATCH_SIZE") is not None:
-    BATCH_SIZE = variables.get("BATCH_SIZE")
-  else:
-    print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
   if variables.get("HIDDEN_DIM") is not None:
     HIDDEN_DIM = variables.get("HIDDEN_DIM")
   else:
@@ -36,7 +32,7 @@ class RNN(nn.Module):
         super(RNN, self).__init__()
         self.hidden_dim = hidden_dim
         self.use_gpu = use_gpu
-        self.batch_size = batch_size
+        self.batch_size = len(train)
         self.dropout = dropout
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
         self.RNN = nn.RNN(input_size=embedding_dim, hidden_size=hidden_dim)
@@ -50,14 +46,14 @@ class RNN(nn.Module):
             return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
 
     def forward(self, sentence):
-        x = self.embeddings(sentence).view(len(sentence), self.batch_size, -1)
-        rnn_out, self.hidden = self.RNN(x, self.hidden)
-        y = self.hidden2label(rnn_out[-1])
+        x = self.embeddings(sentence)
+        gru_out, self.hidden = self.RNN(x, self.hidden)
+        y = self.hidden2label(gru_out[-1])
         log_probs = F.log_softmax(y)
         return log_probs"""
     
 MODEL_DEF = """
-MODEL = RNN(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=BATCH_SIZE)
+MODEL = RNN(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=len(train))
 """
 print(MODEL_DEF)
 
@@ -65,7 +61,6 @@ print(MODEL_DEF)
 try:
     variables.put("MODEL_CLASS", MODEL_CLASS)
     variables.put("MODEL_DEF", MODEL_DEF)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
     variables.put("HIDDEN_DIM", HIDDEN_DIM)
     variables.put("EMBEDDING_DIM", EMBEDDING_DIM)
     variables.put("DROPOUT", DROPOUT)
