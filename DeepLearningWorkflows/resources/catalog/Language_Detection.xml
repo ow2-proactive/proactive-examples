@@ -105,10 +105,10 @@ else:
       </outputFiles>
       <metadata>
         <positionTop>
-            344.06250762939453
+            344.0625
         </positionTop>
         <positionLeft>
-            409.46185302734375
+            409.453125
         </positionLeft>
       </metadata>
     </task>
@@ -183,327 +183,7 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Train_Text_Classification_Model")
-
-import os
-import uuid
-import time
-import torch
-import shutil
-import numpy as np
-import time, random
-import pandas as pd
-import torch.nn as nn
-from tqdm import tqdm
-import dill as pickle
-from itertools import *
-from torchtext import data
-import torch.optim as optim
-from torchtext import vocab
-from os.path import join, exists  
-import torch.nn.functional as F
-from torch.autograd import Variable
-from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
-
-
-MODEL_ONNX_TYPE = True
-
-#-------------------------evaluate function definition--------------------------
-def evaluate(model, test, data_iter, label_field, loss_function, name):
-    model.eval()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    i=0
-    acc = 0
-    pd.options.display.max_colwidth = 500
-    result =  pd.DataFrame(columns=['text','prediction','label'])
-    for batch in data_iter:
-        i=i+1
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = len(test)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        for i in range(model.batch_size):
-            test_fields = vars(test[i])
-            test_text = test_fields["text"]
-            test_label = test_fields["label"]
-            prede_label = pred_label[i]
-            gd_label = label[i]
-            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
-        pred_res += [x for x in pred_label]
-        if name is 'test_labeled':
-            loss = loss_function(pred, label)
-            avg_loss += loss.item()
-    if name is 'test_labeled':
-        avg_loss /= len(test)
-        pred_res = torch.LongTensor(pred_res)
-        acc = get_accuracy(truth_res, pred_res)
-        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
-    return acc, result
-
-#-------------------------get_accuracy function definition--------------------------
-def get_accuracy(truth, pred):
-     assert len(truth)==len(pred)
-     right = 0
-     for i in range(len(truth)):
-        if truth[i]==pred[i]:
-            right += 1.0
-     return right/len(truth)
-     
-#-------------------------train function definition--------------------------     
-def train_epoch_progress(model, train_iter, train, loss_function, optimizer, text_field, label_field, batch_size, epoch):
-    #model.train()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    count = 0
-    for batch in train_iter:
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = batch_size
-        print("batch_size",batch_size)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        pred_res += [np.float64(x) for x in pred_label]
-        model.zero_grad()
-        loss = loss_function(pred, label)
-        avg_loss += loss.item()
-        count += 1
-        loss.backward()
-        optimizer.step()
-    avg_loss /= len(train)
-    pred_res = torch.LongTensor(pred_res)
-    acc = get_accuracy(truth_res, pred_res)
-    return avg_loss, acc
-
-#-------------------------main code --------------------------
-
-#--------Get the task parameters--------
-
-#True or False
-TRAINABLE = 'False'
-#42B, 840B, twitter.27B, 6B
-GLOVE = '6B'
-LEARNING_RATE = '0.0001'
-#Adam,RMS, SGD, Adagrad, Adadelta
-OPTIMIZER = 'Adam'
-EPOCHS = 2
-#L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
-LOSS_FUNCTION = 'NLLLoss'
-#BATCH_SIZE (int)
-BATCH_SIZE = 2
-#True or False
-USE_GPU = 'False'
-
-if 'variables' in locals():
-    #True or False
-    if variables.get("TRAINABLE") is not None:
-        TRAINABLE = variables.get("TRAINABLE")
-    else:
-        print("TRAINABLE not defined by the user. Using the default value:"+TRAINABLE)
-    #42B, 840B, twitter.27B, 6B
-    if variables.get("GLOVE") is not None:
-        GLOVE = variables.get("GLOVE")
-    else:
-        print("GLOVE not defined by the user. Using the default value:"+GLOVE)
-    if variables.get("LEARNING_RATE") is not None:
-        LEARNING_RATE = variables.get("LEARNING_RATE")
-    else:
-        print("LEARNING_RATE not defined by the user. Using the default value:"+LEARNING_RATE)
-    #Adam,RMS, SGD, Adagrad, Adadelta
-    if variables.get("OPTIMIZER") is not None:
-        OPTIMIZER = variables.get("OPTIMIZER")
-    else:
-        print("OPTIMIZER not defined by the user. Using the default value:"+OPTIMIZER)
-    if variables.get("EPOCHS") is not None:
-        EPOCHS = int(variables.get("EPOCHS"))
-    else:
-        print("EPOCHS not defined by the user. Using the default value:"+EPOCHS)
-    #L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
-    if variables.get("LOSS_FUNCTION") is not None:
-        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
-    else:
-        print("LOSS_FUNCTION not defined by the user. Using the default value:"+LOSS_FUNCTION)
-    #BATCH_SIZE
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = int(variables.get("BATCH_SIZE"))
-    else:
-        print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
-    if variables.get("EMBEDDING_DIM") is not None:
-        EMBEDDING_DIM = int(variables.get('EMBEDDING_DIM'))
-    else:
-        print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
-    if variables.get("HIDDEN_DIM") is not None:
-        HIDDEN_DIM = int(variables.get('HIDDEN_DIM'))
-    else:
-        print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
-    if variables.get("DROPOUT") is not None:
-        DROPOUT = float(variables.get('DROPOUT'))
-    else:
-        print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
-    if variables.get("USE_GPU") is not None:
-        USE_GPU = variables.get('USE_GPU')
-    else:
-        print("USE_GPU not defined by the user. Using the default value:"+USE_GPU)
-    if variables.get("TOKENIZER") is not None:
-        TOKENIZER = variables.get('TOKENIZER')
-    else:
-        print("TOKENIZER not defined by the user. Using the default value:"+TOKENIZER)
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get('IS_LABELED_DATA')
-    else:
-        print("IS_LABELED_DATA not defined by the user. Using the default value:"+IS_LABELED_DATA)
-        
-print("BATCH_SIZE : ", BATCH_SIZE)
-
-#--------Define GPU or CPU environment-------- 
-
-if (USE_GPU == 'True' and torch.cuda.is_available()):
-    USE_GPU = 1
-    DEVICE = 1
-    print('GPU ressource will be used')
-else:
-    USE_GPU = 0
-    DEVICE = -1
-    print('GPU ressource will not be used')
-        
-#--------Load Dataset--------
-DATASET_ITERATOR_UNL = None
-if 'variables' in locals():
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if IS_LABELED_DATA == 'True':
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-    else:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH_UNL")
-    if DATASET_ITERATOR is not None:
-        exec(DATASET_ITERATOR)
-
-#--------Load Model---------
-
-if 'variables' in locals():
-    if variables.get("MODEL_CLASS") is not None:
-        MODEL_CLASS = variables.get("MODEL_CLASS")
-    if variables.get("MODEL_DEF") is not None:
-        MODEL_DEF = variables.get("MODEL_DEF")
-        
-if MODEL_CLASS is not None:
-    exec(MODEL_CLASS)
-if MODEL_DEF is not None:
-    exec(MODEL_DEF)
-else:
-    raise Exception('CLASS MODEL not defined!')
-  
-#-------Main--------
-
-timestamp = str(int(time.time()))
-best_dev_acc = 0.0
-best_tr_acc = 0.0
-
-if USE_GPU:
-    MODEL = MODEL.cuda()
-    
-print('Load word embeddings...')
-
-text_field.vocab.load_vectors(vectors=GloVe(name=GLOVE, dim=EMBEDDING_DIM))
-MODEL.embeddings.weight.data = text_field.vocab.vectors
-if TRAINABLE=='False':
-    MODEL.embeddings.weight.requires_grad=False
-    
-best_model = MODEL
-
-#optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE)
-OPTIM = """optimizer =  optim."""+OPTIMIZER+"""(filter(lambda p: p.requires_grad, MODEL.parameters()), lr="""+LEARNING_RATE+""")"""
-exec(OPTIM)
-LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
-exec(LOSS)
-
-print('Training...')
-for epoch in range(EPOCHS):
-    print(str(MODEL))
-    avg_loss, tr_acc = train_epoch_progress(MODEL, train_iter, train, loss_function, optimizer, text_field, label_field, BATCH_SIZE, epoch)
-    tqdm.write('Train: loss %.2f acc %.1f' % (avg_loss, tr_acc*100))
-    if len(val)>0:
-        dev_acc, results = evaluate(MODEL, val, val_iter, label_field, loss_function, 'test_labeled')
-        if dev_acc > best_dev_acc:
-            best_dev_acc = dev_acc
-            BEST_MODEL = MODEL
-    else:
-        if tr_acc > best_tr_acc:
-            best_tr_acc = tr_acc
-            BEST_MODEL = MODEL
-            
-# Get an unique ID
-file_id = str(uuid.uuid4())
-MODEL_FOLDER = 'text_models/'
-MODEL_FOLDER =  os.path.join(MODEL_FOLDER, file_id)
-os.makedirs(MODEL_FOLDER, exist_ok=True)
-
-# Save trained model
-print('Saving trained model...')
-MODEL_FILE= file_id + ".pt"
-MODEL_PATH = os.path.join(MODEL_FOLDER, MODEL_FILE)
-torch.save(BEST_MODEL, MODEL_PATH)
-
-# Save labels
-print('Saving labels to a text file...')
-LABELS_FILENAME = file_id + "_label.pkl"
-LABELS_PATH = os.path.join(MODEL_FOLDER, LABELS_FILENAME)
-pickle.dump(label_field, open(LABELS_PATH,'wb'))
-
-# Save text
-print('Saving text vocab to a text file...')
-TEXT_FILENAME = file_id + "_text.pkl"
-print(TEXT_FILENAME)
-TEXT_PATH = os.path.join(MODEL_FOLDER, TEXT_FILENAME)
-pickle.dump(text_field, open(TEXT_PATH,'wb'))
-
-# Save onnx trained model
-if MODEL_ONNX_TYPE:
-  MODEL_ONNX_PATH = None
-  print('This network does not yet support the ONNX format!')
-
-    
-    
-#----------variables to send----------------
-# Forward model
-try:
-    variables.put("MODEL_PATH", MODEL_PATH)
-    variables.put("MODEL_ONNX_PATH", MODEL_ONNX_PATH)
-    variables.put("LABELS_PATH", LABELS_PATH)
-    variables.put("TEXT_PATH", TEXT_PATH)
-    variables.put("MODEL_FOLDER", MODEL_FOLDER)
-    variables.put("EVALUATE", EVALUATE)
-    variables.put("ACCURACY", ACCURACY)
-    variables.put("LOSS",LOSS)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
-    variables.put("DATASET_PATH",DATASET_PATH)
-    variables.put("USE_GPU",USE_GPU)
-    variables.put("DEVICE",DEVICE)
-    variables.put("VOCAB_SIZE", VOCAB_SIZE)
-    variables.put("LABEL_SIZE", LABEL_SIZE)
-    if IS_LABELED_DATA=='True':
-        variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
-    else:
-        variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR_UNL)
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-  
-print("END Train_Text_Classification_Model")
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Train_Text_Classification_Model/raw" language="cpython"></file>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
@@ -513,10 +193,10 @@ print("END Train_Text_Classification_Model")
       </outputFiles>
       <metadata>
         <positionTop>
-            472.0833511352539
+            472.078125
         </positionTop>
         <positionLeft>
-            485.22576904296875
+            485.21875
         </positionLeft>
       </metadata>
     </task>
@@ -603,10 +283,10 @@ else:
       <controlFlow block="none"></controlFlow>
       <metadata>
         <positionTop>
-            600.1042251586914
+            600.09375
         </positionTop>
         <positionLeft>
-            391.4583740234375
+            390.453125
         </positionLeft>
       </metadata>
     </task>
@@ -696,10 +376,10 @@ else:
       <controlFlow block="none"></controlFlow>
       <metadata>
         <positionTop>
-            600.1042251586914
+            600.09375
         </positionTop>
         <positionLeft>
-            578.9931640625
+            601.984375
         </positionLeft>
       </metadata>
     </task>
@@ -790,10 +470,10 @@ else:
       <controlFlow block="none"></controlFlow>
       <metadata>
         <positionTop>
-            728.1250381469727
+            728.125
         </positionTop>
         <positionLeft>
-            391.4583740234375
+            391.453125
         </positionLeft>
       </metadata>
     </task>
@@ -877,10 +557,10 @@ else:
       <controlFlow block="none"></controlFlow>
       <metadata>
         <positionTop>
-            334.9653091430664
+            334.953125
         </positionTop>
         <positionLeft>
-            629.982666015625
+            629.96875
         </positionLeft>
       </metadata>
     </task>
@@ -891,48 +571,48 @@ else:
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:3184px;
-            height:3855px;
+            width:2144px;
+            height:2712px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-329.9653091430664px;left:-386.4583740234375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_32" style="top: 344.079px; left: 409.462px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png" width="20px">&nbsp;<span class="name">Import_Text_Dataset</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_35" style="top: 472.1px; left: 485.226px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png" width="20px">&nbsp;<span class="name">Train_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_38" style="top: 600.121px; left: 391.459px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_41" style="top: 600.121px; left: 578.994px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png" width="20px">&nbsp;<span class="name">Download_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_44" style="top: 728.142px; left: 391.459px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_47" style="top: 334.969px; left: 629.993px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png" width="20px">&nbsp;<span class="name">LSTM</span></a></div><svg style="position:absolute;left:463.5px;top:383.5px" width="122" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 101 88 C 111 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-329.953125px;left:-385.453125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_103" style="top: 344.062px; left: 409.453px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png" width="20px">&nbsp;<span class="name">Import_Text_Dataset</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_106" style="top: 472.078px; left: 485.219px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png" width="20px">&nbsp;<span class="name">Train_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_109" style="top: 600.094px; left: 390.453px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_112" style="top: 600.094px; left: 601.984px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png" width="20px">&nbsp;<span class="name">Download_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_115" style="top: 728.125px; left: 391.453px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_118" style="top: 334.953px; left: 629.969px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png" width="20px">&nbsp;<span class="name">LSTM</span></a></div><svg style="position:absolute;left:462.5px;top:383.5px" width="122.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 101.5 88 C 111.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M90.298054,61.830692 L77.14122907855439,45.2205156617901 L78.46796879031328,54.344098386643424 L69.65463546519781,57.05060087147682 L90.298054,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M90.298054,61.830692 L77.14122907855439,45.2205156617901 L78.46796879031328,54.344098386643424 L69.65463546519781,57.05060087147682 L90.298054,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:564.5px;top:374.46878814697266px" width="125.9931640625" height="98.03121185302734" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 97.03121185302734 C -10 47.031211853027344 114.9931640625 50 104.9931640625 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M90.73087100000001,61.830692 L77.53854889082004,45.248694612241145 L78.8847998762344,54.36941872188677 L70.07727561270681,57.09476573600676 L90.73087100000001,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M90.73087100000001,61.830692 L77.53854889082004,45.248694612241145 L78.8847998762344,54.36941872188677 L70.07727561270681,57.09476573600676 L90.73087100000001,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:564px;top:374.5px" width="126.5" height="98" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 97 C -10 47 115.5 50 105.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M11.811143637939454,69.18197120633126 L32.27091518798521,63.66855591996489 L23.36664772691252,61.278154074734225 L24.367098056388176,52.11305183099182 L11.811143637939454,69.18197120633126" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M11.811143637939454,69.18197120633126 L32.27091518798521,63.66855591996489 L23.36664772691252,61.278154074734225 L24.367098056388176,52.11305183099182 L11.811143637939454,69.18197120633126" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:474.5px;top:511.5px" width="111" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 100 50 90 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M11.881958375,69.15512025 L32.35460519788675,63.68970790825075 L23.45596884474803,61.27842794636371 L24.47791289425047,52.11569743850272 L11.881958375,69.15512025" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M11.881958375,69.15512025 L32.35460519788675,63.68970790825075 L23.45596884474803,61.27842794636371 L24.47791289425047,52.11569743850272 L11.881958375,69.15512025" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:473.5px;top:511.5px" width="111.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 100.5 50 90.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M8.741249999999997,62.2538125 L29.075044574921378,56.292537620840534 L20.120442745702356,54.09820262359255 L20.919434698513932,44.91334487513818 L8.741249999999997,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M8.741249999999997,62.2538125 L29.075044574921378,56.292537620840534 L20.120442745702356,54.09820262359255 L20.919434698513932,44.91334487513818 L8.741249999999997,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:564.5px;top:511.5px" width="81" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 60 88 C 70 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.805796874999999,62.2538125 L29.15447139270185,56.3435294803273 L20.2053984986717,54.12675381794402 L21.027412710645862,44.9439278566556 L8.805796874999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.805796874999999,62.2538125 L29.15447139270185,56.3435294803273 L20.2053984986717,54.12675381794402 L21.027412710645862,44.9439278566556 L8.805796874999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:564px;top:511.5px" width="104.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 83.5 88 C 93.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M56.3539725,63.998374500000004 L48.25154501145557,44.41903158985923 L47.027791426533994,53.55699783861456 L37.810168350070136,53.74521266332523 L56.3539725,63.998374500000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M56.3539725,63.998374500000004 L48.25154501145557,44.41903158985923 L47.027791426533994,53.55699783861456 L37.810168350070136,53.74521266332523 L56.3539725,63.998374500000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:435.5px;top:639.5px" width="60" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 49 50 39 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M76.036896,62.682047999999995 L64.58416105579337,44.85412433240066 L65.0037060138027,54.064117927849516 L55.9662309836429,55.88731431859796 L76.036896,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M76.036896,62.682047999999995 L64.58416105579337,44.85412433240066 L65.0037060138027,54.064117927849516 L55.9662309836429,55.88731431859796 L76.036896,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:435.5px;top:639.5px" width="59" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 48 50 38 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M0.8261579999999977,65.364084 L16.769100218015062,51.4061975757224 L7.721817134665953,53.1800828058726 L4.58509902388766,44.510538441056454 L0.8261579999999977,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M0.8261579999999977,65.364084 L16.769100218015062,51.4061975757224 L7.721817134665953,53.1800828058726 L4.58509902388766,44.510538441056454 L0.8261579999999977,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 464px; top: 374px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.7315759999999982,65.364084 L16.52977897874819,51.24258327797078 L7.501263668798728,53.10964281049999 L4.275337789248177,44.472895609172056 L0.7315759999999982,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.7315759999999982,65.364084 L16.52977897874819,51.24258327797078 L7.501263668798728,53.10964281049999 L4.275337789248177,44.472895609172056 L0.7315759999999982,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 463px; top: 374px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 565px; top: 502px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 564.5px; top: 502px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 565px; top: 462px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 564.5px; top: 462px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 475px; top: 630px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 474px; top: 630px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 475px; top: 590px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 474px; top: 590px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 625px; top: 630px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 630px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 625px; top: 590px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 590px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 436px; top: 758px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 436px; top: 718px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 669.993px; top: 364.969px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 670px; top: 365px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>

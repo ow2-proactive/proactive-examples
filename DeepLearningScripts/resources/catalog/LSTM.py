@@ -38,11 +38,16 @@ class LSTM(nn.Module):
         self.hidden2label = nn.Linear(hidden_dim, label_size)
         self.hidden = self.init_hidden()
 
+
     def init_hidden(self):
+        # first is the hidden h
+        # second is the cell c
         if self.use_gpu:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
+            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()),
+                    Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
         else:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
+            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)),
+                    Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
 
     def forward(self, sentence):
         x = self.embeddings(sentence)
