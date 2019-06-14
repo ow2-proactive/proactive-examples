@@ -286,7 +286,6 @@ try:
     variables.put("LABELS_PATH", LABELS_PATH)
     variables.put("TEXT_PATH", TEXT_PATH)
     variables.put("MODEL_FOLDER", MODEL_FOLDER)
-    variables.put("EVALUATE", EVALUATE)
     variables.put("ACCURACY", ACCURACY)
     variables.put("LOSS",LOSS)
     variables.put("DATASET_PATH",DATASET_PATH)
