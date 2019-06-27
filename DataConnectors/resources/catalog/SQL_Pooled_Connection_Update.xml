@@ -4,10 +4,23 @@
   xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="SQL_Pooled_Connection_Update" projectName="2. SQL" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <variables>
     <variable name="RDBMS_NAME" value="HSQLDB" model="PA:LIST(PostgreSQL, MySQL, Greenplum, SQL Server, Oracle, HSQLDB)"/>
+    <variable name="HOST" value="localhost" />
+    <variable name="PORT" value="" />
+    <variable name="USERNAME" value="scheduler" />
+    <variable name="DATABASE" value="scheduler" />
+    <variable name="POOL_autoCommit" value="true" model="PA:Boolean"/>
+    <variable name="SQL_STATEMENTS" value="" />
   </variables>
   <description>
-    <![CDATA[ This workflow is a template that demonstrates how to use pooled connections to SQL databases across multiple SQL tasks (basically when running several Tasks concurrently on the same machine). The workflow is composed of two tasks Open_Pooled_Connection and Execute_Update_Statements. It is executed using a single variable
-$RDBMS_NAME which allows the user to choose the relational database management system e.g. PostgreSQL, MySQL, Greenplum, HSQLDB, Oracle...
+    <![CDATA[ This workflow is a template that demonstrates how to use pooled connections to SQL databases across multiple SQL tasks (basically when running several Tasks concurrently on the same machine). The workflow is composed of a single task Open_Pooled_Connection_and_Execute_Update. 
+
+This workflow requires these variables:
+$RDBMS_NAME is the relational database management system name e.g. PostgreSQL, MySQL, Greenplum, HSQLDB, Oracle...
+$HOST (required) is the server host. Default value is localhost.
+$USERNAME (required) is the username used for accessing the SQL database.
+$PORT (optional) is the listening port.
+$DATABASE (required) is the database name.
+$POOL_PROPERTY (optional) HikariCP offers many data source properties that can be used to configure the DB pooled connection such as autoCommit, maximumPoolSize, maxLifetime, idleTimeout .... You can add as many properties as you want. For each one, add a new task variable where the variable name is the property name having "POOL_"  as a prefix (e.g. POOL_autoCommit, POOL_maximumPoolSize) and the variable value is the property value. For more info, please refer to https://github.com/brettwooldridge/HikariCP.
 
 To allow the persistence of a single connection across multiple tasks executions, the scheduler should be configured in non-forked mode to execute tasks in a single JVM rather than starting a dedicated JVM to run the task (In $PROACTIVE_HOME/config/scheduler/settings.ini, please set pa.scheduler.task.fork=false).
 Besides, you have to download the jdbc connector jar file of the used rdbms, and copy it into the addons directory ($PROACTIVE_HOME/addons) of the scheduler. ]]>
@@ -19,26 +32,21 @@ Besides, you have to download the jdbc connector jar file of the used rdbms, and
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Open_Pooled_Connection" >
+    <task name="Open_Pooled_Connection_and_Execute_Update" >
       <description>
-        <![CDATA[ This task allows to open a pooled connection to any SQL database.
+        <![CDATA[ This task allows to open a pooled connection to any SQL database and then execute any SQL query statements on it.
 If it requires a password, you have to add it using the following third-party credential: {key: rdbms_protocol://<username>@<host>:<port>, value: RDBMS_PASSWORD}.
 Please refer to the User documentation to learn how to add third-party credentials.
-This task is executed with the following variables:
-$RDBMS_NAME (required) is the name of the relational database management system e.g. PostgreSQL, MySQL, Greenplum, HSQLDB, Oracle...
-$HOST (required) is the server host. Default value is localhost.
-$USERNAME (required) is the username used for accessing the SQL database.
-$PORT (optional) is the listening port.
-$DATABASE (required) is the database name.
-$POOL_PROPERTY (optional) HikariCP offers many data source properties that can be used to configure the DB pooled connection such as autoCommit, maximumPoolSize, maxLifetime, idleTimeout .... You can add as many properties as you want. For each one, add a new task variable where the variable name is the property name having "POOL_"  as a prefix (e.g. POOL_autoCommit, POOL_maximumPoolSize) and the variable value is the property value. For more info, please refer to https://github.com/brettwooldridge/HikariCP. ]]>
+This task has the same list of workflow variables. ]]>
       </description>
       <variables>
         <variable name="RDBMS_NAME" value="" inherited="true" />
-        <variable name="HOST" value="localhost" inherited="false" />
-        <variable name="PORT" value="" inherited="false" />
-        <variable name="USERNAME" value="scheduler" inherited="false" />
-        <variable name="DATABASE" value="scheduler" inherited="false" />
-        <variable name="POOL_autoCommit" value="True" inherited="false" />
+        <variable name="HOST" value="" inherited="true" />
+        <variable name="PORT" value="" inherited="true" />
+        <variable name="USERNAME" value="" inherited="true" />
+        <variable name="DATABASE" value="" inherited="true" />
+        <variable name="POOL_autoCommit" value="" inherited="true"/>
+        <variable name="SQL_STATEMENTS" value="" inherited="true" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
@@ -48,22 +56,15 @@ $POOL_PROPERTY (optional) HikariCP offers many data source properties that can b
         <script>
           <code language="groovy">
             <![CDATA[
-import java.sql.ResultSet
 import org.ow2.proactive.scheduler.examples.connectionpooling.*
 import groovy.ui.SystemOutputInterceptor
-    
-/**
-* This method initializes the default data base properties (port, connection protocol and drivers, etc)
-*/
-def init(String protocol, String port, String dataSourceClassName){
-    RDBMS_PROTOCOL = protocol
-    RDBMS_DEFAULT_PORT = port
-    RDBMS_DATA_SOURCE_CLASS_NAME = dataSourceClassName
-}
+import java.sql.SQLException
 
-// Retrieve the DBMS name
+
+// Retrieve RDBMS_NAME variable
 RDBMS_NAME = variables.get("RDBMS_NAME")
-println("BEGIN Pooled Connection to " + RDBMS_NAME + " database")
+
+println("BEGIN Pooled Connection and execute Update on " + RDBMS_NAME + " database")
 
 RDBMS_PROTOCOL = ""
 RDBMS_DEFAULT_PORT = ""
@@ -84,7 +85,7 @@ if (RDBMS_NAME.equals("PostgreSQL")){
 } else {
     throw new IllegalArgumentException("You must specify a valid RDBMS name in the script arguments amongst PostgreSQL, MySQL, Greenplum, SQL Server, HSQLDB or Oracle")
 }
-     
+
 host = variables.get("HOST")
 if (!host) {
     throw new IllegalArgumentException("ERROR: HOST variable is not provided by the user. Empty value is not allowed.")
@@ -116,84 +117,65 @@ if (!password) {
 
 //Construct the jdbc URL
 jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + "/"+ database
-//Oracle is a particular case
+//Oracle & SQL Server are particular cases
 if(RDBMS_PROTOCOL.equals("oracle")){
-    jdbcUrl = "jdbc:oracle:thin:@//" + host + ":" + port + "/"+ database
+    jdbcUrl = "jdbc:oracle:thin:@//" + host + ":" + port + "/" + database
+} else if(RDBMS_PROTOCOL.equals("sqlserver")){
+    jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + ";database=" + database
 }
+
 interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
 interceptor.start()
+
 if(password){
     dbConnectionDetailsBuilder = new DBConnectionDetails.Builder().jdbcUrl(jdbcUrl).username(username).password(password)
 }else{
     dbConnectionDetailsBuilder = new DBConnectionDetails.Builder().jdbcUrl(jdbcUrl).username(username)
 }
+
 //Add (optional) data source properties to configure the DB pooled connection
-variables.entrySet().each { var -> 
+variables.entrySet().each { var ->
     if (var.getKey().startsWith("POOL_")){
         dbConnectionDetailsBuilder.addDataSourceProperty(var.getKey().replace("POOL_", ""), var.getValue())
-    }}
+    }} 
 
 //Open the pooled connection to the database
 dbConnectionDetails = dbConnectionDetailsBuilder.build()
-variables.put("dbConnectionDetails", dbConnectionDetails)
-
-interceptor.stop()
-
-println("END Pooled Connection to " + RDBMS_NAME + " database")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-    <task name="Execute_Update_Statements" >
-      <description>
-        <![CDATA[ This task allows to execute any SQL update statements on an SQL database.
-If it requires a password, you have to add it using the following third-party credential: {key: rdbms_protocol://<username>@<host>:<port>, value: RDBMS_PASSWORD}.
-Please refer to the User documentation to learn how to add third-party credentials.
-This task is executed with the following variables:
-$SQL_STATEMENTS is a string composed of a set of update statements (CREATE, INSERT , UPDATE , or DELETE statement). ]]>
-      </description>
-      <variables>
-        <variable name="SQL_STATEMENTS" value="CREATE TABLE employees (    employee_id   NUMERIC      NOT NULL,    first_name    VARCHAR(255) NOT NULL,    last_name     VARCHAR(255) NOT NULL,    date_of_birth DATE                 ,    phone_number  VARCHAR(255) NOT NULL,    junk          CHAR(255)            ,    CONSTRAINT employees_pk PRIMARY KEY (employee_id) ); DROP TABLE employees;" inherited="false" />
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/dev/user/ProActiveUserGuide.html#_database_connections_pooling"/>
-      </genericInformation>
-      <depends>
-        <task ref="Open_Pooled_Connection"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-import java.sql.ResultSet;
-import org.ow2.proactive.scheduler.examples.connectionpooling.*
-import groovy.ui.SystemOutputInterceptor
-
-// Retrieve the DBMS name
-RDBMS_NAME = variables.get("RDBMS_NAME")
-println("BEGIN update query in " + RDBMS_NAME + " database")
-
 sqlStatements = variables.get("SQL_STATEMENTS")   
 if (!sqlStatements){
     throw new IllegalArgumentException("ERROR: SQL_STATEMENTS variable is not provided by the user. Empty value is not allowed.")
 }
-
-interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
-interceptor.start()
-
-dbConnectionDetails = variables.get("dbConnectionDetails")
-dBConnectionPoolsHolder = DBConnectionPoolsHolder.getInstance();
-dBConnectionPoolsHolder.executeUpdate(dbConnectionDetails, sqlStatements)
-
+try{
+    dBConnectionPoolsHolder = DBConnectionPoolsHolder.getInstance();
+    dBConnectionPoolsHolder.executeUpdate(dbConnectionDetails, sqlStatements)
+} catch (Exception e) {
+    e.printStackTrace();
+    throw e;
+}
 interceptor.stop()
 
-println("END execute update in " + RDBMS_NAME + " database")
+/**
+* This method initializes the default data base properties (port, connection protocol and drivers, etc)
+*/
+def init(String protocol, String port, String dataSourceClassName){
+    RDBMS_PROTOCOL = protocol
+    RDBMS_DEFAULT_PORT = port
+    RDBMS_DATA_SOURCE_CLASS_NAME = dataSourceClassName
+}
+
+println("END Pooled Connection and execute Update on " + RDBMS_NAME + " database")
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <metadata>
+        <positionTop>
+            440
+        </positionTop>
+        <positionLeft>
+            429.5
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
   <metadata>
@@ -202,18 +184,10 @@ println("END execute update in " + RDBMS_NAME + " database")
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2134px;
-            height:2176px;
+            width:2864px;
+            height:3304px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-259px;left:-412.75px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_85" style="top: 264px; left: 417.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png" width="20px">&nbsp;<span class="name">Open_Pooled_Connection</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_88" style="top: 392px; left: 417.75px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png" width="20px">&nbsp;<span class="name">Execute_Update_Statements</span></a></div><svg style="position:absolute;left:483.5px;top:303.5px" width="27.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 6.5 88 C 16.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M8.787796875,66.78168750000002 L13.502214816791486,46.123171980483264 L7.218760132881903,52.86988949607962 L-0.4095831871289066,47.692208722601364 L8.787796875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M8.787796875,66.78168750000002 L13.502214816791486,46.123171980483264 L7.218760132881903,52.86988949607962 L-0.4095831871289066,47.692208722601364 L8.787796875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 484px; top: 294px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 490.5px; top: 422px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 490.5px; top: 382px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-435px;left:-424.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_106" style="top: 440px; left: 429.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png" width="20px">&nbsp;<span class="name">Open_Pooled_Connection_and_Execute_Update</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 546.5px; top: 470px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
