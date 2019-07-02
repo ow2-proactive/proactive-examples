@@ -2,224 +2,71 @@
 <job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Predict_Image_Classification_Model" onTaskError="continueJobExecution" priority="normal" projectName="5. Predict" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-    <variable model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
   </variables>
   <description>
-    <![CDATA[ Predict a model using a deep learning algorithm. ]]>
+    <![CDATA[ Predict a model using an image classification network. ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="deep-learning-dev"/>
+<info name="bucketName" value="deep-learning"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
-<info name="Documentation" value="m/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_predict_image_classification_model"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_predict_image_classification_model"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
     <task name="Predict_Image_Classification_Model">
       <description>
-        <![CDATA[ Predict a model using a deep learning algorithm. ]]>
+        <![CDATA[ Predict a model using an image classification network. ]]>
       </description>
       <variables>
-        <variable inherited="true" model="PA:Boolean" name="GPU_NODES_ONLY" value="False"/>
+        <variable inherited="false" name="BATCH_SIZE" value="4"/>
+        <variable inherited="false" name="NUM_WORKERS" value="2"/>
+        <variable inherited="false" name="SHUFFLE" value="True"/>
         <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
-        <variable inherited="true" name="BATCH_SIZE" value="4"/>
-        <variable inherited="true" name="NUM_WORKERS" value="2"/>
-        <variable inherited="true" name="SHUFFLE" value="True"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_predict_image_classification_model"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_predict_image_classification_model"/>
       </genericInformation>
       <inputFiles>
         <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
         <files accessMode="transferFromGlobalSpace" includes="$MODEL_FOLDER/**"/>
       </inputFiles>
-      <selection>
-        <script type="static">
-          <code language="python">
-            <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
-]]>
-          </code>
-        </script>
-      </selection>
       <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
+            <file language="python" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env/raw"/>
           </script>
         </envScript>
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Predict_Image_Classification_Model")
-
-import os
-import torch
-import json
-import pandas as pd
-from os.path import join
-from torch.autograd import Variable
-from torch.utils.data import DataLoader
-from torchvision import datasets, models, transforms
-
-if 'variables' in locals():
-  MODEL_PATH     = variables.get("MODEL_PATH")
-  DATASET_PATH   = variables.get("DATASET_PATH")
-  SHUFFLE = variables.get("SHUFFLE")
-  BATCH_SIZE = int(str(variables.get("BATCH_SIZE")))
-  NUM_WORKERS = int(str(variables.get("NUM_WORKERS")))
-  LABELS_PATH    = variables.get("LABELS_PATH")
-  CNN_TRANSFORM  = variables.get("CNN_TRANSFORM")
-
-assert MODEL_PATH is not None
-assert DATASET_PATH is not None
-assert LABELS_PATH is not None
-assert CNN_TRANSFORM is not None
-
-class_names = None
-with open(LABELS_PATH, 'r') as f:
-  class_names = json.load(f)
-assert class_names is not None
-
-# Load trained model
-model=torch.load(MODEL_PATH,map_location={'cuda:0': 'cpu'})
-
-# http://pytorch.org/docs/master/cuda.html#torch.cuda.is_available
-# Returns a bool indicating if CUDA is currently available.
-use_gpu = torch.cuda.is_available()
-if use_gpu:
-  model = model.cuda()
-
-# Load CNN transform
-# data_transforms
-exec(CNN_TRANSFORM)
-
-# Load dataset
-image_dataset = {x: 
-  datasets.ImageFolder(join(DATASET_PATH, x), data_transforms[x]) 
-  for x in ['test']}
-
-data_loader = {x: 
-  DataLoader(image_dataset[x], batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS) 
-  for x in ['test']}
-
-def predict_model(_model, _data_loader, _use_gpu, _class_names, _max_images=None):
-  images_so_far = 0
-  predictions = []
-  image_target = []  
-  for i, data in enumerate(_data_loader['test']):
-    inputs, labels = data
-    
-    if _use_gpu:
-      inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
-    else:
-      inputs, labels = Variable(inputs), Variable(labels)
-
-    outputs = _model(inputs)
-    _, preds = torch.max(outputs.data, 1)
-    print(preds)
-
-    for j in range(inputs.size()[0]):
-      images_so_far += 1
-      result = _class_names[preds[j]]
-      predictions.append(result)
-      image_target.append(inputs)
-      if images_so_far == _max_images:
-        return
-    
-    #break
-  return predictions, image_target 
-
-preds, image_target = predict_model(model, data_loader, use_gpu, class_names)
-
-label_test = []
-image_input = []
-image_name = []
-for index, elem in enumerate(image_target):
-  input_select = data_loader['test'].dataset.imgs[index]
-  dir_image_temp = input_select[0]
-  id_label = input_select[1]  
-  com_data_name = os.path.basename(dir_image_temp)    
-  lab_d = data_loader['test'].dataset.classes
-  lab_d = list(lab_d)
-  label = lab_d[id_label]
-  label_test.append(label)
-  image_input.append(dir_image_temp)
-  image_name.append(com_data_name)
-
-df_preds = pd.DataFrame(preds)
-df_label = pd.DataFrame(label_test)
-df_name = pd.DataFrame(image_name)
-df_preds.columns = ['Predictions']
-df_label.columns = ['Targets']
-df_name.columns = ['Image Names']
-df_test_image = pd.DataFrame(image_input)
-df_test_image.columns = ['Images']
-
-df = pd.concat([df_test_image, df_name, df_label, df_preds], axis=1)
-
-if 'variables' in locals():
-  variables.put("PREDICT_DATA_JSON", df.to_json(orient='split'))
-  variables.put("BATCH_SIZE", BATCH_SIZE)
-  variables.put("NUM_WORKERS", NUM_WORKERS)
-  variables.put("SHUFFLE", SHUFFLE)
-
-print("END Predict_Image_Classification_Model")
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Predict_Image_Classification_Model/raw"/>
         </script>
       </scriptExecutable>
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            572.5
+            402.98828125
         </positionTop>
         <positionLeft>
-            1097.75
+            576.25
         </positionLeft>
       </metadata>
     </task>
   </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2646px;
+            height:3493px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-397.98828125px;left:-571.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_319" style="top: 402.988px; left: 576.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Image_Classification_Model</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 674px; top: 433px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
 </job>

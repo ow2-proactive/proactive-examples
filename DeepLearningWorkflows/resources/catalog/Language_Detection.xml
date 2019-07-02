@@ -1,49 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.11"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"
-    name="Language_Detection" projectName="4. Custom AI workflows"
-    priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Language_Detection" projectName="4. Custom Pytorch Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <variables>
     <variable name="GPU_NODES_ONLY" value="False" model="PA:Boolean"/>
     <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" />
     <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean"/>
   </variables>
   <description>
-    <![CDATA[ Language detection workflow involves building an RNN model from a lot of text data of respective languages and then identifying the test data (text) among the trained models. ]]>
+    <![CDATA[ Language Detection workflow involves building an RNN model from a lot of text data of respective languages and then identifying the test data (text) among the trained models. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="deep-learning-workflows"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/language_detection.png"/>
-    <info name="Documentation" value="http://activeeon.com/resources/automated-machine-learning-activeeon.pdf"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/pytorch-logo-dark.png"/>
+    <info name="Documentation" value="https://ow2-proactive.github.io/proactive-examples/MachineLearning/resources/doc/V1/automated-machine-learning-activeeon.pdf"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
     <task name="Import_Text_Dataset" >
       <description>
-        <![CDATA[ Import a text dataset from the location given by $DATASET_URL. If it is a zip file, it will be automatically extracted.
-Split the dataset into train, test and validation sets. If $TOY_MODE is activated, it will only extract a small subset of the dataset.
-The text is tokenized using $TOKENIZER ]]>
+        <![CDATA[ Load and return a text dataset. ]]>
       </description>
       <variables>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
         <variable name="DATASET_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/DL32.zip" inherited="false" />
         <variable name="TRAIN_SPLIT" value="0.6" inherited="false" />
         <variable name="TEST_SPLIT" value="0.3" inherited="false" />
-        <variable name="VALIDATION_SPLIT" value="0.1" inherited="false" />
+        <variable name="VAL_SPLIT" value="0.1" inherited="false" />
         <variable name="TOY_MODE" value="True" inherited="false" model="PA:BOOLEAN"/>
         <variable name="TOKENIZER" value="str.split" inherited="false" model="PA:LIST(str.split,moses,spacy,revtok,subword)"/>
         <variable name="SENTENCE_SEPARATOR" value="\r" inherited="false" />
         <variable name="CHARSET" value="utf-8" inherited="false" />
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
         <variable name="IS_LABELED_DATA" value="True" inherited="false" model="PA:BOOLEAN"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_import_text_dataset"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_import_text_dataset"/>
       </genericInformation>
       <selection>
         <script type="static">
@@ -103,209 +96,7 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Import_Text_Dataset")
-
-import os
-import wget
-import zipfile
-import shutil
-import random
-import codecs
-import numpy as np
-import pandas as pd
-from torchtext import data
-#import spacy
-
-from os import remove, listdir, makedirs
-from os.path import basename, splitext, exists, join
-from sklearn.model_selection import train_test_split
-  
-### PHASE 1 ################
-
-DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/DL32.zip'
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/IMDB.zip'
-#DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/unlabeled-IMDB.zip'
-GLOBALSPACE = 'text_data/'
-TRAIN_SPLIT = round(0.6, 3)
-TEST_SPLIT  = round(0.3, 3)
-VALIDATION_SPLIT = round(0.1, 3)
-TOY_MODE = 'True'
-TOKENIZER = "spacy"
-SENTENCE_SEPARATOR = '\r'
-CHARSET = 'utf-8'
-IS_LABELED_DATA = 'True'
-DATASET_ITERATOR_UNL = None
-
-# READ TASK VARIABLES
-if 'variables' in locals():
-  
-  if variables.get("DATASET_URL") is not None:
-    DATASET_URL = variables.get("DATASET_URL")
-  if variables.get("TRAIN_SPLIT") is not None:
-    TRAIN_SPLIT = float(str(variables.get("TRAIN_SPLIT")))
-  if variables.get("TEST_SPLIT") is not None:
-    TEST_SPLIT = float(str(variables.get("TEST_SPLIT")))
-  if variables.get("VALIDATION_SPLIT") is not None:
-    VALIDATION_SPLIT = float(str(variables.get("VALIDATION_SPLIT")))
-  if variables.get("TOY_MODE") is not None:
-    TOY_MODE = variables.get("TOY_MODE")
-  if variables.get("TOKENIZER") is not None:
-    TOKENIZER = str(variables.get("TOKENIZER"))
-  if variables.get("SENTENCE_SEPARATOR") is not None:
-    SENTENCE_SEPARATOR = variables.get("SENTENCE_SEPARATOR")
-  if variables.get("CHARSET") is not None:
-    CHARSET = str(variables.get("CHARSET"))
-  if variables.get("IS_LABELED_DATA") is not None:
-    IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-
-print("Split information:")
-print("TRAIN_SPLIT:      " + str(TRAIN_SPLIT))
-print("TEST_SPLIT:       " + str(TEST_SPLIT))
-print("VALIDATION_SPLIT: " + str(VALIDATION_SPLIT))
-
-assert TRAIN_SPLIT >= 0.0
-assert TEST_SPLIT >= 0.0
-assert VALIDATION_SPLIT >= 0.0
-assert round(TRAIN_SPLIT + TEST_SPLIT + VALIDATION_SPLIT, 3) == 1
-if TRAIN_SPLIT == 0.0 and VALIDATION_SPLIT > 0.0:
-  raise AssertionError("VALIDATION_SPLIT cannot be defined when TRAIN_SPLIT equals zero") 
-
-DATASET_PATH = os.path.join(GLOBALSPACE,splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0])
-
-if exists(DATASET_PATH):
-  shutil.rmtree(DATASET_PATH)
-makedirs(DATASET_PATH)
-
-print("DATASET_URL:  " + DATASET_URL)
-print("DATASET_PATH: " + DATASET_PATH)
-
-# DOWNLOAD AND EXTRACT DATASET
-print("Downloading...")
-filename = wget.download(DATASET_URL, DATASET_PATH)
-print("FILENAME: " + filename)
-print("OK")
-
-print("Extracting...")
-dataset_zip = zipfile.ZipFile(filename)
-dataset_zip.extractall(DATASET_PATH)
-dataset_zip.close()
-remove(filename)
-print("OK")
-
-### PHASE 2 ################
-
-# EXTRACT LABELS
-if IS_LABELED_DATA=='True':
-    textfolders = [os.path.join(root, name)
-             for root, dirs, files in os.walk(DATASET_PATH)
-             for name in dirs]
-
-    labels = [os.path.join(name)
-             for root, dirs, files in os.walk(DATASET_PATH)
-             for name in dirs]
-    print('labels to be predicted',labels)
-    class_files = [os.path.join(root, name)
-             for i in range(0,len(textfolders))
-             for root, dirs, files in os.walk(textfolders[i])
-             for name in files]
-else:
-    DATASET_PATH = os.path.join(DATASET_PATH,'unlabeled')
-    labels = ['unlabeled']
-    class_files = [os.path.join(DATASET_PATH, name)
-            for root, dirs, files in os.walk(DATASET_PATH)
-            for name in files]
-    #assert(len(class_files)==0)
-
-
-
-### PHASE 3 ################
-
-### SPLIT DATASET
-import codecs
-import random
-import pandas as pd
-
-sent_classes={}
-n_class=0
-toy_dataset_size = 2000
-
-
-train_data = []
-val_data = []
-test_data = []
-
-for i in range(len(class_files)):
-    if class_files[i].endswith('.DS_Store'):
-        continue
-    print('loading MR data from',class_files[i])
-    sent_classes[labels[n_class]] = codecs.open(class_files[i], 'r', CHARSET).read().strip().splitlines()
-    print('length of class',len(sent_classes[labels[n_class]]))
-    random.shuffle(sent_classes[labels[n_class]])
-    file_len = len(sent_classes[labels[n_class]])
-    if TOY_MODE=='True':
-        class_ent_len = int(toy_dataset_size/len(labels))
-        if (file_len<class_ent_len):
-            class_ent_len = file_len
-    else:
-        class_ent_len = file_len
-    
-    train_data = train_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][:int(class_ent_len*TRAIN_SPLIT)]]
-    val_data = val_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][int(class_ent_len*TRAIN_SPLIT+1):int(class_ent_len*(TRAIN_SPLIT+VALIDATION_SPLIT)+1)]]
-    test_data = test_data + [(sent,labels[n_class]) for sent in sent_classes[labels[n_class]][int(class_ent_len*(TRAIN_SPLIT+VALIDATION_SPLIT)+2):class_ent_len]]
-    n_class = n_class+1
-
-train_frame = pd.DataFrame(train_data, columns = ["text","label"])
-val_frame = pd.DataFrame(val_data, columns = ["text","label"])
-test_frame = pd.DataFrame(test_data, columns = ["text","label"])
-
-train_frame['text'].replace('', np.nan, inplace=True)
-train_frame.dropna(subset=['text'], inplace=True)
-val_frame['text'].replace('', np.nan, inplace=True)
-val_frame.dropna(subset=['text'], inplace=True)
-test_frame['text'].replace('', np.nan, inplace=True)
-test_frame.dropna(subset=['text'], inplace=True)
-
-train_path = os.path.join(DATASET_PATH,"train.csv")
-val_path = os.path.join(DATASET_PATH,"val.csv")
-test_path = os.path.join(DATASET_PATH,"test.csv")
-
-train_frame.to_csv(train_path, encoding=CHARSET,index=False, header=False)
-val_frame.to_csv(val_path, encoding=CHARSET, index=False, header=False)
-test_frame.to_csv(test_path, encoding=CHARSET, index=False, header=False)
-print(train_path)
-
-### PHASE 4 ###################
-
-DATASET_ITERATOR="""
-text_field = data.Field(lower=True)#, tokenize=TOKENIZER)
-label_field = data.Field(sequential=False)
-#Dataset of columns stored in CSV, TSV, or JSON format
-train, val, test = data.TabularDataset.splits(path=DATASET_PATH, train='train.csv',
-                                                  validation='val.csv', test='test.csv', format='csv',
-                                                  fields=[('text', text_field), ('label', label_field)])
-train_iter, val_iter, test_iter = data.BucketIterator.splits((train, val, test),
-                                                              repeat=False,
-                                                             batch_sizes=(BATCH_SIZE,len(val),len(test)), sort_key=lambda x: len(x.text), device=DEVICE)
-if variables.get(DATASET_ITERATOR_UNL) is None:
-    text_field.build_vocab(train)
-    label_field.build_vocab(train)
-    VOCAB_SIZE=len(text_field.vocab)
-    LABEL_SIZE=len(label_field.vocab)
-"""
-if 'variables' in locals():
-    if IS_LABELED_DATA == 'True':
-        variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
-        variables.put("DATASET_PATH",DATASET_PATH)
-    else:
-        variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR)
-        variables.put("DATASET_PATH_UNL",DATASET_PATH)
-    variables.put("TOKENIZER",TOKENIZER)
-    variables.put("IS_LABELED_DATA",IS_LABELED_DATA)
-print("END Import_Text_Dataset")
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Import_Text_Dataset/raw" language="cpython"></file>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
@@ -314,202 +105,38 @@ print("END Import_Text_Dataset")
       </outputFiles>
       <metadata>
         <positionTop>
-            445.0868225097656
+            344.0625
         </positionTop>
         <positionLeft>
-            1208.0556640625
+            409.453125
         </positionLeft>
       </metadata>
     </task>
-    <task name="GRU" >
-      <description>
-        <![CDATA[ Gated recurrent units (GRUs) are a gating mechanism in recurrent neural networks. ]]>
-      </description>
-      <variables>
-        <variable name="EMBEDDING_DIM" value="50" inherited="false" />
-        <variable name="HIDDEN_DIM" value="40" inherited="false" />
-        <variable name="BATCH_SIZE" value="2" inherited="false" />
-        <variable name="DROPOUT" value="0.5" inherited="false" />
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_gru"/>
-      </genericInformation>
-      <selection>
-        <script type="static">
-          <code language="python">
-            <![CDATA[
-import os
-
-GPU_NODES_ONLY = False
-if variables.get("GPU_NODES_ONLY") is not None:
-  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
-    GPU_NODES_ONLY = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-  if os.path.isdir(CUDA_HOME) == True:
-    CUDA_ENABLED = True
-else:
-  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-    CUDA_ENABLED = True
-
-selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
-]]>
-          </code>
-        </script>
-      </selection>
-      <forkEnvironment javaHome="/usr" >
-        <envScript>
-          <script>
-            <code language="python">
-              <![CDATA[
-if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
-  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
-  # Prepare Docker parameters 
-  containerName = 'activeeon/dlm3' 
-  dockerRunCommand =  'docker run ' 
-  dockerParameters = '--rm ' 
-  # Prepare ProActive home volume 
-  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
-  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
-  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
-  # Prepare working directory (For Dataspaces and serialized task file) 
-  workspaceHost = localspace 
-  workspaceContainer = localspace 
-  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
-  # Prepare container working directory 
-  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
-  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
-  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-else:
-  print("Fork environment disabled")
-]]>
-            </code>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Create a GRU model")
-import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
-
-BATCH_SIZE=2
-HIDDEN_DIM=50
-EMBEDDING_DIM=50
-DROPOUT=0.5
-
-if 'variables' in locals():  
-  if variables.get("BATCH_SIZE") is not None:
-    BATCH_SIZE = variables.get("BATCH_SIZE")
-  else:
-    print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
-  if variables.get("HIDDEN_DIM") is not None:
-    HIDDEN_DIM = variables.get("HIDDEN_DIM")
-  else:
-    print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
-  if variables.get("EMBEDDING_DIM") is not None:
-    EMBEDDING_DIM = variables.get("EMBEDDING_DIM")
-  else:
-    print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
-  if variables.get("DROPOUT") is not None:
-    DROPOUT = variables.get("DROPOUT")
-  else:
-    print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
-
-
-MODEL_TYPE = 'GRU'
-MODEL_CLASS = """
-class GRU(nn.Module):
-
-    def __init__(self, embedding_dim, hidden_dim, vocab_size, label_size, use_gpu, batch_size, dropout=0.5):
-        super(GRU, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.use_gpu = use_gpu
-        self.batch_size = batch_size
-        self.dropout = dropout
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.GRU = nn.GRU(input_size=embedding_dim, hidden_size=hidden_dim)
-        self.hidden2label = nn.Linear(hidden_dim, label_size)
-        self.hidden = self.init_hidden()
-
-    def init_hidden(self):
-        if self.use_gpu:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
-        else:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
-
-    def forward(self, sentence):
-        x = self.embeddings(sentence).view(len(sentence), self.batch_size, -1)
-        gru_out, self.hidden = self.GRU(x, self.hidden)
-        y = self.hidden2label(gru_out[-1])
-        log_probs = F.log_softmax(y)
-        return log_probs"""
+    <task name="Train_Text_Classification_Model" 
     
-MODEL_DEF = """
-MODEL = GRU(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=BATCH_SIZE)
-"""
-print(MODEL_DEF)
-
-# Forward model
-try:
-    variables.put("MODEL_CLASS", MODEL_CLASS)
-    variables.put("MODEL_DEF", MODEL_DEF)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
-    variables.put("HIDDEN_DIM", HIDDEN_DIM)
-    variables.put("EMBEDDING_DIM", EMBEDDING_DIM)
-    variables.put("DROPOUT", DROPOUT)
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END GRU model built")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"></controlFlow>
-      <metadata>
-        <positionTop>
-            445.0868225097656
-        </positionTop>
-        <positionLeft>
-            1359.5660400390625
-        </positionLeft>
-      </metadata>
-    </task>
-    <task name="Train_Text_Classification_Model" >
+    
+    preciousResult="true" >
       <description>
-        <![CDATA[ Train a text-oriented model using deep learning architectures ]]>
+        <![CDATA[ Train a model using a text classification network. ]]>
       </description>
       <variables>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="USE_GPU" value="False" inherited="true" model="PA:Boolean"/>
         <variable name="LEARNING_RATE" value="0.001" inherited="false" />
         <variable name="OPTIMIZER" value="Adam" inherited="false" model="PA:List(Adam,RMS, SGD, Adagrad, Adadelta)"/>
         <variable name="LOSS_FUNCTION" value="NLLLoss" inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)"/>
         <variable name="EPOCHS" value="10" inherited="false" model="PA:Integer"/>
         <variable name="TRAINABLE" value="False" inherited="false" model="PA:Boolean"/>
         <variable name="GLOVE" value="6B" inherited="false" model="PA:List(42B, 840B, twitter.27B,6B)"/>
-        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
-        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-        <variable name="USE_GPU" value="False" inherited="false" model="PA:Boolean"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png"/>
       </genericInformation>
       <depends>
         <task ref="Import_Text_Dataset"/>
-        <task ref="GRU"/>
+        <task ref="LSTM"/>
       </depends>
       <inputFiles>
         <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
@@ -556,316 +183,7 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Train_Text_Classification_Model")
-
-from torchtext import data
-from torchtext import datasets
-from torchtext import vocab
-from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
-from tqdm import tqdm
-import time, random
-import dill as pickle
-import uuid
-from torch.autograd import Variable
-import torch.optim as optim
-import time
-#import spacy
-from itertools import *
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import pandas as pd
-import os
-import shutil
-import numpy as np
-
-#-------------------------evaluate function definition--------------------------
-def evaluate(model, test, data_iter, label_field, loss_function, name):
-    model.eval()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    i=0
-    acc = 0
-    pd.options.display.max_colwidth = 500
-    result =  pd.DataFrame(columns=['text','prediction','label'])
-    for batch in data_iter:
-        i=i+1
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = len(test)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        for i in range(model.batch_size):
-            test_fields = vars(test[i])
-            test_text = test_fields["text"]
-            test_label = test_fields["label"]
-            prede_label = pred_label[i]
-            gd_label = label[i]
-            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
-        pred_res += [x for x in pred_label]
-        if name is 'test_labeled':
-            loss = loss_function(pred, label)
-            avg_loss += loss.data[0]
-    if name is 'test_labeled':
-        avg_loss /= len(test)
-        pred_res = torch.LongTensor(pred_res)
-        acc = get_accuracy(truth_res, pred_res)
-        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
-    return acc, result
-
-#-------------------------get_accuracy function definition--------------------------
-def get_accuracy(truth, pred):
-     assert len(truth)==len(pred)
-     right = 0
-     for i in range(len(truth)):
-        if truth[i]==pred[i]:
-            right += 1.0
-     return right/len(truth)
-     
-#-------------------------train function definition--------------------------     
-def train_epoch_progress(model, train_iter, train, loss_function, optimizer, text_field, label_field, batch_size, epoch):
-    #model.train()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    count = 0
-    for batch in train_iter:
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = batch_size
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        pred_res += [np.float64(x) for x in pred_label]
-        model.zero_grad()
-        loss = loss_function(pred, label)
-        avg_loss += loss.data[0]
-        count += 1
-        loss.backward()
-        optimizer.step()
-    avg_loss /= len(train)
-    pred_res = torch.LongTensor(pred_res)
-    acc = get_accuracy(truth_res, pred_res)
-    return avg_loss, acc
-
-#-------------------------main code --------------------------
-
-#--------Get the task parameters--------
-
-#True or False
-TRAINABLE = 'False'
-#42B, 840B, twitter.27B, 6B
-GLOVE = '6B'
-LEARNING_RATE = '0.0001'
-#Adam,RMS, SGD, Adagrad, Adadelta
-OPTIMIZER = 'Adam'
-EPOCHS = 2
-#L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
-LOSS_FUNCTION = 'NLLLoss'
-#BATCH_SIZE (int)
-BATCH_SIZE = 2
-#True or False
-USE_GPU = 'False'
-
-if 'variables' in locals():
-    #True or False
-    if variables.get("TRAINABLE") is not None:
-        TRAINABLE = variables.get("TRAINABLE")
-    else:
-        print("TRAINABLE not defined by the user. Using the default value:"+TRAINABLE)
-    #42B, 840B, twitter.27B, 6B
-    if variables.get("GLOVE") is not None:
-        GLOVE = variables.get("GLOVE")
-    else:
-        print("GLOVE not defined by the user. Using the default value:"+GLOVE)
-    if variables.get("LEARNING_RATE") is not None:
-        LEARNING_RATE = variables.get("LEARNING_RATE")
-    else:
-        print("LEARNING_RATE not defined by the user. Using the default value:"+LEARNING_RATE)
-    #Adam,RMS, SGD, Adagrad, Adadelta
-    if variables.get("OPTIMIZER") is not None:
-        OPTIMIZER = variables.get("OPTIMIZER")
-    else:
-        print("OPTIMIZER not defined by the user. Using the default value:"+OPTIMIZER)
-    if variables.get("EPOCHS") is not None:
-        EPOCHS = int(variables.get("EPOCHS"))
-    else:
-        print("EPOCHS not defined by the user. Using the default value:"+EPOCHS)
-    #L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
-    if variables.get("LOSS_FUNCTION") is not None:
-        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
-    else:
-        print("LOSS_FUNCTION not defined by the user. Using the default value:"+LOSS_FUNCTION)
-    #BATCH_SIZE
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = int(variables.get("BATCH_SIZE"))
-    else:
-        print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
-    if variables.get("EMBEDDING_DIM") is not None:
-        EMBEDDING_DIM = int(variables.get('EMBEDDING_DIM'))
-    else:
-        print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
-    if variables.get("HIDDEN_DIM") is not None:
-        HIDDEN_DIM = int(variables.get('HIDDEN_DIM'))
-    else:
-        print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
-    if variables.get("DROPOUT") is not None:
-        DROPOUT = float(variables.get('DROPOUT'))
-    else:
-        print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
-    if variables.get("USE_GPU") is not None:
-        USE_GPU = variables.get('USE_GPU')
-    else:
-        print("USE_GPU not defined by the user. Using the default value:"+USE_GPU)
-    if variables.get("TOKENIZER") is not None:
-        TOKENIZER = variables.get('TOKENIZER')
-    else:
-        print("TOKENIZER not defined by the user. Using the default value:"+TOKENIZER)
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get('IS_LABELED_DATA')
-    else:
-        print("IS_LABELED_DATA not defined by the user. Using the default value:"+IS_LABELED_DATA)
-
-#--------Define GPU or CPU environment-------- 
-
-if (USE_GPU == 'True' and torch.cuda.is_available()):
-    USE_GPU = 1
-    DEVICE = 1
-    print('GPU ressource will be used')
-else:
-    USE_GPU = 0
-    DEVICE = -1
-    print('GPU ressource will not be used')
-        
-#--------Load Dataset--------
-DATASET_ITERATOR_UNL = None
-if 'variables' in locals():
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if IS_LABELED_DATA == 'True':
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-    else:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH_UNL")
-    if DATASET_ITERATOR is not None:
-        exec(DATASET_ITERATOR)
-
-#--------Load Model---------
-
-if 'variables' in locals():
-    if variables.get("MODEL_CLASS") is not None:
-        MODEL_CLASS = variables.get("MODEL_CLASS")
-    if variables.get("MODEL_DEF") is not None:
-        MODEL_DEF = variables.get("MODEL_DEF")
-        
-if MODEL_CLASS is not None:
-    exec(MODEL_CLASS)
-if MODEL_DEF is not None:
-    exec(MODEL_DEF)
-else:
-    raise Exception('CLASS MODEL not defined!')
-  
-#-------Main--------
-
-timestamp = str(int(time.time()))
-best_dev_acc = 0.0
-best_tr_acc = 0.0
-
-if USE_GPU:
-    MODEL = MODEL.cuda()
-    
-print('Load word embeddings...')
-
-text_field.vocab.load_vectors(vectors=GloVe(name=GLOVE, dim=EMBEDDING_DIM))
-MODEL.embeddings.weight.data = text_field.vocab.vectors
-if TRAINABLE=='False':
-    MODEL.embeddings.weight.requires_grad=False
-    
-best_model = MODEL
-
-#optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE)
-OPTIM = """optimizer =  optim."""+OPTIMIZER+"""(filter(lambda p: p.requires_grad, MODEL.parameters()), lr="""+LEARNING_RATE+""")"""
-exec(OPTIM)
-LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
-exec(LOSS)
-
-print('Training...')
-for epoch in range(EPOCHS):
-    print(str(MODEL))
-    avg_loss, tr_acc = train_epoch_progress(MODEL, train_iter, train, loss_function, optimizer, text_field, label_field, BATCH_SIZE, epoch)
-    tqdm.write('Train: loss %.2f acc %.1f' % (avg_loss, tr_acc*100))
-    if len(val)>0:
-        dev_acc, results = evaluate(MODEL, val, val_iter, label_field, loss_function, 'test_labeled')
-        if dev_acc > best_dev_acc:
-            best_dev_acc = dev_acc
-            BEST_MODEL = MODEL
-    else:
-        if tr_acc > best_tr_acc:
-            best_tr_acc = tr_acc
-            BEST_MODEL = MODEL
-            
-# Get an unique ID
-file_id = str(uuid.uuid4())
-MODEL_FOLDER = 'text_models/'
-MODEL_FOLDER =  os.path.join(MODEL_FOLDER, file_id)
-if os.path.exists(MODEL_FOLDER):
-  shutil.rmtree(MODEL_FOLDER)
-os.makedirs(MODEL_FOLDER)
-
-# Save trained model
-print('Saving trained model...')
-MODEL_FILE= file_id + ".pt"
-MODEL_PATH = os.path.join(MODEL_FOLDER, MODEL_FILE)
-torch.save(BEST_MODEL, MODEL_PATH)
-
-# Save labels
-print('Saving labels to a text file...')
-LABELS_FILENAME = file_id + "_label.pkl"
-LABELS_PATH = os.path.join(MODEL_FOLDER, LABELS_FILENAME)
-pickle.dump(label_field, open(LABELS_PATH,'wb'))
-
-# Save text
-print('Saving text vocab to a text file...')
-TEXT_FILENAME = file_id + "_text.pkl"
-print(TEXT_FILENAME)
-TEXT_PATH = os.path.join(MODEL_FOLDER, TEXT_FILENAME)
-pickle.dump(text_field, open(TEXT_PATH,'wb'))
-
-#----------variables to send----------------
-# Forward model
-try:
-    variables.put("MODEL_PATH", MODEL_PATH)
-    variables.put("LABELS_PATH", LABELS_PATH)
-    variables.put("TEXT_PATH", TEXT_PATH)
-    variables.put("MODEL_FOLDER", MODEL_FOLDER)
-    variables.put("EVALUATE", EVALUATE)
-    variables.put("ACCURACY", ACCURACY)
-    variables.put("LOSS",LOSS)
-    variables.put("BATCH_SIZE",BATCH_SIZE)
-    variables.put("DATASET_PATH",DATASET_PATH)
-    variables.put("USE_GPU",USE_GPU)
-    variables.put("DEVICE",DEVICE)
-    variables.put("VOCAB_SIZE", VOCAB_SIZE)
-    variables.put("LABEL_SIZE", LABEL_SIZE)
-    if IS_LABELED_DATA=='True':
-        variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
-    else:
-        variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR_UNL)
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-  
-print("END Train_Text_Classification_Model")
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Train_Text_Classification_Model/raw" language="cpython"></file>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
@@ -875,20 +193,19 @@ print("END Train_Text_Classification_Model")
       </outputFiles>
       <metadata>
         <positionTop>
-            573.107666015625
+            472.078125
         </positionTop>
         <positionLeft>
-            1283.8021240234375
+            485.21875
         </positionLeft>
       </metadata>
     </task>
     <task name="Predict_Text_Classification_Model" >
       <description>
-        <![CDATA[ Predict results based on new data ]]>
+        <![CDATA[ Predict a model using a text classification network. ]]>
       </description>
       <variables>
         <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-        <variable name="GPU_CUDA_PATH" value="/usr/local/cuda" inherited="true" />
         <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
         <variable name="LOSS_FUNCTION" value="NLLLoss" inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)"/>
       </variables>
@@ -906,7 +223,24 @@ print("END Train_Text_Classification_Model")
         <script type="static">
           <code language="javascript">
             <![CDATA[
-selected = ((variables.get("GPU_NODES_ONLY").equalsIgnoreCase("false")) || (variables.get("GPU_NODES_ONLY").equalsIgnoreCase("true") && org.ow2.proactive.scripting.helper.selection.SelectionUtils.checkFileExist(variables.get("GPU_CUDA_PATH"))));
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
 ]]>
           </code>
         </script>
@@ -943,177 +277,127 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Predict_Text_Classification_Model")
-
-from torchtext import data
-from torchtext import datasets
-from torchtext import vocab
-from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
-from tqdm import tqdm
-import time, random
-import os
-from torch.autograd import Variable
-import torch.optim as optim
-import time
-#import spacy
-from itertools import *
-import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
-import pandas as pd
-import dill as pickle
-
-pd.options.display.max_colwidth = 500
-DEVICE = -1
-#-------------------------main code --------------------------
-DATASET_ITERATOR_UNL = None
-DATASET_ITERATOR = None
-#--------Get varaiables from previous tasks--------
-if 'variables' in locals():
-    if variables.get("MODEL_PATH") is not None:
-        MODEL_PATH = variables.get("MODEL_PATH")
-    if variables.get("LOSS_FUNCTION") is not None:
-        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = variables.get("BATCH_SIZE")
-    if variables.get("USE_GPU") is not None:
-        USE_GPU = variables.get("USE_GPU")
-    if variables.get("DEVICE") is not None:
-        DEVICE = variables.get("DEVICE") 
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if variables.get("vocab_size") is not None:
-        vocab_size = variables.get("vocab_size")
-    if variables.get("label_size") is not None:
-        label_size = variables.get("label_size")
-    if variables.get("BATCH_SIZE") is not None:
-        label_size = variables.get("BATCH_SIZE")
-    if variables.get("MODEL_CLASS") is not None:
-        MODEL_CLASS = variables.get("MODEL_CLASS")
-    if variables.get("MODEL_DEF") is not None:
-        MODEL_DEF = variables.get("MODEL_DEF")
-
-
-#--------Load Dataset--------
-
-if 'variables' in locals():
-    if variables.get("DATASET_PATH") is not None:
-        DATASET_PATH = variables.get("DATASET_PATH")
-    if variables.get("DATASET_ITERATOR") is not None:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR)
-    if variables.get("DATASET_ITERATOR_UNL") is not None:
-        DATASET_ITERATOR_UNL = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR_UNL)
-    #Load model files
-    if variables.get("LABELS_PATH") is not None:
-        LABELS_PATH = variables.get("LABELS_PATH")
-    if variables.get("TEXT_PATH") is not None:
-        TEXT_PATH = variables.get("TEXT_PATH")
-   
-#-------Main--------
-def evaluate(model, test, data_iter, label_field, loss_function, name):
-    model.eval()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    i=0
-    acc = 0
-    pd.options.display.max_colwidth = 500
-    result =  pd.DataFrame(columns=['text','Predictions','Targets'])
-    for batch in data_iter:
-        i=i+1
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = len(test)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        for i in range(model.batch_size):
-            test_fields = vars(test[i])
-            test_text = test_fields["text"]
-            test_label = test_fields["label"]
-            prede_label = pred_label[i]
-            gd_label = label[i]
-            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
-        pred_res += [x for x in pred_label]
-        if name is 'test_labeled':
-            loss = loss_function(pred, label)
-            avg_loss += loss.data[0]
-    if name is 'test_labeled':
-        avg_loss /= len(test)
-        pred_res = torch.LongTensor(pred_res)
-        acc = get_accuracy(truth_res, pred_res)
-        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
-    return acc, result
-    
-def get_accuracy(truth, pred):
-     assert len(truth)==len(pred)
-     right = 0
-     for i in range(len(truth)):
-         if truth[i]==pred[i]:
-             right += 1.0
-     return right/len(truth)
-     
-LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
-
-exec(LOSS)
-
-
-label_field = pickle.load(open(LABELS_PATH,'rb'))
-text_field = pickle.load(open(TEXT_PATH,'rb'))
-exec(MODEL_CLASS)
-
-MODEL=torch.load(MODEL_PATH)
-if variables.get("DATASET_ITERATOR_UNL") is not None:
-    print('I am testing the unlabeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_unlabeled')
-else:
-    print('I am testing the labeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_labeled')
-
-#------plot results-----
-# Forward results for preview 
-try:
-    variables.put("PREDICT_DATA_JSON", results.to_json(orient='split'))
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END Predict_Text_Classification_Model")
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Predict_Text_Classification_Model/raw" language="cpython"></file>
         </script>
       </scriptExecutable>
       <controlFlow block="none"></controlFlow>
       <metadata>
         <positionTop>
-            701.1284790039062
+            600.09375
         </positionTop>
         <positionLeft>
-            1192.795166015625
+            390.453125
         </positionLeft>
       </metadata>
     </task>
-    <task name="Export_Results" >
+    <task name="Download_Model" 
+    
+    
+    preciousResult="true" >
       <description>
-        <![CDATA[ Preview the predicted results ]]>
+        <![CDATA[ Download a trained model by a deep learning algorithm. ]]>
       </description>
       <variables>
-        <variable name="OUTPUT_FILE" value="HTML" inherited="true" />
         <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
         <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="MODEL_TYPE" value="PyTorch" inherited="false" model="PA:LIST(PyTorch, ONNX)"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_model"/>
+      </genericInformation>
+      <depends>
+        <task ref="Train_Text_Classification_Model"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$MODEL_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
+import os
+
+GPU_NODES_ONLY = False
+if variables.get("GPU_NODES_ONLY") is not None:
+  if str(variables.get("GPU_NODES_ONLY")).lower() == 'true':
+    GPU_NODES_ONLY = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+  if os.path.isdir(CUDA_HOME) == True:
+    CUDA_ENABLED = True
+else:
+  if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+    CUDA_ENABLED = True
+
+selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = 'activeeon/dlm3' 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Download_Model/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            600.09375
+        </positionTop>
+        <positionLeft>
+            601.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Preview_Results" 
+    
+    
+    preciousResult="true" >
+      <description>
+        <![CDATA[ Preview the predicted results. ]]>
+      </description>
+      <variables>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="OUTPUT_FILE" value="HTML" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png"/>
-        <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_results"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_export_results"/>
       </genericInformation>
       <depends>
         <task ref="Predict_Text_Classification_Model"/>
@@ -1180,162 +464,39 @@ else:
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Export_Results")
-
-import base64
-import pandas as pd
-from PIL import Image
-from io import BytesIO
-
-if 'variables' in locals():
-  PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
-  OUTPUT_FILE = variables.get("OUTPUT_FILE")
-
-assert PREDICT_DATA is not None
-df = pd.read_json(PREDICT_DATA, orient='split')  
-
-# check the predictions
-if {'Predictions','Targets'}.issubset(df.columns):
-	pred_result =[]
-	for indice in range(len(df)):
-		if df['Predictions'][indice] == df['Targets'][indice]:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/tick_green.png?raw=true'
-			pred_result.append(result)
-		else:
-			result = 'https://github.com/ow2-proactive/automation-dashboard/blob/master/app/styles/patterns/img/wf-icons/close_red.png?raw=true'
-			pred_result.append(result)
-	df_pred_image_url = pd.DataFrame(pred_result)
-	df['Results'] = df_pred_image_url
- 
-def get_thumbnail(path):
-  i = Image.open(path)
-  extension = i.format
-  i.thumbnail((200, 200), Image.LANCZOS)
-  return i, extension
-
-def image_base64(im):
-  if isinstance(im, str):
-    im, extension = get_thumbnail(im)
-  with BytesIO() as buffer:
-    im.save(buffer, extension)
-    return base64.b64encode(buffer.getvalue()).decode()
-
-def image_formatter(im):
-  extension = im.format
-  return f'<img src="data:image/extension;base64,{image_base64(im)}" height="200" width="200">'
-
-def image_formatter_url(im_url):
-  return """<img src="{0}" height="50" width="50"/>""".format(im_url)
-  
-
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-  result = df.to_html(escape=False, formatters=dict(Images=image_formatter, Outputs=image_formatter, Results=image_formatter_url))
-
-css_style="""
-table {
-  border: 1px solid #999999;
-  text-align: center;
-  border-collapse: collapse;
-  width: 100%; 
-}
-td {
-  border: 1px solid #999999;         
-  padding: 3px 2px;
-  font-size: 13px;
-  border-bottom: 1px solid #999999;
-  #border-bottom: 1px solid #FF8C00;  
-  border-bottom: 1px solid #0B6FA4;   
-}
-th {
-  font-size: 17px;
-  font-weight: bold;
-  color: #FFFFFF;
-  text-align: center;
-  background: #0B6FA4;
-  #background: #E7702A;       
-  #border-left: 2px solid #999999
-  border-bottom: 1px solid #FF8C00;            
-}
-"""
-result = """
-               
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <style>{0}</style>
-                </head>
-                <body>{1}</body></html>
-""".format(css_style, result)
-
-if OUTPUT_FILE == 'HTML':  
-    result = result.encode('utf-8')
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "result.html")
-    resultMetadata.put("content.type", "text/html")
-    print("END Export_Results")
-elif OUTPUT_FILE == 'CSV':
-    if 'Images' in df.columns:
-        df.pop('Images')
-    if 'Results' in df.columns:        
-        df.pop('Results')  
-    if 'Outputs' in df.columns:        
-        df.pop('Outputs') 
-    result = df.to_csv()    
-    resultMetadata.put("file.extension", ".csv")
-    resultMetadata.put("file.name", "result.csv")
-    resultMetadata.put("content.type", "text/csv") 
-    print("END Export_Results")
-else:
-  print('It is not possible to export the data')
-]]>
-              </code>
-            </script>
-          </scriptExecutable>
-          <controlFlow block="none"></controlFlow>
-          <metadata>
-            <positionTop>
-            829.1493530273438
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/Preview_Results/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            728.125
         </positionTop>
-            <positionLeft>
-            1192.8125
+        <positionLeft>
+            391.453125
         </positionLeft>
-          </metadata>
-        </task>
-        <task name="Export_Model" >
-          <description>
-            <![CDATA[ Export a trained model by a deep learning algorithm. ]]>
-          </description>
-          <variables>
-            <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
-            <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
-          </variables>
-          <genericInformation>
-            <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png"/>
-            <info name="task.documentation" value="https://www.activeeon.com/public_content/documentation/latest/MLOS/MLOSUserGuide.html#_export_model"/>
-          </genericInformation>
-          <depends>
-            <task ref="Train_Text_Classification_Model"/>
-          </depends>
-          <inputFiles>
-            <files  includes="$MODEL_FOLDER/**" accessMode="transferFromGlobalSpace"/>
-          </inputFiles>
-          <selection>
-            <script type="static">
-              <code language="python">
-                <![CDATA[
+      </metadata>
+    </task>
+    <task name="LSTM" >
+      <description>
+        <![CDATA[ Long Short-Term Memory (LSTM) units (or blocks) are a building unit for layers of a recurrent neural network (RNN). You can see more details in: http://pytorch.org/docs/0.3.1/nn.html#torch.nn.LSTM ]]>
+      </description>
+      <variables>
+        <variable name="GPU_NODES_ONLY" value="False" inherited="true" model="PA:Boolean"/>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean"/>
+        <variable name="EMBEDDING_DIM" value="50" inherited="false" />
+        <variable name="HIDDEN_DIM" value="40" inherited="false" />
+        <variable name="BATCH_SIZE" value="2" inherited="false" />
+        <variable name="DROPOUT" value="0.5" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_lstm"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <code language="python">
+            <![CDATA[
 import os
 
 GPU_NODES_ONLY = False
@@ -1355,14 +516,14 @@ else:
 
 selected = ((GPU_NODES_ONLY == False) or (GPU_NODES_ONLY == True and CUDA_ENABLED == True))
 ]]>
-              </code>
-            </script>
-          </selection>
-          <forkEnvironment javaHome="/usr" >
-            <envScript>
-              <script>
-                <code language="python">
-                  <![CDATA[
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
 if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
   #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
   # Prepare Docker parameters 
@@ -1384,86 +545,77 @@ if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
 else:
   print("Fork environment disabled")
 ]]>
-                </code>
-              </script>
-            </envScript>
-          </forkEnvironment>
-          <scriptExecutable>
-            <script>
-              <code language="cpython">
-                <![CDATA[
-print("BEGIN Export_Model")
-
-import os
-import uuid
-import zipfile
-import shutil
-
-from os import remove, listdir, makedirs
-from os.path import exists, join, isfile
-
-if 'variables' in locals():
-  MODEL_PATH  = variables.get("MODEL_PATH")
-  LABELS_PATH = variables.get("LABELS_PATH")
-  TEXT_PATH   = variables.get("TEXT_PATH")
-
-assert MODEL_PATH is not None
-
-'''
-assert MODEL_DIR_PATH is not None
-assert exists(MODEL_DIR_PATH) == True
-
-def zipdir(_path, _ziph):
-  # ziph is zipfile handle
-  for root, dirs, files in os.walk(_path):
-    for file in files:
-      _ziph.write(join(root, file))
-
-zipf = zipfile.ZipFile('model.zip', 'w', zipfile.ZIP_DEFLATED)
-zipdir(MODEL_DIR_PATH, zipf)
-zipf.close()
-'''
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-FILE_NAME = ID + '.zip'
-
-zipf = zipfile.ZipFile(FILE_NAME, 'w', zipfile.ZIP_DEFLATED)
-zipf.write(MODEL_PATH)
-if LABELS_PATH is not None:
-  zipf.write(LABELS_PATH)
-if TEXT_PATH is not None:
-  zipf.write(TEXT_PATH)  
-zipf.close()
-
-assert isfile(FILE_NAME) == True
-
-# Read the whole file at once
-FILE_BIN = None
-with open(FILE_NAME, "rb") as binary_file:
-  FILE_BIN = binary_file.read()
-assert FILE_BIN is not None
-
-if 'variables' in locals():
-  result = FILE_BIN
-  resultMetadata.put("file.extension", ".zip")
-  resultMetadata.put("file.name", "model.zip")
-  resultMetadata.put("content.type", "application/octet-stream")
-
-print("END Export_Model")
-]]>
-              </code>
-            </script>
-          </scriptExecutable>
-          <controlFlow block="none"></controlFlow>
-          <metadata>
-            <positionTop>
-            701.1458740234375
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning-scripts/resources/LSTM/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            334.953125
         </positionTop>
-            <positionLeft>
-            1374.826416015625
+        <positionLeft>
+            629.96875
         </positionLeft>
-          </metadata>
-        </task>
-      </taskFlow>
-    </job>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2144px;
+            height:2712px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-329.953125px;left:-385.453125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_103" style="top: 344.062px; left: 409.453px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_text.png" width="20px">&nbsp;<span class="name">Import_Text_Dataset</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_106" style="top: 472.078px; left: 485.219px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_train.png" width="20px">&nbsp;<span class="name">Train_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_109" style="top: 600.094px; left: 390.453px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_112" style="top: 600.094px; left: 601.984px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_deep_model.png" width="20px">&nbsp;<span class="name">Download_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_115" style="top: 728.125px; left: 391.453px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_118" style="top: 334.953px; left: 629.969px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png" width="20px">&nbsp;<span class="name">LSTM</span></a></div><svg style="position:absolute;left:462.5px;top:383.5px" width="122.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 101.5 88 C 111.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M90.73087100000001,61.830692 L77.53854889082004,45.248694612241145 L78.8847998762344,54.36941872188677 L70.07727561270681,57.09476573600676 L90.73087100000001,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M90.73087100000001,61.830692 L77.53854889082004,45.248694612241145 L78.8847998762344,54.36941872188677 L70.07727561270681,57.09476573600676 L90.73087100000001,61.830692" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:564px;top:374.5px" width="126.5" height="98" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 97 C -10 47 115.5 50 105.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M11.881958375,69.15512025 L32.35460519788675,63.68970790825075 L23.45596884474803,61.27842794636371 L24.47791289425047,52.11569743850272 L11.881958375,69.15512025" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M11.881958375,69.15512025 L32.35460519788675,63.68970790825075 L23.45596884474803,61.27842794636371 L24.47791289425047,52.11569743850272 L11.881958375,69.15512025" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:473.5px;top:511.5px" width="111.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 100.5 50 90.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.805796874999999,62.2538125 L29.15447139270185,56.3435294803273 L20.2053984986717,54.12675381794402 L21.027412710645862,44.9439278566556 L8.805796874999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M8.805796874999999,62.2538125 L29.15447139270185,56.3435294803273 L20.2053984986717,54.12675381794402 L21.027412710645862,44.9439278566556 L8.805796874999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:564px;top:511.5px" width="104.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 83.5 88 C 93.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M76.036896,62.682047999999995 L64.58416105579337,44.85412433240066 L65.0037060138027,54.064117927849516 L55.9662309836429,55.88731431859796 L76.036896,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M76.036896,62.682047999999995 L64.58416105579337,44.85412433240066 L65.0037060138027,54.064117927849516 L55.9662309836429,55.88731431859796 L76.036896,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:435.5px;top:639.5px" width="59" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 48 50 38 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.7315759999999982,65.364084 L16.52977897874819,51.24258327797078 L7.501263668798728,53.10964281049999 L4.275337789248177,44.472895609172056 L0.7315759999999982,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M0.7315759999999982,65.364084 L16.52977897874819,51.24258327797078 L7.501263668798728,53.10964281049999 L4.275337789248177,44.472895609172056 L0.7315759999999982,65.364084" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 463px; top: 374px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 564.5px; top: 502px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 564.5px; top: 462px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 474px; top: 630px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 474px; top: 590px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 630px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 590px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 436px; top: 758px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 436px; top: 718px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 670px; top: 365px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

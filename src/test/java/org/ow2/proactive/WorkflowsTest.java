@@ -7,6 +7,7 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -49,6 +50,8 @@ public class WorkflowsTest {
     private final static String BOOLEAN_MODEL = "PA:Boolean";
 
     private final static String PCW_RULE_NAME = "rule";
+
+    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d][a-zA-Z\\d]*)*$";
 
     private final String filePath;
 
@@ -96,9 +99,16 @@ public class WorkflowsTest {
         jobVariables.entrySet().stream().forEach(map -> {
             if (Arrays.asList("false", "true").contains(map.getValue().getValue().toLowerCase())) {
                 assertThat("The wf variable: " + map.getValue().getName() + " MUST HAVE a boolean model: " +
-                           BOOLEAN_MODEL, map.getValue().getModel(), is(BOOLEAN_MODEL));
+                           BOOLEAN_MODEL,
+                           map.getValue().getModel(),
+                           is(BOOLEAN_MODEL));
             }
         });
+
+        String workflowName = this.job.getName();
+        assertTrue("The workflow name " + workflowName +
+                   " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
+                   workflowName.matches(WORKFLOW_NAME_PATTERN));
 
         // Check mandatory generic informations
         String workflowIconValue = this.job.getGenericInformation().get(WORKFLOW_ICON_KEY_NAME);

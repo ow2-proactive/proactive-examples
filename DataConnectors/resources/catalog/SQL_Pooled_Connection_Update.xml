@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="SQL_Pooled_Connection_Update" projectName="2. SQL" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  <variables>
+    <variable name="RDBMS_NAME" value="HSQLDB" model="PA:LIST(PostgreSQL, MySQL, Greenplum, SQL Server, Oracle, HSQLDB)"/>
+    <variable name="HOST" value="localhost" />
+    <variable name="PORT" value="" />
+    <variable name="USERNAME" value="" />
+    <variable name="DATABASE" value="" />
+    <variable name="POOL_autoCommit" value="true" model="PA:Boolean"/>
+    <variable name="SQL_STATEMENTS" value="" />
+  </variables>
+  <description>
+    <![CDATA[ This workflow is a template that demonstrates how to use pooled connections to SQL databases across multiple SQL tasks (basically when running several Tasks concurrently on the same machine). The workflow is composed of a single task Open_Pooled_Connection_and_Execute_Update. 
+
+This workflow requires these variables:
+$RDBMS_NAME is the relational database management system name e.g. PostgreSQL, MySQL, Greenplum, HSQLDB, Oracle...
+$HOST (required) is the server host. Default value is localhost.
+$USERNAME (required) is the username used for accessing the SQL database.
+$PORT (optional) is the listening port.
+$DATABASE (required) is the database name.
+$POOL_PROPERTY (optional) HikariCP offers many data source properties that can be used to configure the DB pooled connection such as autoCommit, maximumPoolSize, maxLifetime, idleTimeout .... You can add as many properties as you want. For each one, add a new task variable where the variable name is the property name having "POOL_"  as a prefix (e.g. POOL_autoCommit, POOL_maximumPoolSize) and the variable value is the property value. For more info, please refer to https://github.com/brettwooldridge/HikariCP.
+$SQL_STATEMENTS (required) is a string composed of a set of update statements (CREATE, INSERT , UPDATE , or DELETE statement).
+
+To allow the persistence of a single connection across multiple tasks executions, the scheduler should be configured in non-forked mode to execute tasks in a single JVM rather than starting a dedicated JVM to run the task (In $PROACTIVE_HOME/config/scheduler/settings.ini, please set pa.scheduler.task.fork=false).
+Besides, you have to download the jdbc connector jar file of the used rdbms, and copy it into the addons directory ($PROACTIVE_HOME/addons) of the scheduler. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="data-connectors"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_database_connections_pooling"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Open_Pooled_Connection_and_Execute_Update" >
+      <description>
+        <![CDATA[ This task allows to open a pooled connection to any SQL database and then execute any SQL update statements on it.
+If it requires a password, you have to add it using the following third-party credential: {key: rdbms_protocol://<username>@<host>:<port>, value: RDBMS_PASSWORD}.
+Please refer to the User documentation to learn how to add third-party credentials.
+This task has the same list of workflow variables. ]]>
+      </description>
+      <variables>
+        <variable name="RDBMS_NAME" value="" inherited="true" />
+        <variable name="HOST" value="" inherited="true" />
+        <variable name="PORT" value="" inherited="true" />
+        <variable name="USERNAME" value="" inherited="true" />
+        <variable name="DATABASE" value="" inherited="true" />
+        <variable name="POOL_autoCommit" value="" inherited="true"/>
+        <variable name="SQL_STATEMENTS" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_database_connections_pooling"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.scheduler.examples.connectionpooling.*
+import groovy.ui.SystemOutputInterceptor
+import java.sql.SQLException
+
+
+// Retrieve RDBMS_NAME variable
+RDBMS_NAME = variables.get("RDBMS_NAME")
+
+println("BEGIN Pooled Connection and execute Update on " + RDBMS_NAME + " database")
+
+RDBMS_PROTOCOL = ""
+RDBMS_DEFAULT_PORT = ""
+RDBMS_DATA_SOURCE_CLASS_NAME = ""
+
+if (RDBMS_NAME.equals("PostgreSQL")){
+    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
+} else if (RDBMS_NAME.equals("MySQL")){
+    init("mysql", "3306", "com.mysql.cj.jdbc.Driver")
+} else if (RDBMS_NAME.equals("Greenplum")){
+    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
+} else if (RDBMS_NAME.equals("SQL Server")){
+    init("sqlserver", "1433", "com.microsoft.sqlserver.jdbc.SQLServerDataSource")
+} else if (RDBMS_NAME.equals("Oracle")){
+    init("oracle" ,"1521", "oracle.jdbc.pool.OracleDataSource")
+} else if (RDBMS_NAME.equals("HSQLDB")){
+    init("hsqldb:hsql" ,"9001", "org.hsqldb.jdbc.JDBCDataSource")
+} else {
+    throw new IllegalArgumentException("You must specify a valid RDBMS name in the script arguments amongst PostgreSQL, MySQL, Greenplum, SQL Server, HSQLDB or Oracle")
+}
+
+host = variables.get("HOST")
+if (!host) {
+    throw new IllegalArgumentException("ERROR: HOST variable is not provided by the user. Empty value is not allowed.")
+}
+
+username = variables.get("USERNAME")
+if (!username) {
+    throw new IllegalArgumentException("ERROR: USERNAME variable is not provided by the user. Empty value is not allowed.")
+}
+
+port = variables.get("PORT")
+if (!port) {
+    port = RDBMS_DEFAULT_PORT
+    println("WARNING: PORT variable is not provided by the user. Using the default value:" + RDBMS_DEFAULT_PORT)
+}
+
+database = variables.get("DATABASE")
+if (!database) {
+    throw new IllegalArgumentException("ERROR: DATABASE variable is not provided by the user. Empty value is not allowed.")
+}
+
+// This key is used for getting the password from 3rd party credentials.
+CREDENTIALS_KEY = RDBMS_PROTOCOL + "://" + username + "@" + host + ":" + port
+CREDENTIALS_KEY_MSG = RDBMS_PROTOCOL + "://<username>@<host>:<port>"
+password = credentials.get(CREDENTIALS_KEY)
+if (!password) {
+    println("WARNING: Your didn't add your password to 3rd-party credentials under the key :\"" + CREDENTIALS_KEY + "\"");
+}
+
+//Construct the jdbc URL
+jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + "/"+ database
+//Oracle & SQL Server are particular cases
+if(RDBMS_PROTOCOL.equals("oracle")){
+    jdbcUrl = "jdbc:oracle:thin:@//" + host + ":" + port + "/" + database
+} else if(RDBMS_PROTOCOL.equals("sqlserver")){
+    jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + ";database=" + database
+}
+
+interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
+interceptor.start()
+
+if(password){
+    dbConnectionDetailsBuilder = new DBConnectionDetails.Builder().jdbcUrl(jdbcUrl).username(username).password(password)
+}else{
+    dbConnectionDetailsBuilder = new DBConnectionDetails.Builder().jdbcUrl(jdbcUrl).username(username)
+}
+
+//Add (optional) data source properties to configure the DB pooled connection
+variables.entrySet().each { var ->
+    if (var.getKey().startsWith("POOL_")){
+        dbConnectionDetailsBuilder.addDataSourceProperty(var.getKey().replace("POOL_", ""), var.getValue())
+    }} 
+
+//Open the pooled connection to the database
+dbConnectionDetails = dbConnectionDetailsBuilder.build()
+sqlStatements = variables.get("SQL_STATEMENTS")   
+if (!sqlStatements){
+    throw new IllegalArgumentException("ERROR: SQL_STATEMENTS variable is not provided by the user. Empty value is not allowed.")
+}
+try{
+    dBConnectionPoolsHolder = DBConnectionPoolsHolder.getInstance();
+    dBConnectionPoolsHolder.executeUpdate(dbConnectionDetails, sqlStatements)
+} catch (Exception e) {
+    println org.objectweb.proactive.utils.StackTraceUtil.getStackTrace(e)
+    throw e;
+}
+interceptor.stop()
+
+/**
+* This method initializes the default data base properties (port, connection protocol and drivers, etc)
+*/
+def init(String protocol, String port, String dataSourceClassName){
+    RDBMS_PROTOCOL = protocol
+    RDBMS_DEFAULT_PORT = port
+    RDBMS_DATA_SOURCE_CLASS_NAME = dataSourceClassName
+}
+
+println("END Pooled Connection and execute Update on " + RDBMS_NAME + " database")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            440
+        </positionTop>
+        <positionLeft>
+            429.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2864px;
+            height:3304px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-435px;left:-424.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_106" style="top: 440px; left: 429.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rdbms.png" width="20px">&nbsp;<span class="name">Open_Pooled_Connection_and_Execute_Update</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 546.5px; top: 470px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

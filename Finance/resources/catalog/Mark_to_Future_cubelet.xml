@@ -1,0 +1,298 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Mark_To_Future_Cubelet" projectName="Risk Valuation Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  <variables>
+    <variable name="evaluation_date_start" value="" />
+    <variable name="evaluation_date_end" value="" />
+    <variable name="evaluation_frequency" value="" />
+    <variable name="shocked_yield_start" value="" />
+    <variable name="shocked_yield_end" value="" />
+    <variable name="shocked_yield_delta" value="" />
+    <variable name="bonds_params_file_path_from_dataspace" value="" />
+    <variable name="nb_replicated_tasks" value="" />
+    <variable name="node_source_compute_memory_intensive_exclusive" value="" />
+    <variable name="node_source_compute_intensive" value="" />
+    <variable name="node_source_memory_intensive" value="" />
+    <variable name="data_dir_path" value="" />
+    <variable name="submitter_task_id" value="" />
+  </variables>
+  <description>
+    <![CDATA[ Estimates a Mark-to-Future cubelet for bond portfolios. The pricing engine relies on the C++ Quantlib library. ]]>
+  </description>
+  <genericInformation>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+    <info name="Documentation" value="https://ow2-proactive.github.io/proactive-examples/Finance/resources/doc/V1/risk-valuation-proactive.pdf"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="init" >
+      <selection>
+        <script type="dynamic">
+          <code language="groovy">
+            <![CDATA[
+def node_source_compute_memory_intensive_exclusive = variables.get("node_source_compute_memory_intensive_exclusive").toBoolean()
+if (!node_source_compute_memory_intensive_exclusive)
+  selected = true
+else {
+  if (variables.get("node_source_compute_intensive").equals(System.getProperty("proactive.node.nodesource")) ||
+      variables.get("node_source_memory_intensive").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = false
+  } else {
+   selected = true
+  }
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "init ..."
+
+// Retrieve variables
+def bonds_params_file_path_from_dataspace = variables.get("bonds_params_file_path_from_dataspace")
+
+// Extract and propagate the bonds file name
+def bonds_params_file_name = new File(bonds_params_file_path_from_dataspace).name
+variables.put("bonds_params_file_name", bonds_params_file_name)
+
+println "... init"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_replicated_tasks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          358
+        </positionTop>
+        <positionLeft>
+          620.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="simulate_MtF_cubelet" >
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="init"/>
+      </depends>
+      <inputFiles>
+        <files  includes="bondsSimulations" accessMode="transferFromGlobalSpace"/>
+        <files  includes="${PA_TASK_REPLICATION}_${bonds_params_file_name}" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="dynamic">
+          <code language="groovy">
+            <![CDATA[
+if (variables.get("node_source_compute_intensive").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
+} else {
+   selected = false
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "simulate_MtF_cubelet ..."
+
+// Retrieve variables
+def task_id = variables.get("PA_TASK_REPLICATION")
+def evaluation_date_start = variables.get("evaluation_date_start")
+def evaluation_date_end = variables.get("evaluation_date_end")
+def evaluation_frequency = variables.get("evaluation_frequency")
+def shocked_yield_start = variables.get("shocked_yield_start")
+def shocked_yield_end = variables.get("shocked_yield_end")
+def shocked_yield_delta = variables.get("shocked_yield_delta")
+def data_dir_path = variables.get("data_dir_path")
+def submitter_task_id = variables.get("submitter_task_id")
+def bonds_params_file_name = task_id + "_" + variables.get("bonds_params_file_name")
+
+println "================="
+println "shocked_yield_start " + shocked_yield_start
+println "shocked_yield_end " + shocked_yield_end
+println new File(localspace, bonds_params_file_name).absolutePath + "\n" + new File(localspace, bonds_params_file_name).text
+println "================="
+
+// Set executable permission
+def executable_file_path = new File(localspace, "bondsSimulations").absolutePath
+["chmod","+x", executable_file_path].execute().waitForProcessOutput(System.out, System.err)
+
+// Build the command
+def cmd = ['/bin/sh', '-c', "docker run --rm -v " + new File('.').absolutePath + ":/defaultglobal lballabio/quantlib:1.10-xenial /bin/bash -c 'cd defaultglobal; ./bondsSimulations " + evaluation_date_start + " " + evaluation_date_end + " " + evaluation_frequency + " " + shocked_yield_start + " " + shocked_yield_end + " " + shocked_yield_delta + " " + bonds_params_file_name + "'"]
+println cmd
+
+// Execute the command
+def sout = new StringBuilder()
+cmd.execute().waitForProcessOutput(sout, System.err)
+
+// Store the output
+def csv_file_name = "MtF-cubelet_" + task_id + "_submitter_task_id_" + submitter_task_id  + ".csv"
+def csv_file = new File(data_dir_path, csv_file_name)
+csv_file.text = sout
+variables.put("MtF-cubelet_" + task_id + "_submitter_task_id_" + submitter_task_id, csv_file.absolutePath)
+
+println "... simulate_MtF_cubelet"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+          486
+        </positionTop>
+        <positionLeft>
+          620.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="generate_MtF_cubelet" >
+      <depends>
+        <task ref="simulate_MtF_cubelet"/>
+      </depends>
+      <selection>
+        <script type="dynamic">
+          <code language="groovy">
+            <![CDATA[
+if (variables.get("node_source_memory_intensive").equals(System.getProperty("proactive.node.nodesource"))) {
+    selected = true
+} else {
+   selected = false
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+# Prepare Docker parameters
+containerName = 'activeeon/r-base:latest'
+dockerRunCommand =  'docker run '
+dockerParameters = '--rm '
+# Prepare ProActive home volume
+paHomeHost = variables.get("PA_SCHEDULER_HOME")
+paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+# Prepare data volume
+dataDirHost = variables.get("data_dir_path")
+dataDirContainer = '/tmp'
+dataDirVolume = '-v ' + dataDirHost + ':' + dataDirContainer+ ' '
+# Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + dataDirVolume + containerName
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="R">
+            <![CDATA[
+print("generate_MtF_cubelet ...")
+
+# Retrieve variables
+data_dir_path <- variables["data_dir_path"]
+submitter_task_id <- variables["submitter_task_id"]
+nb_replicated_tasks <- as.integer(variables["nb_replicated_tasks"])
+
+# Gather the first MtF cubelet
+MtF_cubelet_file_path <- file.path("/tmp", paste("MtF-cubelet_0_submitter_task_id_", submitter_task_id, ".csv", sep=''))
+MtF_cubelet <- read.table(file=MtF_cubelet_file_path, header=TRUE, sep="\t")
+
+# Merge with the other MtF cubelets
+i <- 1
+while (i < nb_replicated_tasks){
+
+    MtF_cubelet_file_path <- file.path("/tmp", paste("MtF-cubelet_", i, "_submitter_task_id_", submitter_task_id, ".csv", sep=''))
+    MtF_cubelet <- read.table(file=MtF_cubelet_file_path, header=TRUE, sep="\t")
+
+    MtF_cubelet <- rbind(MtF_cubelet, MtF_cubelet)
+
+    i <- i+1
+}
+
+print("=================")
+print(ncol(MtF_cubelet))
+print(colnames(MtF_cubelet))
+print("=================")
+
+# Save the results
+MtF_cubelet_file_path <- file.path("/tmp", paste("MtF-cubelet_submitter_task_id_", submitter_task_id, ".csv", sep=''))
+write.table(MtF_cubelet, file = MtF_cubelet_file_path, row.names=FALSE, sep="\t", append = FALSE)
+
+print("... generate_MtF_cubelet")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+          614
+        </positionTop>
+        <positionLeft>
+          620.25
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2820px;
+            height:3372px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-353px;left:-615.25px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_408" style="top: 358px; left: 620.25px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">init</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_411" style="top: 486px; left: 620.25px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png" width="20px">&nbsp;<span class="name">simulate_MtF_cubelet</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_414" style="top: 614px; left: 620.25px;"><a class="task-name"><img src="/studio/images/R.png" width="20px">&nbsp;<span class="name">generate_MtF_cubelet</span></a></div><svg style="position:absolute;left:689.5px;top:387.5px" width="47.39999999999998" height="99" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 26.399999999999977 88 C 36.39999999999998 88 -10 -10 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M26.28292079999998,76.942366 L27.01798758628349,55.765499451341235 L22.11919202136039,63.57586448846273 L13.65148607474621,59.92922822998083 L26.28292079999998,76.942366" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M26.28292079999998,76.942366 L27.01798758628349,55.765499451341235 L22.11919202136039,63.57586448846273 L13.65148607474621,59.92922822998083 L26.28292079999998,76.942366" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_422" style="position: absolute; transform: translate(-50%, -50%); left: 712.7px; top: 437.75px;">replicate</div><svg style="position:absolute;left:659.5px;top:397.5px" width="37.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 16.5 88 C 26.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M17.922576,66.303232 L19.885371730082234,45.204714684274435 L14.541569557866197,52.71762213373894 L6.29976186382118,48.585721126408245 L17.922576,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M17.922576,66.303232 L19.885371730082234,45.204714684274435 L14.541569557866197,52.71762213373894 L6.29976186382118,48.585721126408245 L17.922576,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:676px;top:525.5px" width="22" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 1 88 C 11 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M3.7341562499999994,66.78168750000002 L9.900828592736769,46.50923939383077 L3.155021153255475,52.793671109542124 L-4.087187797721125,47.08837449057529 L3.7341562499999994,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M3.7341562499999994,66.78168750000002 L9.900828592736769,46.50923939383077 L3.155021153255475,52.793671109542124 L-4.087187797721125,47.08837449057529 L3.7341562499999994,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 660px; top: 388px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 690px; top: 388px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 676.5px; top: 516px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 716.4px; top: 476px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 676.5px; top: 476px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 677.5px; top: 644px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677.5px; top: 604px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

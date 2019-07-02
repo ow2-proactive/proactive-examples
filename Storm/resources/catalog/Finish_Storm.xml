@@ -1,124 +1,80 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.10"
-     xsi:schemaLocation="urn:proactive:jobdescriptor:3.10 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.10/schedulerjob.xsd"
-    name="Finish_Storm" projectName="Cloud Automation - Lifecycle"
-    priority="normal"
-    onTaskError="continueJobExecution"
-     maxNumberOfExecution="2">
-
-  <variables>
-    <variable name="instance_name" value="" />
-  </variables>
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Finish_Storm" projectName="Cloud Automation - Lifecycle" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <description>
-    <![CDATA[ This workflow is used by ProActive-Cloud-Automation service to undeploy a running instance of Apache Storm stream processing system (http://storm.apache.org). ]]>
+    <![CDATA[ Delete Storm instance. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="cloud-automation"/>
-    <info name="group" value="public-objects"/>
-    <info name="pca.action.toState" value="FINISHED"/>
-    <info name="pca.service.id" value="Storm"/>
-    <info name="pca.states" value="(RUNNING,FINISHED)(ERROR,FINISHED)"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/storm.png"/>
+    <info name="pca.states" value="(RUNNING,FINISHED)(PAUSED,FINISHED)(ERROR,FINISHED)"/>
+    <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+    <info name="pca.service.id" value="Storm"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Remove_Storm_Cluster">
+    <task name="Finish_Storm" >
       <description>
-        <![CDATA[ delete Apache Storm cluster ]]>
+        <![CDATA[ Finish Storm instance and remove its docker container ]]>
       </description>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/storm.png"/>
+        <info name="Documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
       </genericInformation>
       <pre>
         <script>
-          <code language="groovy">
-            <![CDATA[
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-
-// Construct synchro channel name
-channel = "Service_Instance_" + service_instance_id  
-
-//Acquire docker container to delete from synchro channel
-def instance_name =  synchronizationapi.get(channel,"INSTANCE_NAME")
-println(instance_name)
-variables.put("instance_name",instance_name)
-
-// Inform the Activation workflow that the delete is triggered
-synchronizationapi.put(channel,"DELETE_LAUNCHED",true) 
-println "DELETE_LAUNCHED = true"
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Pre_Trigger_Action/raw" language="groovy">
+            <arguments>
+              <argument value="FINISH_LAUNCHED"/>
+            </arguments>
+          </file>
         </script>
       </pre>
       <scriptExecutable>
         <script>
           <code language="bash">
             <![CDATA[
-docker ps -a | grep $variables_instance_name"-supervisor"'*' | awk '{ print $1}' | xargs -I {} docker rm -f {}
-docker rm -f $variables_instance_name"-nimbus"
-docker rm -f $variables_instance_name"-ui"
+echo Removing docker containers: "$variables_INSTANCE_NAME"
+docker ps -a | grep $variables_INSTANCE_NAME"-*" | awk '{ print $1}' | xargs -I {} docker rm -f {}
+OUT=$?
+if [ $OUT -eq 0 ];then
+   echo "Storm cluster '$variables_INSTANCE_NAME' successfully removed"
+   echo $variables_INSTANCE_NAME > $variables_INSTANCE_NAME"_status"
+   exit 0
+else
+   echo "Error while removing Storm cluster ''$variables_INSTANCE_NAME'"
+   exit 1
+fi
+
 ]]>
           </code>
         </script>
       </scriptExecutable>
-    </task>
-    <task name="End_Deployment">
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/storm.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="Remove_Storm_Cluster"/>
-      </depends>
-      <inputFiles>
-        <files  includes="cloud-automation-service-client-8.2.0-SNAPSHOT.jar" accessMode="transferFromGlobalSpace"/>
-      </inputFiles>
-      <forkEnvironment >
-        <additionalClasspath>
-          <pathElement path="cloud-automation-service-client-8.2.0-SNAPSHOT.jar"/>
-        </additionalClasspath>
-      </forkEnvironment>
-      <scriptExecutable>
+      <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-// PCA URL
-def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
-def pca_url = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service");
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-//api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Acquire service instance id
-def service_instance_id = Long.valueOf(variables.get("PCA_INSTANCE_ID"))
-println(service_instance_id)
-
-// Update service instance status
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(service_instance_id)
-service_instance_data.setInstanceStatus("FINISHED")
-service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(service_instance_id,service_instance_data)
-
-// Create synchro channel
-channel = "Service_Instance_" + service_instance_id  
-synchronizationapi.waitUntil(channel, "DELETE_INSTANCE", "{k,x -> x == true}")
-
-// Delete service instance
-//service_instance_data = service_instance_rest_api.deleteServiceInstancesFromDatabaseUsingDELETE(service_instance_id)
-
-// Delete synchro channel
-synchronizationapi.deleteChannel(channel)
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Trigger_Action/raw" language="groovy">
+            <arguments>
+              <argument value="FINISHED"/>
+            </arguments>
+          </file>
         </script>
-      </scriptExecutable>
+      </post>
     </task>
   </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2476px;
+            height:3017px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-407.5141906738281px;left:-553.8919982910156px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_70" style="top: 412.515px; left: 558.906px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/storm.png" width="20px">&nbsp;<span class="name">Finish_Storm</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 599px; top: 443px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
 </job>

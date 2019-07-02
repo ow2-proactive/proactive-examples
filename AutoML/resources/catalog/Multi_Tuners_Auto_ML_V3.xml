@@ -1,0 +1,1380 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Multi_Tuners_Auto_ML_V3" onTaskError="continueJobExecution" priority="normal" projectName="1. Tuning Algorithms" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:LIST(Bayes,Grid,Random,QuasiRandom,CMAES,MOCMAES)" name="TUNING_ALGORITHM" value="Bayes"/>
+    <variable model="PA:CATALOG_OBJECT" name="WORKFLOW_TO_OPTIMIZE" value="auto-ml-optimization/CIFAR10_CNN"/>
+    <variable name="SEARCH_SPACE" value="{&quot;OPTIMIZER&quot;: choice([&quot;Adam&quot;, &quot;SGD&quot;, &quot;RMSprop&quot;]),&quot;LEARNING_RATE&quot;: choice([0.0001, 0.00025]), &quot;BATCH_SIZE&quot;: choice([32, 64]), &quot;WEIGHT_DECAY&quot;: choice([0.0005, 0.005])}"/>
+    <variable model="PA:Integer" name="MAX_ITERATIONS" value="2"/>
+    <variable model="PA:Integer" name="PARALLEL_SAMPLES_PER_LOOP" value="2"/>
+    <variable model="PA:Boolean" name="TENSORBOARD_ENABLED" value="True"/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable name="MOUNT_LOG_PATH" value="/shared/$INSTANCE_NAME"/>
+    <variable name="DOCKER_LOG_PATH" value="/graphs/$INSTANCE_NAME"/>
+    <variable name="INSTANCE_NAME" value="tensorboard-server"/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow proposes six algorithms for hyperparameter optimization. The choice of the sampling/search strategy depends strongly on the problem tackled. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="auto-ml-optimization"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/tunning_algorithm.png"/>
+<info name="Documentation" value="https://doc.activeeon.com/latest/user/ProActiveUserGuide.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task name="Split">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+        <variable inherited="true" model="PA:LIST(Bayes,Grid,Random,QuasiRandom,CMAES,MOCMAES)" name="TUNING_ALGORITHM" value="Grid"/>
+        <variable inherited="true" name="SEARCH_SPACE" value="{'x': uniform(-6, 6), 'y': uniform(-6, 6)}"/>
+        <variable inherited="true" model="PA:Integer" name="PARALLEL_SAMPLES_PER_LOOP" value="2"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        <info name="PYTHON_COMMAND" value="/usr/local/bin/python3"/>
+      </genericInformation>
+      <depends>
+        <task ref="Else"/>
+      </depends>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import json
+import numpy as np
+
+import chocolate as choco
+from chocolate import uniform, quantized_uniform, log, quantized_log, choice
+from chocolate import MongoDBConnection, Bayes, Grid, Random, QuasiRandom, CMAES, MOCMAES
+
+PA_TASK_ITERATION = int(variables.get('PA_TASK_ITERATION'))
+print("PA_TASK_ITERATION: ", PA_TASK_ITERATION)
+
+# Establish a connection to a MongoDB local database
+MONGODB_URL = variables.get('MONGODB_URL')
+print('MONGODB_URL: ', MONGODB_URL)
+conn = MongoDBConnection(MONGODB_URL)
+if PA_TASK_ITERATION == 0:
+	print('Cleaning database for the first iteration')
+	conn.clear() # Clear all data from the database.
+
+# Define the search space
+space = "space=" + variables.get('SEARCH_SPACE')
+print('SEARCH_SPACE: ', space)
+exec(space)
+
+TUNING_ALGORITHM = variables.get('TUNING_ALGORITHM')
+assert TUNING_ALGORITHM is not None, "TUNING_ALGORITHM must be set!"
+
+# Construct the optimizer
+sampler = None
+if TUNING_ALGORITHM == "Grid":
+    sampler = Grid(conn, space)
+if TUNING_ALGORITHM == "Random":
+    sampler = Random(conn, space)
+if TUNING_ALGORITHM == "QuasiRandom":
+    sampler = QuasiRandom(conn, space)
+if TUNING_ALGORITHM == "Bayes":
+    sampler = Bayes(conn, space)
+if TUNING_ALGORITHM == "CMAES":
+    sampler = CMAES(conn, space)
+if TUNING_ALGORITHM == "MOCMAES":
+    sampler = MOCMAES(conn, space, 10)
+assert sampler is not None, "TUNING_ALGORITHM must be selected!"
+print('TUNING_ALGORITHM: ', TUNING_ALGORITHM)
+
+# Check for previous results
+workflow_results = None
+if PA_TASK_ITERATION > 0:
+    workflow_results = variables.get('workflow_results')
+
+# Add previous loss values to the database
+if workflow_results is not None:
+    previous_results = json.loads(workflow_results)
+    print("Adding previous loss values to the database")
+    for i, previous_result in enumerate(previous_results):
+        #print(i, previous_result)
+        previous_token = previous_result['token']
+        previous_loss = previous_result['loss']
+        print(i, 'previous_token: ', previous_token, ', previous_loss: ', previous_loss)
+        # Add the loss to the database
+        #sampler.update(token, loss)
+        sampler.update(previous_token, previous_loss)
+
+# Sample the next point
+samples_per_iteration = int(variables.get('PARALLEL_SAMPLES_PER_LOOP'))
+result = []
+for i in range(samples_per_iteration):
+    token, params = sampler.next()
+    token_params = {
+      'token': token, 
+      'params': params
+    }
+    token_params_json = json.dumps(token_params)
+    print("sample: ", i, ", token_params: ", token_params_json)
+    result.append(token_params_json)
+
+print('result: ', result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs = result.size()
+println "runs: " + runs
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            639.00390625
+        </positionTop>
+        <positionLeft>
+            379.765625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Submit_Job_No_Wait">
+      <description>
+        <![CDATA[ This task will be replicated according to the 'runs' value specified in
+				the replication script.
+				The replication index is used in each task's instance to select the
+				input. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:CATALOG_OBJECT" name="WORKFLOW_TO_OPTIMIZE" value="auto-ml-optimization/Himmelblau_Function"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_submit_job_no_wait.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+
+def jsonSlurper = new JsonSlurper()
+
+int replication = variables.get('PA_TASK_REPLICATION')
+token_params_json = results[0].value()[replication]
+println "token_params_json: " + token_params_json
+
+def object = jsonSlurper.parseText(token_params_json)
+token = object.token
+params = object.params
+
+println "token:  " + token
+println "params: " + params
+
+//String token_encoded = JsonOutput.toJson([token: token]).bytes.encodeBase64().toString()
+//String params_encoded = JsonOutput.toJson([params: params]).bytes.encodeBase64().toString()
+String token_encoded = JsonOutput.toJson(token).bytes.encodeBase64().toString()
+String params_encoded = JsonOutput.toJson(params).bytes.encodeBase64().toString()
+
+println "token_encoded: " + token_encoded
+println "params_encoded: " + params_encoded
+
+// Submit a workflow referenced in the ProActive Catalog (or accessible by url)
+// Please add the bucket and workflow names that you want to execute as Task Variables 'call_workflow'
+// connect to the scheduler
+schedulerapi.connect()
+
+// get the workflow information from Task Variables
+def calledWorkflow = variables.get("WORKFLOW_TO_OPTIMIZE")
+
+// variables submitted to the workflow: Empty in the example, modify this map to give parameters to the submitted workflow
+//workflow_variables = Collections.EMPTY_MAP
+workflow_variables = [:]
+workflow_variables.put("token_encoded", token_encoded)
+workflow_variables.put("params_encoded", params_encoded)
+workflow_variables.put("MOUNT_LOG_PATH", variables.get("MOUNT_LOG_PATH"))
+workflow_variables.put("INSTANCE_NAME", variables.get("INSTANCE_NAME"))
+
+println "Submitting workflow " + calledWorkflow
+
+// submitting the job
+def generic_infos_map = ["PARENT_JOB_ID" : variables.get("PA_JOB_ID")]
+jobid = schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"), calledWorkflow, workflow_variables, generic_infos_map)
+
+// alternatively you can submit a workflow from a direct url
+// // add sessionId to request header map
+// requestHeader = Collections.singletonMap("sessionId", schedulerapi.getSession()
+// jobUrl = "https://try.activeeon.com/catalog/buckets/basic-examples/resources/distributed_computing_Pi/raw"
+// jobid = schedulerapi.submit(jobURL, variables, generic_infos_map, requestHeader)
+
+println "Job submitted with job id " + jobid
+
+result = jobid
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            751.09375
+        </positionTop>
+        <positionLeft>
+            372.75390625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Merge">
+      <description>
+        <![CDATA[ As a merge operation, we simply print the results from previous tasks. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        <info name="PYTHON_COMMAND" value="/usr/local/bin/python3"/>
+      </genericInformation>
+      <depends>
+        <task ref="Submit_Job_No_Wait"/>
+      </depends>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#%% fork environment (python)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+    if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+        DOCKER_ENABLED = False
+
+DOCKER_IMAGE = 'activeeon/dlm3'
+if variables.get("DOCKER_IMAGE") is not None:
+    DOCKER_IMAGE = variables.get("DOCKER_IMAGE")
+
+if variables.get("MOUNT_LOG_PATH") is not None:
+    MOUNT_LOG_PATH = variables.get("MOUNT_LOG_PATH")
+    
+if variables.get("DOCKER_LOG_PATH") is not None:
+    DOCKER_LOG_PATH = variables.get("DOCKER_LOG_PATH")
+
+DOCKER_GPU_ENABLED = False
+if variables.get("DOCKER_GPU_ENABLED") is not None:
+    if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'true':
+        DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+    if os.path.isdir(CUDA_HOME) == True:
+        CUDA_ENABLED = True
+else:
+    if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+        CUDA_ENABLED = True
+
+DOCKER_RUN_CMD = 'docker run '
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+    DOCKER_RUN_CMD += '--runtime=nvidia '
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_IMAGE:       ' + DOCKER_IMAGE)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+    # Prepare Docker parameters
+    containerName = DOCKER_IMAGE
+    dockerRunCommand =  DOCKER_RUN_CMD
+    dockerParameters = '--rm '
+    # Prepare ProActive home volume
+    paHomeHost = variables.get("PA_SCHEDULER_HOME")
+    paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+    proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+    # Prepare working directory (For Dataspaces and serialized task file)
+    workspaceHost = localspace
+    workspaceContainer = localspace
+    workspaceVolume = '-v '+localspace +':'+localspace+' '
+    # Prepare working directory (For Tensorboard)
+    mountLogHost = MOUNT_LOG_PATH
+    logPathContainer = DOCKER_LOG_PATH
+    logPathVolume = '-v '+mountLogHost+':'+logPathContainer+' '
+    # Prepare container working directory
+    containerWorkingDirectory = '-w '+workspaceContainer+' '
+    # Specify the user
+    #user_param = '--user 1000:1000 '
+    # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+    preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + logPathVolume + containerWorkingDirectory + containerName
+
+    print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+    print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import json, os, math, urllib3
+import numpy as np
+import torch
+
+from io import BytesIO
+from PIL import Image
+from argparse import ArgumentParser
+from time import sleep
+from tensorboardX import SummaryWriter
+
+# define DOCKER_LOG_PATH
+TENSORBOARD_ENABLED = variables.get("TENSORBOARD_ENABLED")
+if TENSORBOARD_ENABLED.lower() == "true":
+	DOCKER_LOG_PATH = variables.get("DOCKER_LOG_PATH")
+	PA_JOB_ID = "job_ID_" + variables.get("PA_JOB_ID")
+	PATH = os.path.join(DOCKER_LOG_PATH,PA_JOB_ID)
+	os.mkdir(PATH)
+	writer = SummaryWriter(PATH)
+
+#print('received results: ', results)
+
+parent_job_id = variables.get("PA_JOB_ID")
+
+# connect to the scheduler
+schedulerapi.connect()
+
+workflow_results = []
+for i, res in enumerate(results):
+    job_id = str(res.getValue())
+    #print(i, job_id)
+
+    # Wait for the job termination
+    is_finished = False
+    while True:
+        is_finished = schedulerapi.isJobFinished(job_id)
+        print(i, "job_id: ", job_id, ", is_finished: ", is_finished)
+        if is_finished:
+            break
+        else:
+            sleep(0.5) # 500ms
+    
+    # Get job result
+    # RESULT_JSON: {"token": {"_token_id": 0}, "loss": 0.009321813276374468} 
+    result_map  = schedulerapi.getJobResult(job_id).getResultMap()
+    result_json = result_map['RESULT_JSON']
+    job_result  = json.loads(result_json)
+    print(i, "job_id: ", job_id, ", job_result: ", job_result)
+    workflow_results.append(job_result)
+
+    #task_res = None
+    #
+    #task_res = schedulerapi.waitForTask(job_id, "Himmelblau_Function", 120000)
+    #task_res = task_res.getValue()
+    #print("task_res: ", task_res)
+    #
+    #if type(res.getValue()) is bytes:
+    #    task_res = json.loads(res.getValue().decode('ascii'))
+    #else:
+    #    task_res = json.loads(str(res.getValue()))
+    
+    # 0 , task_res: {'token': {'_chocolate_id': 0}, 'loss': 450.9434895085956} 
+    #print(i, ", task_res: ", task_res)
+    #workflow_results.append(task_res)
+    
+    ### BEGIN TENSORBOARD ###
+    token = job_result['token'] # {'_chocolate_id': 0}
+    loss = job_result['loss']   # 450.9434895085956
+    token_id = token['_chocolate_id'] # 0
+    
+    if TENSORBOARD_ENABLED is not None and TENSORBOARD_ENABLED.lower() == "true":
+        writer.add_text('Text/parent_job', 'text logged at job:' + str(job_id), loss)
+        writer.add_scalar('Loss', torch.tensor([loss]), token_id)
+        writer.close()
+    ### END TENSORBOARD ###
+
+workflow_results = json.dumps(workflow_results)
+print('workflow_results: ', workflow_results)
+
+variables.put('workflow_results', workflow_results)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"/>
+      <metadata>
+        <positionTop>
+            839.08203125
+        </positionTop>
+        <positionLeft>
+            381.7578125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_loop.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Join_Task"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+PA_TASK_ITERATION = variables.get('PA_TASK_ITERATION')
+println '\n\nLoop block start ' + PA_TASK_ITERATION
+
+MONGODB_HOST = variables.get("MONGODB_HOST")
+MONGODB_PORT = variables.get("MONGODB_PORT")
+MONGODB_USER = variables.get("MONGODB_USER")
+MONGODB_PASS = variables.get("MONGODB_PASS")
+
+MONGODB_URL  = "mongodb://"+MONGODB_USER+":"+MONGODB_PASS+"@"+MONGODB_HOST+":"+MONGODB_PORT
+variables.put("MONGODB_URL", MONGODB_URL)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"/>
+      <metadata>
+        <positionTop>
+            316.09375
+        </positionTop>
+        <positionLeft>
+            607.28515625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Loop">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_loop.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Finally"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="javascript">
+            <![CDATA[
+print('Loop block end ' + variables.get('PA_TASK_ITERATION'))
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end">
+        <loop target="Start">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+if(variables.get('PA_TASK_ITERATION') < (variables.get('MAX_ITERATIONS')) - 1) {
+    loop = true;
+} else {
+    loop = false;
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            823.046875
+        </positionTop>
+        <positionLeft>
+            605.83984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Parse_MongoDB_Endpoint">
+      <description>
+        <![CDATA[ This task aims to parse PCA endpoint in order to retrieve a HOST and a PORT number to use them as an input in the data connector tasks. ]]>
+      </description>
+      <depends>
+        <task ref="Start_MongoDB"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def endpoint = new URL(results[0].toString())
+variables.put("MONGODB_HOST", endpoint.getHost())
+variables.put("MONGODB_PORT", endpoint.getPort())
+// Wait for database sever to be up and fully running.
+sleep(3000)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            158.125
+        </positionTop>
+        <positionLeft>
+            580.3125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start_MongoDB" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ Start the MongoDB server as a service. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" name="SERVICE_ID" value="MongoDB"/>
+        <variable inherited="false" name="INSTANCE_NAME" value="mongodb-server-${PA_JOB_ID}"/>
+        <variable inherited="true" name="USER" value="activeeon"/>
+        <variable inherited="true" name="PASSWORD" value="proactive"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw">
+            <arguments>
+              <argument value="USER"/>
+              <argument value="PASSWORD"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put('MONGODB_USER', variables.get("USER"))
+variables.put('MONGODB_PASS', variables.get("PASSWORD"))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            40
+        </positionTop>
+        <positionLeft>
+            589.3359375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Join_Task">
+      <description>
+        <![CDATA[ The simplest task, ran by a Groovy engine. ]]>
+      </description>
+      <depends>
+        <task ref="Parse_MongoDB_Endpoint"/>
+        <task ref="Continuation"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            222.578125
+        </positionTop>
+        <positionLeft>
+            468.80859375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Check_Tensorboard_Support">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Checking for Tensorboard support")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <if continuation="Continuation" else="Nothing" target="Start_Tensorboard">
+          <script>
+            <code language="python">
+              <![CDATA[
+TENSORBOARD_ENABLED = variables.get('TENSORBOARD_ENABLED')
+
+if TENSORBOARD_ENABLED is not None and TENSORBOARD_ENABLED.lower() == "true":
+    branch = "if"
+else:
+    branch = "else"
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            40.625
+        </positionTop>
+        <positionLeft>
+            188.18359375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Nothing">
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Tensorboard disabled")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            155.625
+        </positionTop>
+        <positionLeft>
+            204.1796875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Continuation">
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+      </variables>
+      <genericInformation>
+        <info name="PYTHON_COMMAND" value="/usr/local/bin/python3"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+if str(variables.get("DOCKER_ENABLED")).lower() == 'true':
+  #Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
+  # Prepare Docker parameters 
+  containerName = variables.get("DOCKER_IMAGE") 
+  dockerRunCommand =  'docker run ' 
+  dockerParameters = '--rm ' 
+  # Prepare ProActive home volume 
+  paHomeHost = variables.get("PA_SCHEDULER_HOME") 
+  paHomeContainer = variables.get("PA_SCHEDULER_HOME") 
+  proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' ' 
+  # Prepare working directory (For Dataspaces and serialized task file) 
+  workspaceHost = localspace 
+  workspaceContainer = localspace 
+  workspaceVolume = '-v '+localspace +':'+localspace+' ' 
+  # Prepare container working directory 
+  containerWorkingDirectory = '-w '+workspaceContainer+' ' 
+  # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node 
+  preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
+else:
+  print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            158.671875
+        </positionTop>
+        <positionLeft>
+            349.16015625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Finish_MongoDB" onTaskError="cancelJob">
+      <variables>
+        <variable inherited="false" name="INSTANCE_ID" value=""/>
+        <variable inherited="false" name="INSTANCE_NAME" value="mongodb-server-${PA_JOB_ID}"/>
+        <variable inherited="false" model="PA:LIST(Pause_MongoDB, Resume_MongoDB, Finish_MongoDB)" name="ACTION" value="Finish_MongoDB"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <depends>
+        <task ref="Loop"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Action/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            944.70703125
+        </positionTop>
+        <positionLeft>
+            679.921875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Check_Algorithm_Condition">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Checking the branch condition of the algorithm")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <if continuation="Finally" else="Else" target="If_Bayes">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+TUNING_ALGORITHM = variables.get('TUNING_ALGORITHM')
+
+if(TUNING_ALGORITHM.toLowerCase().contains("bayes")){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            385.859375
+        </positionTop>
+        <positionLeft>
+            340.95703125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="If_Bayes">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Running the If branch")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"/>
+      <metadata>
+        <positionTop>
+            546.8359375
+        </positionTop>
+        <positionLeft>
+            134.921875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Else">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Running the Else branch")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"/>
+      <metadata>
+        <positionTop>
+            544.84375
+        </positionTop>
+        <positionLeft>
+            342.9296875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Finally">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Running after the If or the Else task")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            545.80078125
+        </positionTop>
+        <positionLeft>
+            535.9375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Split_and_Submit_Job_No_Wait">
+      <description>
+        <![CDATA[ The simplest task, ran by a Python engine. ]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+        <variable inherited="true" model="PA:LIST(Bayes,Grid,Random,QuasiRandom,CMAES,MOCMAES)" name="TUNING_ALGORITHM" value="Bayes"/>
+        <variable inherited="true" name="SEARCH_SPACE" value="{'x': uniform(-6, 6), 'y': uniform(-6, 6)}"/>
+        <variable inherited="true" model="PA:Integer" name="PARALLEL_SAMPLES_PER_LOOP" value="2"/>
+        <variable inherited="true" name="WORKFLOW_TO_OPTIMIZE" value="auto-ml-optimization/Himmelblau_Function"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        <info name="PYTHON_COMMAND" value="/usr/local/bin/python3"/>
+      </genericInformation>
+      <depends>
+        <task ref="If_Bayes"/>
+      </depends>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <code language="python">
+              <![CDATA[
+#%% fork environment (python)
+import os
+
+DOCKER_ENABLED = True
+if variables.get("DOCKER_ENABLED") is not None:
+    if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
+        DOCKER_ENABLED = False
+
+DOCKER_IMAGE = 'activeeon/dlm3'
+if variables.get("DOCKER_IMAGE") is not None:
+    DOCKER_IMAGE = variables.get("DOCKER_IMAGE")
+
+if variables.get("MOUNT_LOG_PATH") is not None:
+    MOUNT_LOG_PATH = variables.get("MOUNT_LOG_PATH")
+    
+if variables.get("DOCKER_LOG_PATH") is not None:
+    DOCKER_LOG_PATH = variables.get("DOCKER_LOG_PATH")
+
+DOCKER_GPU_ENABLED = False
+if variables.get("DOCKER_GPU_ENABLED") is not None:
+    if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'true':
+        DOCKER_GPU_ENABLED = True
+
+CUDA_ENABLED = False
+CUDA_HOME = os.getenv('CUDA_HOME', None)
+CUDA_HOME_DEFAULT = '/usr/local/cuda'
+if CUDA_HOME is not None:
+    if os.path.isdir(CUDA_HOME) == True:
+        CUDA_ENABLED = True
+else:
+    if os.path.isdir(CUDA_HOME_DEFAULT) == True:
+        CUDA_ENABLED = True
+
+DOCKER_RUN_CMD = 'docker run '
+if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+    DOCKER_RUN_CMD += '--runtime=nvidia '
+
+print('Fork environment info...')
+print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
+print('DOCKER_IMAGE:       ' + DOCKER_IMAGE)
+print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
+
+if DOCKER_ENABLED == True:
+    # Prepare Docker parameters
+    containerName = DOCKER_IMAGE
+    dockerRunCommand =  DOCKER_RUN_CMD
+    dockerParameters = '--rm '
+    # Prepare ProActive home volume
+    paHomeHost = variables.get("PA_SCHEDULER_HOME")
+    paHomeContainer = variables.get("PA_SCHEDULER_HOME")
+    proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
+    # Prepare working directory (For Dataspaces and serialized task file)
+    workspaceHost = localspace
+    workspaceContainer = localspace
+    workspaceVolume = '-v '+localspace +':'+localspace+' '
+    # Prepare working directory (For Tensorboard)
+    mountLogHost = MOUNT_LOG_PATH
+    logPathContainer = DOCKER_LOG_PATH
+    logPathVolume = '-v '+mountLogHost+':'+logPathContainer+' '
+    # Prepare container working directory
+    containerWorkingDirectory = '-w '+workspaceContainer+' '
+    # Specify the user
+    #user_param = '--user 1000:1000 '
+    # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
+    preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + logPathVolume + containerWorkingDirectory + containerName
+
+    print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
+else:
+    print("Fork environment disabled")
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import os, math, urllib3, json, base64
+import numpy as np
+import torch
+
+from io import BytesIO
+from PIL import Image
+from argparse import ArgumentParser
+from time import sleep
+
+import chocolate as choco
+from chocolate import uniform, quantized_uniform, log, quantized_log, choice
+from chocolate import MongoDBConnection, Bayes, Grid, Random, QuasiRandom, CMAES, MOCMAES
+
+from py4j.java_collections import SetConverter, MapConverter, ListConverter
+from tensorboardX import SummaryWriter
+
+TENSORBOARD_ENABLED = variables.get("TENSORBOARD_ENABLED")
+
+# define DOCKER_LOG_PATH
+if TENSORBOARD_ENABLED.lower() == "true":
+	DOCKER_LOG_PATH = variables.get("DOCKER_LOG_PATH")
+	PA_JOB_ID = "job_ID_" + variables.get("PA_JOB_ID")
+	PATH = os.path.join(DOCKER_LOG_PATH, PA_JOB_ID)
+
+	print(os.listdir(DOCKER_LOG_PATH))
+	if not os.path.isdir(PATH):
+		os.mkdir(PATH)
+	writer = SummaryWriter(PATH)
+    
+map_converter = MapConverter()
+
+PA_TASK_ITERATION = int(variables.get('PA_TASK_ITERATION'))
+print("PA_TASK_ITERATION: ", PA_TASK_ITERATION)
+
+# Establish a connection to a MongoDB local database
+MONGODB_URL = variables.get('MONGODB_URL')
+print('MONGODB_URL: ', MONGODB_URL)
+conn = MongoDBConnection(MONGODB_URL)
+if PA_TASK_ITERATION == 0:
+    print('Cleaning database for the first iteration')
+    conn.clear() # Clear all data from the database.
+
+# Define the search space
+space = "space=" + variables.get('SEARCH_SPACE')
+print('SEARCH_SPACE: ', space)
+exec(space)
+
+TUNING_ALGORITHM = variables.get('TUNING_ALGORITHM')
+assert TUNING_ALGORITHM is not None, "TUNING_ALGORITHM must be set!"
+
+# Construct the optimizer
+sampler = None
+if TUNING_ALGORITHM == "Grid":
+    sampler = Grid(conn, space)
+if TUNING_ALGORITHM == "Random":
+    sampler = Random(conn, space)
+if TUNING_ALGORITHM == "QuasiRandom":
+    sampler = QuasiRandom(conn, space)
+if TUNING_ALGORITHM == "Bayes":
+    sampler = Bayes(conn, space)
+if TUNING_ALGORITHM == "CMAES":
+    sampler = CMAES(conn, space)
+if TUNING_ALGORITHM == "MOCMAES":
+    sampler = MOCMAES(conn, space, 10)
+assert sampler is not None, "TUNING_ALGORITHM must be selected!"
+print('TUNING_ALGORITHM: ', TUNING_ALGORITHM)
+
+# Check for previous results
+workflow_results = None
+if PA_TASK_ITERATION > 0:
+    workflow_results = variables.get('workflow_results')
+
+# Add previous loss values to the database
+if workflow_results is not None:
+    previous_results = json.loads(workflow_results)
+    print("Adding previous loss values to the database")
+    for i, previous_result in enumerate(previous_results):
+        #print(i, previous_result)
+        previous_token = previous_result['token']
+        previous_loss = previous_result['loss']
+        print(i, 'previous_token: ', previous_token, ', previous_loss: ', previous_loss)
+        # Add the loss to the database
+        #sampler.update(token, loss)
+        sampler.update(previous_token, previous_loss)
+
+# Connect to the scheduler
+schedulerapi.connect()
+
+PA_JOB_ID = variables.get("PA_JOB_ID")
+print('PA_JOB_ID: ', PA_JOB_ID)
+
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+print('PA_CATALOG_REST_URL: ', PA_CATALOG_REST_URL)
+
+# Workflow to optimize
+WORKFLOW_TO_OPTIMIZE = variables.get("WORKFLOW_TO_OPTIMIZE")
+bucket_name, workflow_name = WORKFLOW_TO_OPTIMIZE.split('/')
+print("bucket_name: ", bucket_name, ", workflow_name: ", workflow_name)
+
+# Sample the next point and submit job
+samples_per_iteration = int(variables.get('PARALLEL_SAMPLES_PER_LOOP'))
+results = []
+for i in range(samples_per_iteration):
+    token, params = sampler.next()
+    print("sample: ", i, ", token: ", token, ", params: ", params)
+
+    token_encoded  = base64.b64encode(json.dumps(token).encode('utf-8')).decode("utf-8")
+    params_encoded = base64.b64encode(json.dumps(params).encode("utf-8")).decode("utf-8")
+
+    print("token_encoded: ", token_encoded)
+    print("params_encoded: ", params_encoded)
+
+    # variables submitted to the workflow
+    workflow_variables = {
+        "token_encoded": token_encoded,
+        "params_encoded": params_encoded,
+        "MOUNT_LOG_PATH": variables.get("MOUNT_LOG_PATH"),
+        "INSTANCE_NAME": variables.get("INSTANCE_NAME"),
+        "TENSORBOARD_ENABLED": variables.get("TENSORBOARD_ENABLED")
+    }
+    workflow_variables_java_map = map_converter.convert(workflow_variables, schedulerapi._gateway_client)
+    #print('workflow_variables_java_map: ', workflow_variables_java_map)
+    
+    generic_infos_map = {
+        "PARENT_JOB_ID" : PA_JOB_ID
+    }
+    generic_infos_java_map = map_converter.convert(generic_infos_map, schedulerapi._gateway_client)
+    #print('generic_infos_java_map: ', generic_infos_java_map)
+
+    print("Submitting workflow ", WORKFLOW_TO_OPTIMIZE)
+    
+    # submitting the job
+    job_id = schedulerapi.submitFromCatalog(PA_CATALOG_REST_URL, bucket_name, workflow_name, workflow_variables_java_map, generic_infos_java_map).longValue()
+    print("Job submitted with job id ", job_id)
+
+    results.append(job_id)
+# end iterations
+
+parent_job_id = PA_JOB_ID
+
+workflow_results = []
+for i, res in enumerate(results):
+    job_id = str(res)
+    #print(i, job_id)
+
+    # Wait for the job termination
+    is_finished = False
+    while True:
+        is_finished = schedulerapi.isJobFinished(job_id)
+        print(i, "job_id: ", job_id, ", is_finished: ", is_finished)
+        if is_finished:
+            break
+        else:
+            sleep(0.5) # 500ms
+    
+    # Get job result
+    # RESULT_JSON: {"token": {"_token_id": 0}, "loss": 0.009321813276374468} 
+    result_map  = schedulerapi.getJobResult(job_id).getResultMap()
+    result_json = result_map['RESULT_JSON']
+    job_result  = json.loads(result_json)
+    print(i, "job_id: ", job_id, ", job_result: ", job_result)
+    workflow_results.append(job_result)
+    
+    ### BEGIN TENSORBOARD ###
+    token = job_result['token'] # {'_chocolate_id': 0}
+    loss = job_result['loss']   # 450.9434895085956
+    token_id = token['_chocolate_id'] # 0
+    
+    if TENSORBOARD_ENABLED is not None and TENSORBOARD_ENABLED.lower() == "true":
+        writer.add_text('Text/parent_job', 'text logged at job: ' + str(job_id), loss)
+        writer.add_scalar('Loss', torch.tensor([loss]), token_id)
+        #writer.close()
+    ### END TENSORBOARD ###
+    
+
+workflow_results = json.dumps(workflow_results)
+print('workflow_results: ', workflow_results)
+
+variables.put('workflow_results', workflow_results)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"/>
+      <metadata>
+        <positionTop>
+            693.88671875
+        </positionTop>
+        <positionLeft>
+            128.18359375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start_Tensorboard" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ Start the Tensorboard server as a service. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" name="SERVICE_ID" value="Tensorboard"/>
+        <variable inherited="true" name="INSTANCE_NAME" value="tensorboard-server"/>
+        <variable inherited="true" name="MOUNT_LOG_PATH" value="/shared"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png"/>
+        <info name="task.documentation" value="https://doc.activeeon.com/latest/PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw">
+            <arguments>
+              <argument value="MOUNT_LOG_PATH"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            156.5234375
+        </positionTop>
+        <positionLeft>
+            38.7890625
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2646px;
+            height:3493px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-35px;left:-33.7890625px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_385" style="top: 639.004px; left: 379.766px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Split</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_388" style="top: 751.094px; left: 372.754px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_submit_job_no_wait.png" width="20px">&nbsp;<span class="name">Submit_Job_No_Wait</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_391" style="top: 839.082px; left: 381.758px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Merge</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_394" style="top: 316.094px; left: 607.285px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_loop.png" width="20px">&nbsp;<span class="name">Start</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_397" style="top: 823.047px; left: 605.84px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_loop.png" width="20px">&nbsp;<span class="name">Loop</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_400" style="top: 158.125px; left: 580.313px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Parse_MongoDB_Endpoint</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_403" style="top: 40.0001px; left: 589.336px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Start_MongoDB</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_406" style="top: 222.578px; left: 468.809px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Join_Task</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_409" style="top: 40.6251px; left: 188.184px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Check_Tensorboard_Support</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_412" style="top: 155.625px; left: 204.18px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Nothing</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_415" style="top: 158.672px; left: 349.16px;"><a class="task-name"><img src="/studio/images/Python.png" width="20px">&nbsp;<span class="name">Continuation</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_418" style="top: 944.707px; left: 679.922px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Finish_MongoDB</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_421" style="top: 385.859px; left: 340.957px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Check_Algorithm_Condition</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_424" style="top: 546.836px; left: 134.922px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">If_Bayes</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_427" style="top: 544.844px; left: 342.93px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_430" style="top: 545.801px; left: 535.938px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Finally</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_433" style="top: 693.887px; left: 128.184px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Split_and_Submit_Job_No_Wait</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_436" style="top: 156.524px; left: 38.7892px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png" width="20px">&nbsp;<span class="name">Start_Tensorboard</span></a></div><svg style="position:absolute;left:382.5px;top:584.5px" width="58" height="55" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 37 54 C 47 4 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M37.53249075000001,37.71986400000001 L31.105655123121544,17.52838599998511 L29.11761587354693,26.531035606748155 L19.91682672986969,25.94326087643818 L37.53249075000001,37.71986400000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M37.53249075000001,37.71986400000001 L31.105655123121544,17.52838599998511 L29.11761587354693,26.531035606748155 L19.91682672986969,25.94326087643818 L37.53249075000001,37.71986400000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:449.5px;top:668.5px" width="49.19999999999999" height="83" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 28.19999999999999 72 C 38.19999999999999 72 -10 -10 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M28.27392644999999,63.93603825 L27.552738376928875,42.75869451280624 L23.201961312572593,50.887085432063955 L14.503785558992828,47.830659650233635 L28.27392644999999,63.93603825" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M28.27392644999999,63.93603825 L27.552738376928875,42.75869451280624 L23.201961312572593,50.887085432063955 L14.503785558992828,47.830659650233635 L28.27392644999999,63.93603825" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_447" style="position: absolute; transform: translate(-50%, -50%); left: 473.6px; top: 710.75px;">replicate</div><svg style="position:absolute;left:419.5px;top:678.5px" width="36" height="73" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 15 72 C 25 22 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M16.74177375,53.79092550000001 L18.729932262827624,32.69478306286541 L13.377102090206114,40.20126087493365 L5.140267637761269,36.0594547226593 L16.74177375,53.79092550000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M16.74177375,53.79092550000001 L18.729932262827624,32.69478306286541 L13.377102090206114,40.20126087493365 L5.140267637761269,36.0594547226593 L16.74177375,53.79092550000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:420.5px;top:788.5px" width="35" height="53" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 48 C -10 -2 24 50 14 0 " transform="translate(10.5,2.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-1.838136999999999,34.48659150000001 L9.765613358032045,16.75658931081596 L1.5282547276368288,20.897352862898288 L-3.8236252790696783,13.390197583179132 L-1.838136999999999,34.48659150000001" class="" stroke="#666" fill="#666" transform="translate(10.5,2.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-1.838136999999999,34.48659150000001 L9.765613358032045,16.75658931081596 L1.5282547276368288,20.897352862898288 L-3.8236252790696783,13.390197583179132 L-1.838136999999999,34.48659150000001" class="" stroke="#666" fill="#666" transform="translate(10.5,2.5)"></path></svg><svg style="position:absolute;left:508.5px;top:262.5px" width="160" height="54" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 139 53 C 149 3 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M121.669312,31.079744000000005 L103.52593959664374,20.133601399378982 L107.96582369754876,28.21366508542323 L100.65986068206696,33.83708970183024 L121.669312,31.079744000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M121.669312,31.079744000000005 L103.52593959664374,20.133601399378982 L107.96582369754876,28.21366508542323 L100.65986068206696,33.83708970183024 L121.669312,31.079744000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:575.5px;top:585.5px" width="91" height="238" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 70 237 C 80 187 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M61.03519999999999,183.414624 L60.919125104645445,162.22532182605696 L56.33797820992049,170.22614010476767 L47.73064120941312,166.92254361613644 L61.03519999999999,183.414624" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M61.03519999999999,183.414624 L60.919125104645445,162.22532182605696 L56.33797820992049,170.22614010476767 L47.73064120941312,166.92254361613644 L61.03519999999999,183.414624" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:695.5px;top:355.5px" width="23" height="468" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 2 0 C 12 50 -10 417 0 467 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M4.278528,102.64083200000003 L10.925685334104354,122.76085435027744 L4.032296069536821,116.63866646953211 L-3.0721491354277233,122.51462241981426 L4.278528,102.64083200000003" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M4.278528,102.64083200000003 L10.925685334104354,122.76085435027744 L4.032296069536821,116.63866646953211 L-3.0721491354277233,122.51462241981426 L4.278528,102.64083200000003" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_465" style="position: absolute; transform: translate(-50%, -50%); left: 706.5px; top: 589px;">loop</div><svg style="position:absolute;left:636px;top:79.5px" width="40" height="80" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 19 79 C 29 29 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M20.333174,58.958054000000004 L21.229375681102546,37.78739452640804 L16.27128500734232,45.56025351591582 L7.831575197018365,41.84928351906573 L20.333174,58.958054000000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M20.333174,58.958054000000004 L21.229375681102546,37.78739452640804 L16.27128500734232,45.56025351591582 L7.831575197018365,41.84928351906573 L20.333174,58.958054000000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:508.5px;top:172.5px" width="167.5" height="77" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 24 C -10 -26 156.5 50 146.5 0 " transform="translate(10.5,26.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M18.419328,6.289152 L38.46669547340029,13.152318717081256 L32.41900111987984,6.193483109998938 L38.37102658339923,-0.8473544027985778 L18.419328,6.289152" class="" stroke="#666" fill="#666" transform="translate(10.5,26.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M18.419328,6.289152 L38.46669547340029,13.152318717081256 L32.41900111987984,6.193483109998938 L38.37102658339923,-0.8473544027985778 L18.419328,6.289152" class="" stroke="#666" fill="#666" transform="translate(10.5,26.5)"></path></svg><svg style="position:absolute;left:388.5px;top:172.5px" width="141" height="77" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 120 24 C 130 -26 -10 50 0 0 " transform="translate(10.5,26.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M106.7451,6.430116 L86.89725751079209,-0.9903387383292968 L92.74821701261807,6.134706728753164 L86.60184823954526,13.006544249052624 L106.7451,6.430116" class="" stroke="#666" fill="#666" transform="translate(10.5,26.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M106.7451,6.430116 L86.89725751079209,-0.9903387383292968 L92.74821701261807,6.134706728753164 L86.60184823954526,13.006544249052624 L106.7451,6.430116" class="" stroke="#666" fill="#666" transform="translate(10.5,26.5)"></path></svg><svg style="position:absolute;left:28.5px;top:80.5px" width="171" height="76" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 75 C -10 25 160 50 150 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M19.769294999999996,49.54970625 L40.955941692959456,49.904673724157725 L33.05893394542562,45.14680985101144 L36.5530452939709,36.6150347787321 L19.769294999999996,49.54970625" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M19.769294999999996,49.54970625 L40.955941692959456,49.904673724157725 L33.05893394542562,45.14680985101144 L36.5530452939709,36.6150347787321 L19.769294999999996,49.54970625" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_478" style="position: absolute; transform: translate(-50%, -50%); left: 113.5px; top: 118px;">if</div><svg style="position:absolute;left:178.5px;top:80.5px" width="36" height="76" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 15 75 C 25 25 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M16.71264,56.14560000000001 L18.760383179942547,35.05515790247633 L13.386369988477936,42.54648503576616 L5.161268215708698,38.3814279139984 L16.71264,56.14560000000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M16.71264,56.14560000000001 L18.760383179942547,35.05515790247633 L13.386369988477936,42.54648503576616 L5.161268215708698,38.3814279139984 L16.71264,56.14560000000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_482" style="position: absolute; transform: translate(-50%, -50%); left: 196px; top: 118px;">else</div><svg style="position:absolute;left:178.5px;top:80.5px" width="181" height="79" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 160 78 C 170 28 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M137.8125,51.75 L120.95063356124746,38.91732840747218 L124.4964099801371,47.427761392182546 L116.62839495342999,52.23341842733508 L137.8125,51.75" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M137.8125,51.75 L120.95063356124746,38.91732840747218 L124.4964099801371,47.427761392182546 L116.62839495342999,52.23341842733508 L137.8125,51.75" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_486" style="position: absolute; transform: translate(-50%, -50%); left: 268.5px; top: 119.5px;">continuation</div><svg style="position:absolute;left:645.5px;top:862.5px" width="105.5" height="83" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 84.5 82 C 94.5 32 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M77.347600375,57.828281000000004 L65.1576279142013,40.49609788866145 L65.96286488739462,49.6804102427249 L57.0097571569262,51.880833376266835 L77.347600375,57.828281000000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M77.347600375,57.828281000000004 L65.1576279142013,40.49609788866145 L65.96286488739462,49.6804102427249 L57.0097571569262,51.880833376266835 L77.347600375,57.828281000000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:417.5px;top:335.5px" width="251" height="71" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 30 C -10 -20 240 50 230 0 " transform="translate(10.5,20.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M37.148495000000004,11.064689999999999 L57.24756266050819,17.77494179693832 L51.14703313149721,10.862377911832802 L57.045250572341,3.776403665441112 L37.148495000000004,11.064689999999999" class="" stroke="#666" fill="#666" transform="translate(10.5,20.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M37.148495000000004,11.064689999999999 L57.24756266050819,17.77494179693832 L51.14703313149721,10.862377911832802 L57.045250572341,3.776403665441112 L37.148495000000004,11.064689999999999" class="" stroke="#666" fill="#666" transform="translate(10.5,20.5)"></path></svg><svg style="position:absolute;left:124.5px;top:425.5px" width="227" height="121" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 120 C -10 70 216 50 206 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M31.764928,86.02944 L52.88254108792827,84.28404105747693 L44.55308516760057,80.33180573157365 L47.184906819501926,71.49588388987637 L31.764928,86.02944" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M31.764928,86.02944 L52.88254108792827,84.28404105747693 L44.55308516760057,80.33180573157365 L47.184906819501926,71.49588388987637 L31.764928,86.02944" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_498" style="position: absolute; transform: translate(-50%, -50%); left: 237.5px; top: 485.5px;">if</div><svg style="position:absolute;left:330.5px;top:425.5px" width="23" height="120" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 2 119 C 12 69 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M4.659103999999999,91.027118 L10.544518703178309,70.67123693895005 L3.886364073289599,77.04846023161366 L-3.434139065208025,71.44397686566043 L4.659103999999999,91.027118" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M4.659103999999999,91.027118 L10.544518703178309,70.67123693895005 L3.886364073289599,77.04846023161366 L-3.434139065208025,71.44397686566043 L4.659103999999999,91.027118" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_502" style="position: absolute; transform: translate(-50%, -50%); left: 341.5px; top: 485px;">else</div><svg style="position:absolute;left:330.5px;top:425.5px" width="216" height="121" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 195 120 C 205 70 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M165.07919999999996,86.02944 L149.95652523658526,71.18677487543492 L152.40897702458017,80.07415245420137 L144.00123769078664,83.85699785085471 L165.07919999999996,86.02944" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M165.07919999999996,86.02944 L149.95652523658526,71.18677487543492 L152.40897702458017,80.07415245420137 L144.00123769078664,83.85699785085471 L165.07919999999996,86.02944" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_506" style="position: absolute; transform: translate(-50%, -50%); left: 438px; top: 485.5px;">continuation</div><svg style="position:absolute;left:174.5px;top:585.5px" width="64" height="109" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 43 108 C 53 58 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M40.994206000000005,81.278676 L38.02303344107045,60.298396363516034 L34.5621442608559,68.84370186316166 L25.588059304232107,66.73045810266014 L40.994206000000005,81.278676" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M40.994206000000005,81.278676 L38.02303344107045,60.298396363516034 L34.5621442608559,68.84370186316166 L25.588059304232107,66.73045810266014 L40.994206000000005,81.278676" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 420px; top: 669px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 420px; top: 629px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 450px; top: 669px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 435px; top: 781px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 478.2px; top: 741px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 435px; top: 741px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 421px; top: 869px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 421px; top: 829px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 346px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 306px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 698px; top: 346px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 646px; top: 853px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 646px; top: 813px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 696px; top: 813px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 655.5px; top: 189px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 655.5px; top: 149px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 636.5px; top: 70px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 253px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 213px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 270.5px; top: 71px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 179px; top: 71px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 244px; top: 186px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 194px; top: 146px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 389px; top: 189px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 339px; top: 149px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 730.5px; top: 975px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 730.5px; top: 935px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 418px; top: 416px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 418px; top: 376px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 331px; top: 416px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 175px; top: 576px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 125px; top: 536px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 383px; top: 575px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 333px; top: 535px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 576px; top: 576px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 526px; top: 536px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 218px; top: 724px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 218px; top: 684px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 93px; top: 186px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 29px; top: 146px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
