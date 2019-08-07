@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Visdom_Realtime_Digit_Classification" onTaskError="cancelJob" priority="normal" projectName="2. Visdom Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Visdom_Realtime_Digit_Classification" onTaskError="continueJobExecution" priority="normal" projectName="3. Visdom Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
   <variables>
     <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
     <variable model="PA:Boolean" name="DOCKER_GPU_ENABLED" value="False"/>
     <variable model="PA:LIST(activeeon/dlm3,activeeon/cuda)" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
-    <variable model="PA:LIST(,CPU,GPU)" name="NODE_SOURCE_NAME" value=""/>
+    <variable name="NODE_ACCESS_TOKEN" value=""/>
   </variables>
   <description>
     <![CDATA[ Show an example of realtime plotting using the Visdom server for training a convolutional neural network (CNN) for MNIST digit classification. ]]>
@@ -12,307 +12,45 @@
   <genericInformation>
 <info name="bucketName" value="data-visualization"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
-<info name="Documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html#_visdom"/>
+<info name="Documentation" value="MLOS/MLOSUserGuide.html#_visdom"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
-    <task name="Train_CNN">
+    <task name="Visdom_Train_CNN">
       <description>
         <![CDATA[ The simplest task, ran by a python engine. ]]>
       </description>
+      <variables>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+        <variable inherited="true" model="PA:Boolean" name="DOCKER_GPU_ENABLED" value="False"/>
+        <variable inherited="true" name="DOCKER_IMAGE" value="activeeon/dlm3"/>
+      </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
       </genericInformation>
       <depends>
         <task ref="Start_Visdom_Service"/>
       </depends>
-      <selection>
-        <script type="static">
-          <code language="groovy">
-            <![CDATA[
-selected = false
-NODE_SOURCE_NAME = variables.get("NODE_SOURCE_NAME")
-if (NODE_SOURCE_NAME) {
-	selected = (System.getProperty("proactive.node.nodesource").equals(NODE_SOURCE_NAME));
-} else {
-    selected = true
-}
-]]>
-          </code>
-        </script>
-      </selection>
       <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
-            <code language="python">
-              <![CDATA[
-#%% fork environment (python)
-import os
-
-DOCKER_ENABLED = True
-if variables.get("DOCKER_ENABLED") is not None:
-    if str(variables.get("DOCKER_ENABLED")).lower() == 'false':
-        DOCKER_ENABLED = False
-
-DOCKER_IMAGE = 'activeeon/dlm3'
-if variables.get("DOCKER_IMAGE") is not None:
-    DOCKER_IMAGE = variables.get("DOCKER_IMAGE")
-
-DOCKER_GPU_ENABLED = False
-if variables.get("DOCKER_GPU_ENABLED") is not None:
-    if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'true':
-        DOCKER_GPU_ENABLED = True
-
-CUDA_ENABLED = False
-CUDA_HOME = os.getenv('CUDA_HOME', None)
-CUDA_HOME_DEFAULT = '/usr/local/cuda'
-if CUDA_HOME is not None:
-    if os.path.isdir(CUDA_HOME) == True:
-        CUDA_ENABLED = True
-else:
-    if os.path.isdir(CUDA_HOME_DEFAULT) == True:
-        CUDA_ENABLED = True
-
-DOCKER_RUN_CMD = 'docker run '
-if DOCKER_GPU_ENABLED and CUDA_ENABLED:
-    DOCKER_RUN_CMD += '--runtime=nvidia '
-
-print('Fork environment info...')
-print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
-print('DOCKER_IMAGE:       ' + DOCKER_IMAGE)
-print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
-print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
-
-if DOCKER_ENABLED == True:
-    # Prepare Docker parameters
-    containerName = DOCKER_IMAGE
-    dockerRunCommand =  DOCKER_RUN_CMD
-    dockerParameters = '--rm '
-    # Prepare ProActive home volume
-    paHomeHost = variables.get("PA_SCHEDULER_HOME")
-    paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-    proActiveHomeVolume = '-v '+paHomeHost +':'+paHomeContainer+' '
-    # Prepare working directory (For Dataspaces and serialized task file)
-    workspaceHost = localspace
-    workspaceContainer = localspace
-    workspaceVolume = '-v '+localspace +':'+localspace+' '
-    # Prepare container working directory
-    containerWorkingDirectory = '-w '+workspaceContainer+' '
-    # Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
-    preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + containerWorkingDirectory + containerName
-
-    print('DOCKER_FULL_CMD:    ' + preJavaHomeCmd)
-else:
-    print("Fork environment disabled")
-]]>
-            </code>
+            <file language="python" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env/raw"/>
           </script>
         </envScript>
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-import argparse
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-
-from torchvision import datasets, transforms
-from torch.autograd import Variable
-from visdom import Visdom
-
-visdom_endpoint = variables.get("VISDOM_ENDPOINT") if variables.get("VISDOM_ENDPOINT") else results[0].__str__()
-print("VISDOM_ENDPOINT: ", visdom_endpoint)
-
-if visdom_endpoint is not None:
-    visdom_endpoint = visdom_endpoint.replace("http://", "")
-
-(VISDOM_HOST, VISDOM_PORT) = visdom_endpoint.split(":")
-
-# Training settings
-parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-parser.add_argument('--batch-size', type=int, default=64, metavar='N',
-                    help='input batch size for training (default: 64)')
-parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                    help='input batch size for testing (default: 1000)')
-parser.add_argument('--epochs', type=int, default=3, metavar='N',
-                    help='number of epochs to train (default: 3)')
-parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
-                    help='learning rate (default: 0.01)')
-parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
-                    help='SGD momentum (default: 0.5)')
-parser.add_argument('--no-cuda', action='store_true', default=False,
-                    help='disables CUDA training')
-parser.add_argument('--seed', type=int, default=1, metavar='S',
-                    help='random seed (default: 1)')
-parser.add_argument('--log-interval', type=int, default=10, metavar='N',
-                    help='how many batches to wait before logging training status')
-parser.add_argument('--visdom_host', type=str, default=VISDOM_HOST,
-                    help='IP of the visdom server')
-parser.add_argument('--visdom_port', type=int, default=VISDOM_PORT,
-                    help='IP port of the visdom server')
-args = parser.parse_args()
-
-print("Connecting to %s:%s" % (args.visdom_host, args.visdom_port))
-viz = Visdom(server="http://"+args.visdom_host, port=args.visdom_port)
-assert viz.check_connection()
-
-win_epoch_loss = viz.line(Y=np.array([np.nan]), X=np.array([np.nan]),
-                          opts=dict(
-                                  xlabel='Iteration',
-                                  ylabel='Loss',
-                                  title='Training loss (per iteration)',
-                                  ),
-                          )
-win_global_loss = viz.line(Y=np.array([np.nan]), X=np.array([np.nan]),
-                           opts=dict(
-                                  xlabel='Epoch',
-                                  ylabel='Loss',
-                                  title='Training loss (per epoch)',
-                                  ),
-                           )
-win_test_loss = viz.line(Y=np.array([np.nan]), X=np.array([np.nan]),
-                           opts=dict(
-                                  xlabel='Epoch',
-                                  ylabel='Loss',
-                                  title='Test loss (per epoch)',
-                                  ),
-                           )
-win_test_acc = viz.line(Y=np.array([np.nan]), X=np.array([np.nan]),
-                           opts=dict(
-                                  xlabel='Epoch',
-                                  ylabel='Accuracy',
-                                  title='Test accuracy (per epoch)',
-                                  ),
-                           )
-win_train_log = viz.text("Training log:\n")
-win_test_log = viz.text("Testing log:\n")
-
-
-use_cuda = not args.no_cuda and torch.cuda.is_available()
-print("Use CUDA? " + str(use_cuda))
-
-device = torch.device("cuda" if use_cuda else "cpu")
-
-torch.manual_seed(args.seed)
-
-kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
-
-train_loader = torch.utils.data.DataLoader(
-  datasets.MNIST('data', train=True, download=True,
-                 transform=transforms.Compose([
-                     transforms.ToTensor(),
-                     transforms.Normalize((0.1307,), (0.3081,))
-                 ])),
-  batch_size=args.batch_size, shuffle=True, **kwargs)
-
-test_loader = torch.utils.data.DataLoader(
-  datasets.MNIST('data', train=False, transform=transforms.Compose([
-                     transforms.ToTensor(),
-                     transforms.Normalize((0.1307,), (0.3081,))
-                 ])),
-  batch_size=args.test_batch_size, shuffle=True, **kwargs)
-
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 20, 5, 1)
-        self.conv2 = nn.Conv2d(20, 50, 5, 1)
-        self.fc1 = nn.Linear(4*4*50, 500)
-        self.fc2 = nn.Linear(500, 10)
-
-    def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = x.view(-1, 4*4*50)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
-
-
-model = Net().to(device)
-
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
-epoch_loss_train = []
-average_loss_train = 0
-iteration_train = 0
-def train(epoch):
-    global iteration_train
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        iteration_train = iteration_train + 1
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = F.nll_loss(output, target)
-        loss.backward()
-        optimizer.step()
-        # store loss values
-        epoch_loss_train.append(loss.data.item())
-        average_loss_train = sum(epoch_loss_train) / len(epoch_loss_train)
-
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                  epoch, batch_idx * len(data), len(train_loader.dataset),
-                  100. * batch_idx / len(train_loader), loss.data.item()))
-            viz.text('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                  epoch, batch_idx * len(data), len(train_loader.dataset),
-                  100. * batch_idx / len(train_loader), loss.data.item()), win=win_train_log, append=True)
-            # plot loss per iteration
-            viz.line(Y=np.array([average_loss_train]), X=np.array([iteration_train]), win=win_epoch_loss, update='append')
-
-    # plot loss per epoch
-    viz.line(Y=np.array([average_loss_train]), X=np.array([epoch]), win=win_global_loss, update='append')
-
-
-epoch_loss_test = []
-average_loss_test = 0
-def test(epoch):
-    model.eval()
-    test_loss = 0
-    correct = 0
-    with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            test_loss += F.nll_loss(output, target, reduction='sum').item() # sum up batch loss
-            pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
-
-    test_loss /= len(test_loader.dataset)
-    test_acc = 100. * correct / len(test_loader.dataset)
-
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-          test_loss, correct, len(test_loader.dataset), test_acc))
-    viz.text('Test set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-          test_loss, correct, len(test_loader.dataset), test_acc), win=win_test_log, append=True)
-
-    # plot loss per epoch
-    viz.line(Y=np.array([test_loss]), X=np.array([epoch]), win=win_test_loss, update='append')
-    viz.line(Y=np.array([test_acc]), X=np.array([epoch]), win=win_test_acc, update='append')
-
-
-for epoch in range(1, args.epochs+1):
-    train(epoch)
-    test(epoch)
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/data-visualization-scripts/resources/Visdom_Train_CNN/raw"/>
         </script>
       </scriptExecutable>
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            280.316650390625
+            279.296875
         </positionTop>
         <positionLeft>
-            328.7166442871094
+            328.7109375
         </positionLeft>
       </metadata>
     </task>
@@ -326,7 +64,7 @@ for epoch in range(1, args.epochs+1):
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
-        <info name="task.documentation" value="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html"/>
+        <info name="task.documentation" value="MLOS/MLOSUserGuide.html"/>
       </genericInformation>
       <scriptExecutable>
         <script>
@@ -345,10 +83,10 @@ variables.put("ENDPOINT_VISDOM",variables.get("ENDPOINT_" + variables.get("INSTA
       </post>
       <metadata>
         <positionTop>
-            122.43333435058594
+            122.421875
         </positionTop>
         <positionLeft>
-            298.8999938964844
+            298.88671875
         </positionLeft>
       </metadata>
     </task>
@@ -359,18 +97,18 @@ variables.put("ENDPOINT_VISDOM",variables.get("ENDPOINT_" + variables.get("INSTA
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2683px;
-            height:3635px;
+            width:2646px;
+            height:3493px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-117.43333435058594px;left:-293.8999938964844px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 280.316px; left: 328.717px;" id="jsPlumb_1_314"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Train_CNN</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 122.433px; left: 298.9px;" id="jsPlumb_1_317"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_Service</span></a></div><svg style="position:absolute;left:355px;top:161.5px" width="34.5" height="119" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 13.5 118 C 23.5 68 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-117.421875px;left:-293.88671875px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_797" style="top: 279.297px; left: 328.711px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Visdom_Train_CNN</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_800" style="top: 122.422px; left: 298.887px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_Service</span></a></div><svg style="position:absolute;left:361.5px;top:162.5px" width="28" height="117" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 7 116 C 17 66 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M14.850657000000002,90.140896 L18.38436646409238,69.24800492615901 L12.494165518283856,76.34064426691197 L4.584114731004348,71.60449640787516 L14.850657000000002,90.140896" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M14.850657000000002,90.140896 L18.38436646409238,69.24800492615901 L12.494165518283856,76.34064426691197 L4.584114731004348,71.60449640787516 L14.850657000000002,90.140896" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div style="position: absolute; height: 20px; width: 20px; left: 369px; top: 310px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M9.090214,88.368452 L13.903100171417735,67.73265478494248 L7.58754139626131,74.44932936076827 L-0.016022467813991526,69.23532738868117 L9.090214,88.368452" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M9.090214,88.368452 L13.903100171417735,67.73265478494248 L7.58754139626131,74.44932936076827 L-0.016022467813991526,69.23532738868117 L9.090214,88.368452" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 369px; top: 309px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 369px; top: 270px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 369px; top: 269px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 355.5px; top: 152px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 362px; top: 153px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>

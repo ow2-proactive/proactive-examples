@@ -70,7 +70,7 @@ def get_accuracy(truth, pred):
      return right/len(truth)
      
 #-------------------------train function definition--------------------------     
-def train_epoch_progress(model, train_iter, train, loss_function, optimizer, text_field, label_field, batch_size, epoch):
+def train_epoch_progress(model, train_iter, train, loss_function, optimizer, text_field, label_field, epoch):
     #model.train()
     avg_loss = 0.0
     truth_res = []
@@ -80,7 +80,7 @@ def train_epoch_progress(model, train_iter, train, loss_function, optimizer, tex
         sent, label = batch.text, batch.label
         label.data.sub_(1)
         truth_res += list(label.data)
-        model.batch_size = batch_size
+        model.batch_size = len(train)
         model.hidden = model.init_hidden()
         pred = model(sent)
         pred_label = pred.data.max(1)[1].numpy()
@@ -110,8 +110,6 @@ OPTIMIZER = 'Adam'
 EPOCHS = 2
 #L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
 LOSS_FUNCTION = 'NLLLoss'
-#BATCH_SIZE (int)
-BATCH_SIZE = 2
 #True or False
 USE_GPU = 'False'
 
@@ -144,11 +142,6 @@ if 'variables' in locals():
         LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
     else:
         print("LOSS_FUNCTION not defined by the user. Using the default value:"+LOSS_FUNCTION)
-    #BATCH_SIZE
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = int(variables.get("BATCH_SIZE"))
-    else:
-        print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
     if variables.get("EMBEDDING_DIM") is not None:
         EMBEDDING_DIM = int(variables.get('EMBEDDING_DIM'))
     else:
@@ -241,7 +234,7 @@ exec(LOSS)
 print('Training...')
 for epoch in range(EPOCHS):
     print(str(MODEL))
-    avg_loss, tr_acc = train_epoch_progress(MODEL, train_iter, train, loss_function, optimizer, text_field, label_field, BATCH_SIZE, epoch)
+    avg_loss, tr_acc = train_epoch_progress(MODEL, train_iter, train, loss_function, optimizer, text_field, label_field, epoch)
     tqdm.write('Train: loss %.2f acc %.1f' % (avg_loss, tr_acc*100))
     if len(val)>0:
         dev_acc, results = evaluate(MODEL, val, val_iter, label_field, loss_function, 'test_labeled')
@@ -293,10 +286,8 @@ try:
     variables.put("LABELS_PATH", LABELS_PATH)
     variables.put("TEXT_PATH", TEXT_PATH)
     variables.put("MODEL_FOLDER", MODEL_FOLDER)
-    variables.put("EVALUATE", EVALUATE)
     variables.put("ACCURACY", ACCURACY)
     variables.put("LOSS",LOSS)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
     variables.put("DATASET_PATH",DATASET_PATH)
     variables.put("USE_GPU",USE_GPU)
     variables.put("DEVICE",DEVICE)

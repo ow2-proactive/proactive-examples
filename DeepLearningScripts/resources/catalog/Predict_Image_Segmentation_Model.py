@@ -152,6 +152,8 @@ def label_binary_images(get_color, root):
 def predict_model(_model, loader, _use_gpu):
     image_name = []
     label_name = []
+    img_out_name = []
+    
     get_color = genetate_color()
 
     for i, (images, labels, image_size, filename_test_img) in enumerate(loader):
@@ -199,14 +201,15 @@ def predict_model(_model, loader, _use_gpu):
         image_name.append(filename_test_img)
         image_adress = os.path.join(OUTPUT_FOLDER, os.path.basename(file_names))
         label_name.append(image_adress)
-    return image_name, label_name
+        img_out_name.append(os.path.basename(file_names))
+    return image_name, label_name, img_out_name
 
-image_name, label_name = predict_model(model, loader, use_gpu)
+image_name, label_name, img_name = predict_model(model, loader, use_gpu)
 
-df_name = pd.DataFrame(image_name)
+df_name = pd.DataFrame(img_name)
 df_image_name = pd.DataFrame(image_name)
 df_label_name = pd.DataFrame(label_name)
-df_name.columns = ['Image Paths']
+df_name.columns = ['Image Names']
 df_image_name.columns = ['Images']
 df_label_name.columns = ['Outputs']
 
