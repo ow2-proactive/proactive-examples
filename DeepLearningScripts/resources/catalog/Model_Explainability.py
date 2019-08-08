@@ -1,3 +1,5 @@
+print("BEGIN Model_Explainability")
+
 import matplotlib as mpl
 mpl.use('Agg')
 import os
@@ -282,3 +284,5 @@ result = result.encode('utf-8')
 resultMetadata.put("file.extension", ".html")
 resultMetadata.put("file.name", "result.html")
 resultMetadata.put("content.type", "text/html")
+
+print("END Model_Explainability")
