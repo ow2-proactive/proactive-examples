@@ -38,7 +38,8 @@ if 'variables' in locals():
   IMG_LIST = [x.strip() for x in X_IMG_LIST.split(',')]
   IMG_SAMPLES = int(str(variables.get("IMG_SAMPLES")))
   FEATURE_LAYER = variables.get("FEATURE_LAYER")
-
+  RANKED_OUTPUTS = int(str(variables.get("RANKED_OUTPUTS")))    
+    
 assert MODEL_PATH is not None
 assert DATASET_PATH is not None
 assert LABELS_PATH is not None
@@ -46,6 +47,7 @@ assert CNN_TRANSFORM is not None
 assert IMG_LIST is not None
 assert IMG_SAMPLES is not None
 assert FEATURE_LAYER is not None
+
 
 class_names = None
 with open(LABELS_PATH, 'r') as f:
@@ -116,7 +118,7 @@ exec("features_layer=model."+FEATURE_LAYER)
 
 #explainer = shap.GradientExplainer((model, features_layer), normalize(X), local_smoothing=0.5)
 explainer = shap.GradientExplainer((model, features_layer), normalize(X), local_smoothing=0.5)
-shap_values,indexes = explainer.shap_values(normalize(to_explain), ranked_outputs=2, nsamples=IMG_SAMPLES)
+shap_values,indexes = explainer.shap_values(normalize(to_explain), ranked_outputs=RANKED_OUTPUTS, nsamples=IMG_SAMPLES)
 
 # get the names for the classes
 dic_class_names = {i :class_names[i] for i in range(0, len(class_names))}
@@ -242,10 +244,6 @@ with pd.option_context('display.max_colwidth', -1):
   result = html_image 
 
 result = """     
-            
-            
-            
-            
             <!DOCTYPE html>
             <html>
               <head>
@@ -261,7 +259,7 @@ result = """
                       <br>
                         <br>
                           <h3 style="color:#003050;" id="M1">Explain a Deep learning Model using GradientExplainer</h3>
-                          <p>Explaining a prediction in terms of the original input image is harder than explaining the predicition in terms of a higher convolutional layer (because the higher convolutional layer is closer to the output). Gradient explainer uses expected gradients, which merges ideas from integrated gradients, SHAP, and SmoothGrad into a single expection equation. To use smoothing like SmoothGrad just set the local_smoothing parameter to something non-zero. This will add normally distributed noise with that standard deviation to the input during the expectation calculation. It can create smoother feature attributions that better capture correlated regions of the image. Red pixels represent positive SHAP values that increase the probability of the class, while blue pixels represent negative SHAP values the reduce the probability of the class.</p>
+                          <p>Explaining a prediction in terms of the original input image is harder than explaining the predicition in terms of a higher convolutional layer (because the higher convolutional layer is closer to the output). Gradient explainer uses expected gradients, which merges ideas from integrated gradients, SHAP, and SmoothGrad into a single expection equation. Red pixels represent positive SHAP values that increase the probability of the class, while blue pixels represent negative SHAP values the reduce the probability of the class.</p>
                           <center>{0}</center>
                           <footer>
                             <hr/>
