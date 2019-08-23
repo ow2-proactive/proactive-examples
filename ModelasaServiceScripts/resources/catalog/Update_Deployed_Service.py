@@ -39,6 +39,7 @@ if 'variables' in locals():
         SERVICE_NAME = variables.get("SERVICE_NAME")
     if variables.get("EXECUTION_SCRIPT_URL") is not None:
         EXECUTION_SCRIPT_URL = variables.get("EXECUTION_SCRIPT_URL")
+        wget.download(EXECUTION_SCRIPT_URL,EXECUTION_SCRIPT_PATH)
     if variables.get("CONDA_FILE_URL") is not None:
         CONDA_FILE_URL = variables.get("CONDA_FILE_URL")
 
@@ -46,22 +47,12 @@ if 'variables' in locals():
 interactive_auth = InteractiveLoginAuthentication()
 
 #Set the interactive authentification
-ws = Workspace.get(name=AZURE_WORKSPACE_NAME, auth=interactive_auth, subscription_id=SUBSCRIPTION_ID,resource_group=RESOURCE_GROUP)
+ws = Workspace.get(name=AZURE_WORKSPACE_NAME, auth=interactive_auth, subscription_id=AZURE_SUBSCRIPTION_ID,resource_group=AZURE_RESOURCE_GROUP)
 service = Webservice(workspace=ws, name=SERVICE_NAME)
 
-#Get Model PATH
-if 'variables' in locals():
-    if variables.get(model_id) is not None:
-        model_compressed = variables.get(model_id)
-        model_bin = bz2.decompress(model_compressed)
-        with bz2.open(MODEL_PATH, "wb") as f:
-            model = f.write(model_bin)
-        #pickle.dump(model_bin,open("sklearn_mnist.pkl","wb"))
-        print('model size (original):   ', sys.getsizeof(MODEL_PATH), " bytes")
-        MODEL_PATH = os.path.join(os.getcwd(),MODEL_PATH)
-    else:
-    	MODEL_PATH = os.path.join(os.getcwd(),MODEL_PATH)
-    	wget.download(MODEL_URL,MODEL_PATH)
+#Get model
+MODEL_PATH = os.path.join(os.getcwd(),MODEL_PATH)
+wget.download(MODEL_URL,MODEL_PATH)
 
 #Register a new model
 new_model = Model.register(model_path = MODEL_PATH,
@@ -70,18 +61,9 @@ new_model = Model.register(model_path = MODEL_PATH,
                        workspace = ws)
 
 #Create a new image
-if CONDA_FILE_URL is not '':
-    # Define the Conda environment
-    from azureml.core.conda_dependencies import CondaDependencies
-    myenv = CondaDependencies()
-    myenv.add_conda_package("scikit-learn")
-	#myenv.add_pip_package("joblib")
-    with open("myenv.yml","w") as f:
-        f.write(myenv.serialize_to_string())
-    inference_config = InferenceConfig(entry_script=EXECUTION_SCRIPT_PATH, runtime="python", conda_file="myenv.yml")
-else:
-    wget.download(CONDA_FILE_URL,CONDA_FILE_PATH)
-    inference_config = InferenceConfig(entry_script=EXECUTION_SCRIPT_PATH, runtime="python", conda_file=CONDA_FILE_PATH)
+CONDA_FILE_PATH = os.path.join(os.getcwd(),CONDA_FILE_PATH)
+wget.download(CONDA_FILE_URL,CONDA_FILE_PATH)
+inference_config = InferenceConfig(entry_script=EXECUTION_SCRIPT_PATH, runtime="python", conda_file=CONDA_FILE_PATH)
 
 #Update the service
 #service.update(image=None, tags=None, properties=None, description=None, auth_enabled=None, ssl_enabled=None, ssl_cert_pem_file=None, ssl_key_pem_file=None, ssl_cname=None, enable_app_insights=None, models=None, inference_config=None)
