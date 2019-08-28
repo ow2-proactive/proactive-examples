@@ -30,6 +30,7 @@ CPU_CORES = 1
 EXECUTION_SCRIPT_PATH = "./score.py"
 CONDA_FILE_PATH = "./myenv.yml"
 DOCKER_FILE_PATH = "./dockerfile"
+AUTH_ENABLED = None
 
 #Get the variables from the Studio
 if 'variables' in locals():
@@ -55,10 +56,13 @@ if 'variables' in locals():
         CPU_CORES = int(variables.get("CPU_CORES"))
     if variables.get("EXECUTION_SCRIPT_URL") is not None:
         EXECUTION_SCRIPT_URL = variables.get("EXECUTION_SCRIPT_URL")
+        wget.download(EXECUTION_SCRIPT_URL,EXECUTION_SCRIPT_PATH)
     if variables.get("CONDA_FILE_URL") is not None:
         CONDA_FILE_URL = variables.get("CONDA_FILE_URL")
     if variables.get("DOCKER_FILE_URL") is not None:
         DOCKER_FILE_URL = variables.get("DOCKER_FILE_URL")
+    if variables.get("AUTH_ENABLED") is not None:
+        AUTH_ENABLED = variables.get("AUTH_ENABLED")
         
 input_variables = {'task.model_id': None}
 for key in input_variables.keys():
@@ -75,9 +79,9 @@ if 'variables' in locals():
     if variables.get(model_id) is not None:
         model_compressed = variables.get(model_id)
         model_bin = bz2.decompress(model_compressed)
-        with bz2.open(MODEL_PATH, "wb") as f:
+        with open(MODEL_PATH, "wb") as f:
             model = f.write(model_bin)
-        #pickle.dump(model_bin,open("sklearn_mnist.pkl","wb"))
+        #pickle.dump(model_bin,open(MODEL_PATH,"wb"))
         print('model size (original):   ', sys.getsizeof(MODEL_PATH), " bytes")
         MODEL_PATH = os.path.join(os.getcwd(),MODEL_PATH)
     else:
@@ -97,7 +101,7 @@ model = Model.register(model_name=MODEL_NAME, model_path=MODEL_PATH, workspace=w
 print(model.name, model.id, model.version, sep = '\t')
 
 #Set the image
-aciconfig = AciWebservice.deploy_configuration(cpu_cores=CPU_CORES, memory_gb=MEMORY_GB, description=SERVICE_DESCRIPTION)
+aciconfig = AciWebservice.deploy_configuration(cpu_cores=CPU_CORES, memory_gb=MEMORY_GB, description=SERVICE_DESCRIPTION, auth_enabled=AUTH_ENABLED)
 
 if CONDA_FILE_URL=='' and DOCKER_FILE_URL=='':
     from azureml.core.conda_dependencies import CondaDependencies
@@ -120,9 +124,12 @@ service = Webservice.deploy_from_model(workspace=ws, name=SERVICE_NAME, deployme
 
 service.wait_for_deployment(show_output=True)
 
-print("SERVICE_ENDPOINT")
-print(service.scoring_uri)
+print("SERVICE_ENDPOINT",service.scoring_uri)
 
 variables.put("SCORING_URI",service.scoring_uri)
+
+if AUTH_ENABLED:
+    primary, secondary = service.get_keys()
+    variables.put("SERVICE_KEY",primary)
 
 print("END " + __file__)
