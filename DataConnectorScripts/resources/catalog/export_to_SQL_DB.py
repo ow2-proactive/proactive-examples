@@ -17,7 +17,7 @@ if DBMS_NAME == "oracle":
 
 DBMS_DRIVER, DBMS_DEFAULT_PORT = DBMS_DATA
 
-print("BEGIN Export_Data to " + DBMS_NAME + " database using " + DBMS_DRIVER + " driver")
+print("BEGIN exporting data to " + DBMS_NAME + " database using " + DBMS_DRIVER + " driver")
 
 CREDENTIALS_KEY_MSG = DBMS_NAME + "://<username>@<host>:<port>"
 
@@ -73,4 +73,4 @@ dataframe = pd.read_csv(INPUT_FILE, sep='\s+|;|,',index_col=None, engine='python
 with engine.connect() as conn, conn.begin():
     dataframe.to_sql(SQL_TABLE, conn, schema=None, if_exists=INSERT_MODE, index=True, index_label=None, chunksize=None, dtype=None)
 
-print("END Export_Data")
+print("END exporting data")

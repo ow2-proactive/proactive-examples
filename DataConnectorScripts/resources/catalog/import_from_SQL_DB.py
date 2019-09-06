@@ -17,7 +17,7 @@ if DBMS_NAME == "oracle":
 
 DBMS_DRIVER, DBMS_DEFAULT_PORT = DBMS_DATA
 
-print("BEGIN Export_Data to " + DBMS_NAME + " database using " + DBMS_DRIVER + " driver")
+print("BEGIN importing data from " + DBMS_NAME + " database using " + DBMS_DRIVER + " driver")
 
 CREDENTIALS_KEY_MSG = DBMS_NAME + "://<username>@<host>:<port>"
 
@@ -106,4 +106,4 @@ else:
 if OUTPUT_FILE:
     dataframe.to_csv(path_or_buf=OUTPUT_FILE, index=False)
 
-print("END Import_Data")
+print("END importing data")
