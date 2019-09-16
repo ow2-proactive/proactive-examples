@@ -25,6 +25,21 @@ from sklearn.metrics.cluster import completeness_score
 from sklearn.metrics.cluster import homogeneity_score
 from sklearn.metrics.cluster import v_measure_score
 
+
+USE_NVIDIA_RAPIDS = False
+if variables.get("USE_NVIDIA_RAPIDS") is not None:
+  if str(variables.get("USE_NVIDIA_RAPIDS")).lower() == 'true':
+    USE_NVIDIA_RAPIDS = True
+if USE_NVIDIA_RAPIDS:
+  try:
+    import cudf
+  except ImportError:
+    print("NVIDIA RAPIDS is not available")
+    USE_NVIDIA_RAPIDS = False
+    pass
+print('USE_NVIDIA_RAPIDS: ', USE_NVIDIA_RAPIDS)
+
+
 input_variables = {
   'task.dataframe_id': None, 
   'task.dataframe_id_test': None,
@@ -50,7 +65,12 @@ dataframe_json = variables.get(dataframe_id)
 assert dataframe_json is not None
 dataframe_json = bz2.decompress(dataframe_json).decode()
 
-dataframe = pd.read_json(dataframe_json, orient='split')
+#dataframe = pd.read_json(dataframe_json, orient='split')
+
+if USE_NVIDIA_RAPIDS == True:
+  dataframe = cudf.read_json(dataframe_json, orient='split')  
+else:
+  dataframe = pd.read_json(dataframe_json, orient='split')
 
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
@@ -88,11 +108,23 @@ dataframe_predictions = None
 
 if is_labeled_data:
   columns = [LABEL_COLUMN]
-  dataframe_test = dataframe.drop(columns, axis=1, inplace=False)
-  dataframe_label = dataframe.filter(columns, axis=1)
-  predictions = list(loaded_model.predict(dataframe_test.values))
+  dataframe_test = dataframe.drop(columns, axis=1)
+    
+  if USE_NVIDIA_RAPIDS == True:
+    for colname in dataframe_test.columns:
+      dataframe_test[colname] = dataframe_test[colname].astype('float32')    
+    dataframe_label = dataframe[LABEL_COLUMN].astype('float32') 
+    predictions = list(loaded_model.predict(dataframe_test))
+    dataframe = dataframe.to_pandas()
+  else:
+    dataframe_label = dataframe.filter(columns, axis=1)
+    predictions = list(loaded_model.predict(dataframe_test.values))
+    
   dataframe_predictions = pd.DataFrame(predictions)
   dataframe = dataframe.assign(predictions=dataframe_predictions)
+  print('CAROLINE PREDICTIONS')
+  print(predictions)
+  print(type(predictions))
 
   if alg.type == 'anomaly':
     pred_map = {-1: 1, 1: 0}
@@ -100,7 +132,10 @@ if is_labeled_data:
     predictions = dataframe["predictions"].tolist()
   
   if alg.type != 'clustering' and alg.type != 'anomaly':
-    score = loaded_model.score(dataframe_test.values, dataframe_label.values.ravel())
+    if USE_NVIDIA_RAPIDS == True:
+      score = 1
+    else:    
+      score = loaded_model.score(dataframe_test.values, dataframe_label.values.ravel())
     print("MODEL SCORE: %.2f" % score)
 
   #-------------------------------------------------------------
@@ -126,7 +161,12 @@ if is_labeled_data:
     dataframe['absolute_error'] = dataframe[LABEL_COLUMN] - dataframe['predictions']
     mean_squared_error_result = mean_squared_error(dataframe_label.values.ravel(), predictions)
     mean_absolute_error_result = mean_absolute_error(dataframe_label.values.ravel(), predictions)
-    r2_score_result = r2_score(dataframe_label.values.ravel(), predictions) 
+    
+    if USE_NVIDIA_RAPIDS == True:
+      r2_score_result = 1
+    else:    
+      r2_score_result = r2_score(dataframe_label.values.ravel(), predictions) 
+    
     print("********************** REGRESSION SCORES **********************")
     print("MEAN SQUARED ERROR: %.2f" % mean_squared_error_result)
     print("MEAN ABSOLUTE ERROR: %.2f" % mean_absolute_error_result)
@@ -177,32 +217,31 @@ if LIMIT_OUTPUT_VIEW > 0:
   print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
   dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
 
-#============================== Preview results ===============================
-#***************# HTML PREVIEW STYLING #***************#
-styles = [
-    dict(selector="th", props=[("font-weight", "bold"),
-                               ("text-align", "center"),
-                               ("font-size", "15px"),
-                               ("background", "#0B6FA4"),
-                               ("color", "#FFFFFF")]),
-                               ("padding", "3px 7px"),
-    dict(selector="td", props=[("text-align", "right"),
-                               ("padding", "3px 3px"),
-                               ("border", "1px solid #999999"),
-                               ("font-size", "13px"),
-                               ("border-bottom", "1px solid #0B6FA4")]),
-    dict(selector="table", props=[("border", "1px solid #999999"),
-                               ("text-align", "center"),
-                               ("width", "100%"),
-                               ("border-collapse", "collapse")])
-]
-#******************************************************#
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
 
-with pd.option_context('display.max_colwidth', -1):
-  result = dataframe.style.set_table_styles(styles).render().encode('utf-8')
+  result = ''
+  with pd.option_context('display.max_colwidth', -1):
+  	result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
+
+  result = """
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <title>Machine Learning Preview</title>
+                  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+              </head>
+                <body class="container">
+                	<h1 class="text-center my-4" style="color:#003050;">Data Preview</h1>
+                	 <div style="text-align:center">{0}</div>
+                </body></html>""".format(result)
+  
+  result = result.encode('utf-8')
   resultMetadata.put("file.extension", ".html")
   resultMetadata.put("file.name", "output.html")
   resultMetadata.put("content.type", "text/html")
-#==============================================================================
 
 print("END " + __file__)

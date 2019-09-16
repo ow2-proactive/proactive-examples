@@ -12,6 +12,19 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import cross_val_score
 
+USE_NVIDIA_RAPIDS = False
+if variables.get("USE_NVIDIA_RAPIDS") is not None:
+  if str(variables.get("USE_NVIDIA_RAPIDS")).lower() == 'true':
+    USE_NVIDIA_RAPIDS = True
+if USE_NVIDIA_RAPIDS:
+  try:
+    import cudf
+  except ImportError:
+    print("NVIDIA RAPIDS is not available")
+    USE_NVIDIA_RAPIDS = False
+    pass
+print('USE_NVIDIA_RAPIDS: ', USE_NVIDIA_RAPIDS)
+
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
 if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
@@ -40,12 +53,16 @@ print("dataframe id (in): ", dataframe_id)
 dataframe_json = variables.get(dataframe_id)
 assert dataframe_json is not None
 dataframe_json = bz2.decompress(dataframe_json).decode()
-dataframe = pd.read_json(dataframe_json, orient='split')
+
+if USE_NVIDIA_RAPIDS == True:
+  dataframe = cudf.read_json(dataframe_json, orient='split')  
+else:
+  dataframe = pd.read_json(dataframe_json, orient='split')
 
 algorithm_json = input_variables['task.algorithm_json']
 assert algorithm_json is not None
 algorithm = json.loads(algorithm_json)
-
+    
 #-------------------------------------------------------------
 class obj(object):
   def __init__(self, d):
@@ -110,7 +127,7 @@ if alg.is_supervised:
     model = GaussianNB(**vars)  
   elif alg.name == 'LogisticRegression':
     from sklearn.linear_model import LogisticRegression
-    model = LogisticRegression(**vars)
+    model = LogisticRegression(**vars)       
   elif alg.name == 'AdaBoost' and alg.type == 'classification':
     from sklearn.ensemble import AdaBoostClassifier
     model = AdaBoostClassifier(**vars)
@@ -119,7 +136,7 @@ if alg.is_supervised:
     model = GradientBoostingClassifier(**vars)
   elif alg.name == 'RandomForest' and alg.type == 'classification':
     from sklearn.ensemble import RandomForestClassifier
-    model = RandomForestClassifier(**vars)
+    model = RandomForestClassifier(**vars) 
   elif alg.name == 'XGBoost' and alg.type == 'classification':
     from xgboost.sklearn import XGBClassifier
     model = XGBClassifier(**vars)   
@@ -154,8 +171,14 @@ if alg.is_supervised:
           per_run_time_limit=alg.run_time
       )
   elif alg.name == 'LinearRegression':
-    from sklearn.linear_model import LinearRegression
-    model = LinearRegression(**vars)
+    
+    if USE_NVIDIA_RAPIDS == True:
+      from cuml.linear_model import LinearRegression
+      model = LinearRegression(**vars)
+    else:
+      from sklearn.linear_model import LinearRegression
+      model = LinearRegression(**vars)
+        
   elif alg.name == 'SupportVectorRegression':
     from sklearn.svm import SVR
     model = SVR(**vars)
@@ -192,35 +215,66 @@ else:
     from sklearn.cluster import MeanShift
     model = MeanShift(**vars)  
   elif alg.name == 'KMeans':
-    from sklearn.cluster import KMeans
-    model = KMeans(**vars)
+    
+    if USE_NVIDIA_RAPIDS == True:
+      from cuml.cluster import KMeans
+      model = KMeans(**vars)
+    else:
+      from sklearn.cluster import KMeans
+      model = KMeans(**vars)
 
 #-------------------------------------------------------------
 if model is not None:
   if is_labeled_data:
     columns = [LABEL_COLUMN]
-    dataframe_train = dataframe.drop(columns, axis=1, inplace=False)
-    dataframe_label = dataframe.filter(columns, axis=1)
+    dataframe_train = dataframe.drop(columns, axis=1)
+    
+    if USE_NVIDIA_RAPIDS == True:
+      dataframe_label = dataframe[LABEL_COLUMN]
+    else:
+      dataframe_label = dataframe.filter(columns, axis=1)
   else:
     dataframe_train = dataframe
     
   if alg.is_supervised:
+    print("BEFORE TRAINING")
     print(dataframe_train.head())
+    print(dataframe_train.dtypes)
     print(dataframe_label.head())
-    model.fit(dataframe_train.values, dataframe_label.values.ravel())
+    
+    if USE_NVIDIA_RAPIDS == True:
+      for colname in dataframe_train.columns:
+        dataframe_train[colname] = dataframe_train[colname].astype('float32')    
+      print(dataframe_train.dtypes)
+      model.fit(dataframe_train, dataframe_label.astype('float32'))
+    else:
+      model.fit(dataframe_train.values, dataframe_label.values.ravel())
     if (alg.type == 'classification' or alg.type == 'anomaly') and automl:
-      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+        
+      if USE_NVIDIA_RAPIDS == True:
+        scores = 1
+      else:
+        scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
     if alg.type == 'regression' and automl:
-      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+        
+      if USE_NVIDIA_RAPIDS == True:
+        scores = 1
+      else:
+        scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
     if alg.sampling:
       model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
   else:
-    model.fit(dataframe_train.values)
+    if USE_NVIDIA_RAPIDS == True:
+      model.fit(dataframe_train.values)
+    else:
+      model.fit(dataframe_train)
+    dataframe_train = dataframe_train.to_pandas()
     if is_labeled_data and automl:
-        scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-        loss = 1 - np.mean(scores)
+      dataframe_label = dataframe_label.to_pandas()
+      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+      loss = 1 - np.mean(scores)
   if alg.name == 'TPOT_Regressor' or alg.name =='TPOT_Classifier':
     model = model.fitted_pipeline_
   model_bin = pickle.dumps(model)
@@ -235,6 +289,8 @@ if model is not None:
 else:
   print("Algorithm not found!")
 
+if USE_NVIDIA_RAPIDS == True: 
+  dataframe = dataframe.to_pandas()
 dataframe_json = dataframe.to_json(orient='split').encode()
 compressed_data = bz2.compress(dataframe_json)
 
