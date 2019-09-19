@@ -165,32 +165,35 @@ print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 
-#===================================== Preview results =================================
-#***************# HTML PREVIEW STYLING #***************#
-styles = [
-    dict(selector="th", props=[("font-weight", "bold"),
-                               ("text-align", "center"),
-                               ("font-size", "15px"),
-                               ("background", "#0B6FA4"),
-                               ("color", "#FFFFFF")]),
-                               ("padding", "3px 7px"),
-    dict(selector="td", props=[("text-align", "right"),
-                               ("padding", "3px 3px"),
-                               ("border", "1px solid #999999"),
-                               ("font-size", "13px"),
-                               ("border-bottom", "1px solid #0B6FA4")]),
-    dict(selector="table", props=[("border", "1px solid #999999"),
-                               ("text-align", "center"),
-                               ("width", "100%"),
-                               ("border-collapse", "collapse")])
-]
-#******************************************************#
+#============================== Preview results ===============================
 
+LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
+if LIMIT_OUTPUT_VIEW > 0:
+  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
+  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+
+result = ''
 with pd.option_context('display.max_colwidth', -1):
-  result = df_features.style.set_table_styles(styles).render().encode('utf-8')
-  resultMetadata.put("file.extension", ".html")
-  resultMetadata.put("file.name", "output.html")
-  resultMetadata.put("content.type", "text/html")
+  result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
+
+result = """
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <title>Machine Learning Preview</title>
+                  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+              </head>
+                <body class="container">
+                  <h1 class="text-center my-4" style="color:#003050;">Data Preview</h1>
+                   <div style="text-align:center">{0}</div>
+                </body></html>""".format(result)
+  
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
 
 #===================================== Save the linked variables =================================  
 columns_name = df_features.columns

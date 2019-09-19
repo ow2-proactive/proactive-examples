@@ -202,7 +202,17 @@ if is_labeled_data:
     print("***************************************************************")
     #-------------------------------------------------------------
 else:
-  predictions = list(loaded_model.predict(dataframe.values))
+  #-------------------------------------------------------------
+  # USE_NVIDIA_RAPIDS
+  #  
+  if USE_NVIDIA_RAPIDS == True:
+    for colname in dataframe:
+      dataframe[colname] = dataframe[colname].astype('float32')    
+    predictions = list(loaded_model.predict(dataframe))
+    dataframe = dataframe.to_pandas()
+  else: 
+    predictions = list(loaded_model.predict(dataframe.values))
+    
   dataframe_predictions = pd.DataFrame(predictions)
   dataframe = dataframe.assign(predictions=dataframe_predictions)
 
