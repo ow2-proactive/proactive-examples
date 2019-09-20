@@ -171,7 +171,7 @@ LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
 LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
 if LIMIT_OUTPUT_VIEW > 0:
   print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
-  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
+  dataframe = df_features.head(LIMIT_OUTPUT_VIEW).copy()
 
 result = ''
 with pd.option_context('display.max_colwidth', -1):
