@@ -101,7 +101,7 @@ def train_epoch_progress(model, train_iter, train, loss_function, optimizer, tex
 #--------Get the task parameters--------
 
 #True or False
-TRAINABLE = 'False'
+TRAINABLE = False
 #42B, 840B, twitter.27B, 6B
 GLOVE = '6B'
 LEARNING_RATE = '0.0001'
@@ -111,7 +111,7 @@ EPOCHS = 2
 #L1Loss, MSELoss, CrossEntropyLoss, NLLLoss ....
 LOSS_FUNCTION = 'NLLLoss'
 #True or False
-USE_GPU = 'False'
+USE_GPU = False
 
 if 'variables' in locals():
     #True or False
@@ -169,7 +169,7 @@ if 'variables' in locals():
 
 #--------Define GPU or CPU environment-------- 
 
-if (USE_GPU == 'True' and torch.cuda.is_available()):
+if (USE_GPU and torch.cuda.is_available()):
     USE_GPU = 1
     DEVICE = 1
     print('GPU ressource will be used')
@@ -180,17 +180,16 @@ else:
         
 #--------Load Dataset--------
 DATASET_ITERATOR_UNL = None
-if 'variables' in locals():
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if IS_LABELED_DATA == 'True':
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-    else:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH_UNL")
-    if DATASET_ITERATOR is not None:
-        exec(DATASET_ITERATOR)
+if variables.get("IS_LABELED_DATA") is not None:
+    IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
+if IS_LABELED_DATA:
+    DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
+    DATASET_PATH = variables.get("DATASET_PATH")
+else:
+    DATASET_ITERATOR = variables.get("DATASET_ITERATOR_UNL")
+    DATASET_PATH = variables.get("DATASET_PATH_UNL")
+if DATASET_ITERATOR is not None:
+    exec(DATASET_ITERATOR)
 
 #--------Load Model---------
 
@@ -220,7 +219,7 @@ print('Load word embeddings...')
 
 text_field.vocab.load_vectors(vectors=GloVe(name=GLOVE, dim=EMBEDDING_DIM))
 MODEL.embeddings.weight.data = text_field.vocab.vectors
-if TRAINABLE=='False':
+if not TRAINABLE:
     MODEL.embeddings.weight.requires_grad=False
     
 best_model = MODEL
@@ -293,7 +292,7 @@ try:
     variables.put("DEVICE",DEVICE)
     variables.put("VOCAB_SIZE", VOCAB_SIZE)
     variables.put("LABEL_SIZE", LABEL_SIZE)
-    if IS_LABELED_DATA=='True':
+    if IS_LABELED_DATA:
         variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
     else:
         variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR_UNL)
