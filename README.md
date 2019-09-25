@@ -111,7 +111,6 @@ task zip (type: Zip){
     include 'FinanceMonteCarlo/**'
     include 'GetStarted/**'
     include 'HDFS/**'
-    include 'HDFSOrchestration/**'
     include 'ImageAnalysis/**'
     include 'JobAnalysis/**'
     include 'LogAnalysis/**'

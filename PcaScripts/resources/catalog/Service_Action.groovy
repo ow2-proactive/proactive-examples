@@ -1,12 +1,11 @@
 println("BEGIN " + variables.get("PA_TASK_NAME"))
 
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.ServiceDescription
-import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
-import org.ow2.proactive.pca.service.client.api.CatalogRestApi
 
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.CatalogRestApi
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
 // Get schedulerapi access
 schedulerapi.connect()
 
@@ -69,6 +68,6 @@ service.setWorkflowName(action)
 if( !actionVariables.isEmpty() ){
     actionVariables.each{ k, v -> service.putVariablesItem("${k}", "${v}") }
 }
-serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId as int, service)
+serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId as int, service, variables.get("PA_JOB_ID"))
 
 println("END " + variables.get("PA_TASK_NAME"))

@@ -11,12 +11,6 @@ if variables.get("DOCKER_ENABLED") is not None:
 if os.path.isfile('/.dockerenv'):
     DOCKER_ENABLED = False
 
-# check if DOCKER_GPU_ENABLED variable is set
-DOCKER_GPU_ENABLED = True
-if variables.get("DOCKER_GPU_ENABLED") is not None:
-    if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'false':
-        DOCKER_GPU_ENABLED = False
-
 # check if CUDA is enabled
 CUDA_ENABLED = False
 CUDA_HOME = os.getenv('CUDA_HOME', None)
@@ -28,14 +22,31 @@ else:
     if os.path.isdir(CUDA_HOME_DEFAULT) == True:
         CUDA_ENABLED = True
 
+# check if DOCKER_GPU_ENABLED variable is set
+DOCKER_GPU_ENABLED = True
+if variables.get("DOCKER_GPU_ENABLED") is not None:
+    if str(variables.get("DOCKER_GPU_ENABLED")).lower() == 'false':
+        DOCKER_GPU_ENABLED = False
+if not CUDA_ENABLED:
+    DOCKER_GPU_ENABLED = False
+
+# check if user wants to use NVIDIA RAPIDS
+USE_NVIDIA_RAPIDS = False
+if variables.get("USE_NVIDIA_RAPIDS") is not None:
+    if str(variables.get("USE_NVIDIA_RAPIDS")).lower() == 'true':
+        USE_NVIDIA_RAPIDS = True
+
 # set the default docker environment
 DEFAULT_DOCKER_IMAGE = 'activeeon/dlm3'
 DOCKER_RUN_CMD = 'docker run '
 
-# activate CUDA support if DOCKER_GPU_ENABLED and CUDA_ENABLED are True
-if DOCKER_GPU_ENABLED and CUDA_ENABLED:
+# activate CUDA support if DOCKER_GPU_ENABLED is True
+if DOCKER_GPU_ENABLED:
     DOCKER_RUN_CMD += '--runtime=nvidia '
-    DEFAULT_DOCKER_IMAGE = 'activeeon/cuda'
+    if USE_NVIDIA_RAPIDS:
+        DEFAULT_DOCKER_IMAGE = 'activeeon/rapidsai'
+    else:
+        DEFAULT_DOCKER_IMAGE = 'activeeon/cuda'
 
 # use a different DOCKER_IMAGE is it's set
 if variables.get("DOCKER_IMAGE") is not None:
@@ -47,7 +58,9 @@ else:
 print('Fork environment info...')
 print('DOCKER_ENABLED:     ' + str(DOCKER_ENABLED))
 print('DOCKER_IMAGE:       ' + DOCKER_IMAGE)
+print('CUDA_ENABLED:       ' + str(CUDA_ENABLED))
 print('DOCKER_GPU_ENABLED: ' + str(DOCKER_GPU_ENABLED))
+print('USE_NVIDIA_RAPIDS:  ' + str(USE_NVIDIA_RAPIDS))
 print('DOCKER_RUN_CMD:     ' + DOCKER_RUN_CMD)
 
 if DOCKER_ENABLED == True:
