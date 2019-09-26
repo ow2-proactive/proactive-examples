@@ -265,17 +265,12 @@ else:
       model = KMeans(**vars)
 
 #-------------------------------------------------------------
+dataframe_label = None
 if model is not None:
   if is_labeled_data:
     columns = [LABEL_COLUMN]
     dataframe_train = dataframe.drop(columns, axis=1)
-    #-------------------------------------------------------------
-    # Use nvidia rapids
-    #
-    if USE_NVIDIA_RAPIDS == True:
-      dataframe_label = dataframe[LABEL_COLUMN]
-    else:
-      dataframe_label = dataframe.filter(columns, axis=1)
+    dataframe_label = dataframe[LABEL_COLUMN]
   else:
     dataframe_train = dataframe
     
@@ -308,7 +303,7 @@ if model is not None:
         dataframe_train[colname] = dataframe_train[colname].astype('float32')
       model.fit(dataframe_train)
       dataframe_train = dataframe_train.to_pandas()
-      dataframe_label = dataframe_label.to_pandas() if 'dataframe_label' in locals()  else ('Dataframe label is not defined')
+      dataframe_label = dataframe_label.to_pandas() if dataframe_label is not None else None
     else:
       model.fit(dataframe_train.values)
     if is_labeled_data and automl:
@@ -331,8 +326,7 @@ else:
 #-------------------------------------------------------------
 # Use nvidia rapids
 #
-if USE_NVIDIA_RAPIDS == True:
-  dataframe = dataframe.to_pandas()
+dataframe = dataframe.to_pandas() if USE_NVIDIA_RAPIDS else dataframe
 dataframe_json = dataframe.to_json(orient='split').encode()
 compressed_data = bz2.compress(dataframe_json)
 
