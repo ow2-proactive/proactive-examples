@@ -27,7 +27,7 @@ from sklearn.metrics.cluster import v_measure_score
 
 
 #-------------------------------------------------------------
-# USE_NVIDIA_RAPIDS
+# Use nvidia rapids
 #
 USE_NVIDIA_RAPIDS = False
 if variables.get("USE_NVIDIA_RAPIDS") is not None:
@@ -69,7 +69,7 @@ assert dataframe_json is not None
 dataframe_json = bz2.decompress(dataframe_json).decode()
 
 #-------------------------------------------------------------
-# USE_NVIDIA_RAPIDS
+# Use nvidia rapids
 #
 if USE_NVIDIA_RAPIDS == True:
   dataframe = cudf.read_json(dataframe_json, orient='split')  
@@ -115,7 +115,7 @@ if is_labeled_data:
   dataframe_test = dataframe.drop(columns, axis=1)
 
   #-------------------------------------------------------------
-  # USE_NVIDIA_RAPIDS
+  # Use nvidia rapids
   #    
   if USE_NVIDIA_RAPIDS == True:
     for colname in dataframe_test.columns:
@@ -138,7 +138,7 @@ if is_labeled_data:
   if alg.type != 'clustering' and alg.type != 'anomaly':
   
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     # 
     if USE_NVIDIA_RAPIDS == True:
       score = 1
@@ -171,7 +171,7 @@ if is_labeled_data:
     mean_absolute_error_result = mean_absolute_error(dataframe_label.values.ravel(), predictions)
     
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     # 
     if USE_NVIDIA_RAPIDS == True:
       r2_score_result = 1
@@ -203,7 +203,7 @@ if is_labeled_data:
     #-------------------------------------------------------------
 else:
   #-------------------------------------------------------------
-  # USE_NVIDIA_RAPIDS
+  # Use nvidia rapids
   #  
   if USE_NVIDIA_RAPIDS == True:
     for colname in dataframe:

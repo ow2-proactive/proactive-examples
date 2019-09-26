@@ -10,10 +10,15 @@ import sys, bz2, uuid, json
 import random, pickle
 import pandas as pd
 import numpy as np
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import f1_score
 from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import f1_score
+from sklearn.metrics import accuracy_score 
 
 #-------------------------------------------------------------
-# USE_NVIDIA_RAPIDS
+# Use nvidia rapids
 #
 USE_NVIDIA_RAPIDS = False
 if variables.get("USE_NVIDIA_RAPIDS") is not None:
@@ -27,6 +32,26 @@ if USE_NVIDIA_RAPIDS:
     USE_NVIDIA_RAPIDS = False
     pass
 print('USE_NVIDIA_RAPIDS: ', USE_NVIDIA_RAPIDS)
+
+if USE_NVIDIA_RAPIDS:
+  def cross_val_score(clf, X, y, cv=3, scoring=None): 
+    kf = StratifiedKFold(cv)
+    acc_scores = []
+    i = 0
+    for train_index, test_index in kf.split(X, y):
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+        try: 
+            clf.fit(X_train, y_train)
+        except:
+            clf.fit(X_train)
+        y_pred = clf.predict(X_test)
+        acc_score = accuracy_score(y_test, y_pred.to_pandas())
+        acc_scores.append(acc_score)
+        i += 1
+    return acc_scores
+else:
+  from sklearn.model_selection import cross_val_score
 
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
@@ -58,7 +83,7 @@ assert dataframe_json is not None
 dataframe_json = bz2.decompress(dataframe_json).decode()
 
 #-------------------------------------------------------------
-# USE_NVIDIA_RAPIDS
+# Use nvidia rapids
 #
 if USE_NVIDIA_RAPIDS == True:
   dataframe = cudf.read_json(dataframe_json, orient='split')  
@@ -142,7 +167,7 @@ if alg.is_supervised:
     model = GradientBoostingClassifier(**vars)
   elif alg.name == 'RandomForest' and alg.type == 'classification':
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     #
     if USE_NVIDIA_RAPIDS == True:
       from cuml.ensemble import RandomForestClassifier
@@ -185,7 +210,7 @@ if alg.is_supervised:
       )
   elif alg.name == 'LinearRegression':
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     #
     if USE_NVIDIA_RAPIDS == True:
       from cuml.linear_model import LinearRegression
@@ -230,7 +255,7 @@ else:
     model = MeanShift(**vars)
   elif alg.name == 'KMeans':
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     #
     if USE_NVIDIA_RAPIDS == True:
       from cuml.cluster import KMeans
@@ -245,7 +270,7 @@ if model is not None:
     columns = [LABEL_COLUMN]
     dataframe_train = dataframe.drop(columns, axis=1)
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     #
     if USE_NVIDIA_RAPIDS == True:
       dataframe_label = dataframe[LABEL_COLUMN]
@@ -256,55 +281,39 @@ if model is not None:
     
   if alg.is_supervised:
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     #
     if USE_NVIDIA_RAPIDS == True:
       for colname in dataframe_train.columns:
         dataframe_train[colname] = dataframe_train[colname].astype('float32')
       model.fit(dataframe_train, dataframe_label.astype('float32'))
+      dataframe_train = dataframe_train.to_pandas()
+      dataframe_label = dataframe_label.to_pandas()
     else:
       model.fit(dataframe_train.values, dataframe_label.values.ravel())
     if (alg.type == 'classification' or alg.type == 'anomaly') and automl:
-      #-------------------------------------------------------------
-      # USE_NVIDIA_RAPIDS
-      # 
-      if USE_NVIDIA_RAPIDS == True:
-        scores = 1
-      else:
-        scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
     if alg.type == 'regression' and automl:
-      #-------------------------------------------------------------
-      # USE_NVIDIA_RAPIDS
-      #       
-      if USE_NVIDIA_RAPIDS == True:
-        scores = 1
-      else:
-        scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-      loss = 1 - np.mean(scores)
+      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+      loss = np.abs(np.mean(scores))   
     if alg.sampling:
       model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
   else:
     #-------------------------------------------------------------
-    # USE_NVIDIA_RAPIDS
+    # Use nvidia rapids
     #
     if USE_NVIDIA_RAPIDS == True:
       for colname in dataframe_train.columns:
         dataframe_train[colname] = dataframe_train[colname].astype('float32')
       model.fit(dataframe_train)
       dataframe_train = dataframe_train.to_pandas()
+      dataframe_label = dataframe_label.to_pandas() if 'dataframe_label' in locals()  else ('Dataframe label is not defined')
     else:
       model.fit(dataframe_train.values)
     if is_labeled_data and automl:
-      #-------------------------------------------------------------
-      # USE_NVIDIA_RAPIDS
-      #
-      if USE_NVIDIA_RAPIDS == True:
-        dataframe_label = dataframe_label.to_pandas()
-        scores = 1
-      else:
-        scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-        loss = 1 - np.mean(scores)
+      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+      loss = 1 - np.mean(scores)
   if alg.name == 'TPOT_Regressor' or alg.name =='TPOT_Classifier':
     model = model.fitted_pipeline_
   model_bin = pickle.dumps(model)
@@ -320,7 +329,7 @@ else:
   print("Algorithm not found!")
 
 #-------------------------------------------------------------
-# USE_NVIDIA_RAPIDS
+# Use nvidia rapids
 #
 if USE_NVIDIA_RAPIDS == True:
   dataframe = dataframe.to_pandas()
