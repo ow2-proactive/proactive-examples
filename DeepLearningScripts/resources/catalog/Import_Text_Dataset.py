@@ -24,11 +24,11 @@ GLOBALSPACE = 'text_data/'
 TRAIN_SPLIT = round(0.6, 3)
 TEST_SPLIT  = round(0.3, 3)
 VALIDATION_SPLIT = round(0.1, 3)
-TOY_MODE = 'True'
+TOY_MODE = True
 TOKENIZER = "spacy"
 SENTENCE_SEPARATOR = '\r'
 CHARSET = 'utf-8'
-IS_LABELED_DATA = 'True'
+IS_LABELED_DATA = True
 DATASET_ITERATOR_UNL = None
 
 # READ TASK VARIABLES
@@ -90,7 +90,7 @@ print("OK")
 ### PHASE 2 ################
 
 # EXTRACT LABELS
-if IS_LABELED_DATA=='True':
+if IS_LABELED_DATA:
     textfolders = [os.path.join(root, name)
              for root, dirs, files in os.walk(DATASET_PATH)
              for name in dirs]
@@ -137,7 +137,7 @@ for i in range(len(class_files)):
     print('length of class',len(sent_classes[labels[n_class]]))
     random.shuffle(sent_classes[labels[n_class]])
     file_len = len(sent_classes[labels[n_class]])
-    if TOY_MODE=='True':
+    if TOY_MODE:
         class_ent_len = int(toy_dataset_size/len(labels))
         if (file_len<class_ent_len):
             class_ent_len = file_len
@@ -164,6 +164,12 @@ train_path = os.path.join(DATASET_PATH,"train.csv")
 val_path = os.path.join(DATASET_PATH,"val.csv")
 test_path = os.path.join(DATASET_PATH,"test.csv")
 
+import os
+arr = os.listdir()
+print("list_folders",arr)
+#arr = os.listdir("text_data/IMDB/unlabeled")
+#print("list_folders_text_data",arr)
+
 train_frame.to_csv(train_path, encoding=CHARSET,index=False, header=False)
 val_frame.to_csv(val_path, encoding=CHARSET, index=False, header=False)
 test_frame.to_csv(test_path, encoding=CHARSET, index=False, header=False)
@@ -188,7 +194,7 @@ if variables.get(DATASET_ITERATOR_UNL) is None:
     LABEL_SIZE=len(label_field.vocab)
 """
 if 'variables' in locals():
-    if IS_LABELED_DATA == 'True':
+    if IS_LABELED_DATA:
         variables.put("DATASET_ITERATOR",DATASET_ITERATOR)
         variables.put("DATASET_PATH",DATASET_PATH)
     else:
