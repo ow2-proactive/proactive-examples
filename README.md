@@ -13,12 +13,12 @@ This will generate the `proactive-examples.zip` file inside project's build fold
 Copy the genarated proactive-examples.zip file to your `PA_SCHEDULER_HOME/samples` directory.
 Start your proactive distribution. From this point everything should work ok.
 During scheduling startup: the proactive-examples.zip archive will be extracted to `PA_SCHEDULER_HOME/samples/workflows/proactive-examples` folder. On the next step the special groovy script will automatically push the workflows from proactive-examples folder to Catalog storage.
-If you need to retest the extracting and loading of proactive-examples, please remove `workflows/proactive-examples folder`. Also to test the filling of catalog storage don't forget to clean database.
+If you need to retest the extracting and loading of proactive-examples, please remove the `samples/packages.loaded` file. Also to test the filling of catalog storage don't forget to clean database.
 
 ## The example of exact commands to test locally on linux:
 ```
 1) PA_SCHEDULER_HOME is the path to your local Proactive distribution folder. You need to `cd` to this folder.
-2) rm -fr samples/workflows/proactive-examples*
+2) rm -f samples/packages.loaded
 3) rm -fr data/*
 4) you need to `cd` into your locally cloned proactive-examples project folder
 5) ./gradlew clean zip
@@ -111,7 +111,6 @@ task zip (type: Zip){
     include 'FinanceMonteCarlo/**'
     include 'GetStarted/**'
     include 'HDFS/**'
-    include 'HDFSOrchestration/**'
     include 'ImageAnalysis/**'
     include 'JobAnalysis/**'
     include 'LogAnalysis/**'
