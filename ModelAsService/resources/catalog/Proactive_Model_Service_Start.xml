@@ -1,27 +1,33 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Model_Service_Start" onTaskError="continueJobExecution" priority="normal" projectName="1. Proactive" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Model_Service_Start" projectName="1. Proactive" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <variables>
-    <variable model="" name="PYTHON_ENTRYPOINT" value="ml_service-api"/>
-    <variable model="" name="USER_NAME" value="user"/>
+    <variable name="PYTHON_ENTRYPOINT" value="ml_service" />
+    <variable name="USER_NAME" value="" model=""/>
+    <variable name="DOCKER_IMAGE" value="" model=""/>
+    <variable name="YAML_FILE" value="" model=""/>
   </variables>
   <description>
     <![CDATA[ Start a server to deploy, update and call ML models. ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="model-as-a-service"/>
-<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png"/>
-<info name="Documentation" value="PCA/PCAUserGuide.html"/>
-<info name="group" value="public-objects"/>
-</genericInformation>
+    <info name="bucketName" value="model-as-a-service"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png"/>
+    <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
   <taskFlow>
-    <task name="Start_Model_Service" onTaskError="cancelJob">
+    <task name="Start_Model_Service" 
+    
+    onTaskError="cancelJob" >
       <description>
         <![CDATA[ Start a server to deploy, update and call ML models. ]]>
       </description>
       <variables>
-        <variable inherited="false" name="SERVICE_ID" value="Model_Service"/>
-        <variable inherited="false" name="INSTANCE_NAME" value="model-server-1"/>
-        <variable inherited="true" name="USER_NAME" value=""/>
+        <variable name="SERVICE_ID" value="Model_Service" inherited="false" />
+        <variable name="INSTANCE_NAME" value="model-server-1" inherited="false" />
+        <variable name="USER_NAME" value="" inherited="true" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png"/>
@@ -29,10 +35,137 @@
       </genericInformation>
       <scriptExecutable>
         <script>
-          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Service_Start/raw"/>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
+import org.ow2.proactive.pca.service.client.api.CatalogRestApi
+
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+// Get schedulerapi access
+schedulerapi.connect()
+
+// Acquire session id
+def sessionId = schedulerapi.getSession()
+
+// Define PCA URL
+def scheduler_rest_url = variables.get("PA_SCHEDULER_REST_URL")
+def pcaUrl = scheduler_rest_url.replaceAll("/rest\\z", "/cloud-automation-service")
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+//apiClient.setDebugging(true)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def serviceId = variables.get("SERVICE_ID")
+def instanceName = variables.get("INSTANCE_NAME")
+
+//Check that the provided serviceId belongs to the existing Service Activation list
+def catalogRestApi = new CatalogRestApi(apiClient)
+if(!catalogRestApi.listAllWorkflowsByServiceIdUsingGET(sessionId).keySet().contains(serviceId)){
+    throw new IllegalArgumentException("The provided SERVICE_ID:<" + serviceId + "> does not belong to the existing Service Activation list. You have to specify an existing service id.")
+}
+
+println("SERVICE_ID:    " + serviceId)
+println("INSTANCE_NAME: " + instanceName)
+
+def startingState = variables.get("STARTING_STATE")
+if (!startingState) {
+    startingState = "RUNNING"
+}
+
+// Check existing service instances
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
+for (ServiceInstanceData serviceInstanceData : service_instances) {
+    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == startingState)){
+        if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
+            instance_exists = true
+            def instanceId = serviceInstanceData.getInstanceId()
+            endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+            println("INSTANCE_ID: " + instanceId)
+            println("ENDPOINT:    " + endpoint)
+            variables.put("INSTANCE_ID_" + instanceName, instanceId)
+            variables.put("ENDPOINT_" + instanceName, endpoint)
+            result = endpoint
+            break
+        }
+    }
+}
+
+if (!instance_exists){
+    //Identifying the starting workflow, the bucket name and the default variables inside the catalog
+    def startingWorkflowName
+    def bucketName
+    def serviceVariables = new HashMap()
+    Map<String, List<CloudAutomationWorkflow>> listStartingWorkflowsByServiceId = catalogRestApi.listStartingWorkflowsByServiceIdUsingGET(sessionId)
+    for(String serviceIdIterator : listStartingWorkflowsByServiceId.keySet()){
+        if (serviceIdIterator.equals(serviceId)){
+            startingWorkflowName = listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getName()
+            bucketName = listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getBucket()
+            serviceVariables = listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+            break
+        }
+    }
+
+    // Retrieve and update workflow variables
+    if (binding.variables["args"]){
+        for (String var: args){
+            serviceVariables.put(var, variables.get(var))
+        }
+    }
+
+    // Prepare service description
+    ServiceDescription serviceDescription = new ServiceDescription()
+    serviceDescription.setBucketName(bucketName)
+    serviceDescription.setWorkflowName(startingWorkflowName)
+    if( !serviceVariables.isEmpty() ){
+        serviceVariables.each{ k, v -> serviceDescription.putVariablesItem("${k}", "${v}") }
+    }
+    // Add INSTANCE_NAME variable which is conventionnally required for docker-based PCA Services
+    serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
+
+    // Run service
+    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription)
+
+    // Acquire service Instance ID
+    def serviceInstanceId = serviceInstanceData.getInstanceId()
+
+    // Create synchro channel
+    def channel = "Service_Instance_" + serviceInstanceId
+    println("CHANNEL: " + channel)
+    synchronizationapi.createChannelIfAbsent(channel, false)
+    synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}")
+
+    // Acquire service endpoint
+    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
+    def instanceId = serviceInstanceData.getInstanceId()
+    endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+
+    println("INSTANCE_ID: " + instanceId)
+    println("ENDPOINT: " + endpoint)
+
+    variables.put("INSTANCE_ID_" + instanceName, instanceId)
+    variables.put("ENDPOINT_" + instanceName, endpoint)
+    result = endpoint
+}
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+          <arguments>
+            <argument value="DOCKER_IMAGE"/>
+            <argument value="PYTHON_ENTRYPOINT"/>
+            <argument value="YAML_FILE"/>
+          </arguments>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"/>
+      <controlFlow block="none"></controlFlow>
       <post>
         <script>
           <code language="cpython">
@@ -55,10 +188,10 @@ variables.put("SERVICE_TOKEN_PROPAGATED",key.text)
       </post>
       <metadata>
         <positionTop>
-            172
+            156.59375
         </positionTop>
         <positionLeft>
-            599
+            431.703125
         </positionLeft>
       </metadata>
     </task>
@@ -69,10 +202,10 @@ variables.put("SERVICE_TOKEN_PROPAGATED",key.text)
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2864px;
-            height:3432px;
+            width:2144px;
+            height:2712px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-167px;left:-594px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_378" style="top: 172px; left: 599px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 653px; top: 202px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-151.59375px;left:-426.703125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_426" style="top: 156.594px; left: 431.703px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 485.5px; top: 187px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
