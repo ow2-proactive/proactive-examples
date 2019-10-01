@@ -53,7 +53,7 @@ if (DOCKER_ENABLED) {
     } else {
         dockerRunCommand = "docker run "
     }
-    dockerParameters = "--rm "
+    dockerParameters = "--rm --env HOME=/tmp "
 
     // Prepare ProActive home volume
     paHomeHost = variables.get("PA_SCHEDULER_HOME")
