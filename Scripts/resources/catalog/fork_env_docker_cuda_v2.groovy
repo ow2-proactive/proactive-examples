@@ -64,7 +64,6 @@ println "DOCKER_ENABLED:     " + DOCKER_ENABLED
 println "DOCKER_IMAGE:       " + DOCKER_IMAGE
 println "DOCKER_GPU_ENABLED: " + DOCKER_GPU_ENABLED
 println "CUDA_ENABLED:       " + CUDA_ENABLED
-println "DOCKER_GPU_ENABLED: " + DOCKER_GPU_ENABLED
 println "USE_NVIDIA_RAPIDS: "  + USE_NVIDIA_RAPIDS
 
 if (DOCKER_ENABLED) {
@@ -74,9 +73,9 @@ if (DOCKER_ENABLED) {
     containerName = DOCKER_IMAGE
     dockerRunCommand =  "docker run "
     if (CUDA_ENABLED && DOCKER_GPU_ENABLED) {
-        dockerParameters = "--rm --runtime=nvidia "
+        dockerParameters = "--rm --runtime=nvidia --env HOME=/tmp "
     } else {
-        dockerParameters = "--rm "
+        dockerParameters = "--rm --env HOME=/tmp "
     }
 
     // Prepare ProActive home volume
