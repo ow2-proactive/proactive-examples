@@ -48,9 +48,9 @@ if (DOCKER_ENABLED) {
     containerName = DOCKER_IMAGE
     dockerRunCommand =  "docker run "
     if (CUDA_ENABLED && DOCKER_GPU_ENABLED) {
-        dockerParameters = "--rm --runtime=nvidia "
+        dockerParameters = "--rm --runtime=nvidia --env HOME=/tmp "
     } else {
-        dockerParameters = "--rm "
+        dockerParameters = "--rm --env HOME=/tmp "
     }
 
     // Prepare ProActive home volume
