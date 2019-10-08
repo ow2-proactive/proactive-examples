@@ -2,45 +2,56 @@ sleep(5000) // wait 5s for the container startup
 
 variables.put("ENDPOINT_MODEL", variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME")))
 
-api_token_endpoint = variables.get("ENDPOINT_MODEL") + "/api/get_token"
-println "api_token_endpoint: " + api_token_endpoint
+ENDPOINT_MODEL = variables.get("ENDPOINT_MODEL")
+assert !ENDPOINT_MODEL?.trim() == false : "ENDPOINT_MODEL must be defined!"
 
-user_name = variables.get("USER_NAME")
-println "user: " + user_name
+API_TOKEN_ENDPOINT = ENDPOINT_MODEL + "/api/get_token"
+println "API_TOKEN_ENDPOINT: " + API_TOKEN_ENDPOINT
 
-// POST
-def post = new URL(api_token_endpoint).openConnection();
-post.setRequestMethod("POST")
-post.setDoOutput(true)
-post.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-post.setRequestProperty("Accept", "text/plain");
+USER_NAME = variables.get("USER_NAME")
+assert !USER_NAME?.trim() == false : "USER_NAME must be defined!"
+println "USER_NAME: " + USER_NAME
 
-HashMap<String, String> params = new HashMap<String, String>();
-params.put("user", user_name);
-Set set = params.entrySet();
-Iterator i = set.iterator();
-StringBuilder postData = new StringBuilder();
-for (Map.Entry<String, String> param : params.entrySet()) {
-    if (postData.length() != 0) {
-        postData.append('&');
+// POST request
+def post = null
+try {
+    post = new URL(API_TOKEN_ENDPOINT).openConnection();
+    post.setRequestMethod("POST")
+    post.setDoOutput(true)
+    post.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+    post.setRequestProperty("Accept", "text/plain");
+
+    HashMap<String, String> params = new HashMap<String, String>();
+    params.put("user", USER_NAME);
+    Set set = params.entrySet();
+    Iterator i = set.iterator();
+    StringBuilder postData = new StringBuilder();
+    for (Map.Entry<String, String> param : params.entrySet()) {
+        if (postData.length() != 0) {
+            postData.append('&');
+        }
+        postData.append(URLEncoder.encode(param.getKey(), "UTF-8"));
+        postData.append('=');
+        postData.append(URLEncoder.encode(String.valueOf(param.getValue()), "UTF-8"));
     }
-    postData.append(URLEncoder.encode(param.getKey(), "UTF-8"));
-    postData.append('=');
-    postData.append(URLEncoder.encode(String.valueOf(param.getValue()), "UTF-8"));
-}
-byte[] postDataBytes = postData.toString().getBytes("UTF-8");
-post.getOutputStream().write(postDataBytes);
+    byte[] postDataBytes = postData.toString().getBytes("UTF-8");
+    post.getOutputStream().write(postDataBytes);
 
-def postRC = post.getResponseCode();
-println "Response: " + postRC;
+    def postRC = post.getResponseCode();
+    println "POST response: " + postRC;
 
-if(postRC.equals(200)) {
+    assert postRC.equals(200) == true : "Error while getting TOKEN"
+
     TOKEN = post.getInputStream().getText()
     println "TOKEN: " + TOKEN;
+    assert !TOKEN?.trim() == false : "TOKEN is null or empty!"
     variables.put("SERVICE_TOKEN_PROPAGATED", TOKEN)
 }
-else {
-    println "Error while getting TOKEN"
+catch(Exception ex) {
+    println(ex)
 }
-
-post.disconnect();
+finally {
+    if (post != null) {
+        post.disconnect();
+    }
+}
