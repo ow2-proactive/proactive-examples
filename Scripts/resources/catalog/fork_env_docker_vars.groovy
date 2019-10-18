@@ -14,7 +14,7 @@ if (variables.get("DOCKER_ENABLED") != null && variables.get("DOCKER_ENABLED").t
     }
 
     dockerRunCommand =  "docker run "
-    dockerParameters = "--rm "
+    dockerParameters = "--rm --env HOME=/tmp "
     // Prepare ProActive home volume
     paHomeHost = variables.get("PA_SCHEDULER_HOME")
     paHomeContainer = variables.get("PA_SCHEDULER_HOME")
