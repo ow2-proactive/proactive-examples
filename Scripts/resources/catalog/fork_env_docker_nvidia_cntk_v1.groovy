@@ -4,8 +4,21 @@
 // MOUNT_LOG_PATH: optional host path to store logs
 // DOCKER_LOG_PATH: mounting point of optional logs in the docker container
 
-DOCKER_ENABLED = true
-if (variables.get("DOCKER_ENABLED") == null || variables.get("DOCKER_ENABLED").toLowerCase().equals("false")) {
+// If used on windows:
+//  - currently, only linux containers are supported
+//  - make sure the drives containing the scheduler installation and TEMP folders are shared with docker containers
+//  - the container used must have java installed by default in the /usr folder. Change the value of the java home parameter to use a different installation path
+// On linux, the java installation used by the ProActive Node will be also used inside the container
+
+import org.ow2.proactive.utils.OperatingSystem;
+import org.ow2.proactive.utils.OperatingSystemFamily;
+
+DOCKER_ENABLED = false
+if ("true".equalsIgnoreCase(variables.get("DOCKER_ENABLED"))) {
+    DOCKER_ENABLED = true
+}
+if ((new File("/.dockerenv")).exists() && ! (new File("/var/run/docker.sock")).exists()) {
+    println ("Already inside docker container, without host docker access")
     DOCKER_ENABLED = false
 }
 
@@ -32,7 +45,6 @@ if (DOCKER_GPU_ENABLED && CUDA_ENABLED) {
     // DOCKER_IMAGE = "microsoft/cntk" # default
     DOCKER_IMAGE = "activeeon/cntk"  // added oracle-java 1.8.0_161 + py4j
 }
-DOCKER_RUN_CMD   = 'nvidia-docker run '
 
 MOUNT_LOG_PATH = variables.get("MOUNT_LOG_PATH")
 DOCKER_LOG_PATH = variables.get("DOCKER_LOG_PATH")
@@ -44,36 +56,70 @@ println "DOCKER_GPU_ENABLED: " + DOCKER_GPU_ENABLED
 println "CUDA_ENABLED:       " + CUDA_ENABLED
 
 if (DOCKER_ENABLED) {
-    // In the Java Home location field, use the value: "/usr" to force using the JRE provided in the docker image below (Recommended).
-    // Be aware, that the prefix command is internally split by spaces. So paths with spaces won't work.
     // Prepare Docker parameters
     containerName = DOCKER_IMAGE
+    cmd = []
+
     if (DOCKER_GPU_ENABLED && CUDA_ENABLED) {
-        dockerRunCommand = "nvidia-docker run "
+        cmd.add("nvidia-docker")
     } else {
-        dockerRunCommand = "docker run "
+        cmd.add("docker")
     }
-    dockerParameters = "--rm --env HOME=/tmp "
+    cmd.add("run")
+    cmd.add("--rm")
+    cmd.add("--env")
+    cmd.add("HOME=/tmp")
+
+    String osName = System.getProperty("os.name");
+    println "Operating system : " + osName;
+    OperatingSystem operatingSystem = OperatingSystem.resolveOrError(osName);
+    OperatingSystemFamily family = operatingSystem.getFamily();
+
+    switch (family) {
+        case OperatingSystemFamily.WINDOWS:
+            isWindows = true;
+            break;
+        default:
+            isWindows = false;
+    }
+    forkEnvironment.setDockerWindowsToLinux(isWindows)
 
     // Prepare ProActive home volume
     paHomeHost = variables.get("PA_SCHEDULER_HOME")
-    paHomeContainer = variables.get("PA_SCHEDULER_HOME")
-    proActiveHomeVolume = "-v " + paHomeHost + ":" + paHomeContainer + " "
+    paHomeContainer = (isWindows ? forkEnvironment.convertToLinuxPath(paHomeHost) : paHomeHost)
+    cmd.add("-v")
+    cmd.add(paHomeHost + ":" + paHomeContainer)
     // Prepare working directory (For Dataspaces and serialized task file)
     workspaceHost = localspace
-    workspaceContainer = localspace
-    workspaceVolume = "-v " + workspaceHost + ":" + workspaceContainer + " "
+    workspaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(workspaceHost) : workspaceHost)
+    cmd.add("-v")
+    cmd.add(workspaceHost + ":" + workspaceContainer)
+
+    cachespaceHost = cachespace
+    cachespaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(cachespaceHost) : cachespaceHost)
+    cmd.add("-v")
+    cmd.add(cachespaceHost + ":" + cachespaceContainer)
+
+    if (!isWindows) {
+        // when not on windows, mount and use the current JRE
+        currentJavaHome = System.getProperty("java.home")
+        forkEnvironment.setJavaHome(currentJavaHome)
+        cmd.add("-v")
+        cmd.add(currentJavaHome + ":" + currentJavaHome)
+    }
 
     // Prepare log directory
     logPathVolume = ""
     if (MOUNT_LOG_PATH && DOCKER_LOG_PATH) {
         mountLogHost = MOUNT_LOG_PATH
         logPathContainer = DOCKER_LOG_PATH
-        logPathVolume = "-v " + mountLogHost + ":" + logPathContainer + " "
+        cmd.add("-v")
+        cmd.add(mountLogHost + ":" + logPathContainer)
     }
 
     // Prepare container working directory
-    containerWorkingDirectory = "-w " + workspaceContainer + " "
+    cmd.add("-w")
+    cmd.add(workspaceContainer)
 
     sigar = new org.hyperic.sigar.Sigar()
     try {
@@ -89,10 +135,12 @@ if (DOCKER_ENABLED) {
         sigar.close()
     }
 
-    // Save pre execution command into magic variable 'preJavaHomeCmd', which is picked up by the node
-    preJavaHomeCmd = dockerRunCommand + dockerParameters + proActiveHomeVolume + workspaceVolume + logPathVolume + userDefinition + containerWorkingDirectory + containerName
+    cmd.add(containerName)
 
-    println "DOCKER_FULL_CMD:    " + preJavaHomeCmd
+    forkEnvironment.setPreJavaCommand(cmd)
+
+    // Show the generated command
+    println "DOCKER COMMAND : " + forkEnvironment.getPreJavaCommand()
 } else {
     println "Fork environment disabled"
 }
