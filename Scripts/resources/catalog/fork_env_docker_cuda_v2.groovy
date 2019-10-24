@@ -114,8 +114,13 @@ if (DOCKER_ENABLED) {
 
     cachespaceHost = cachespace
     cachespaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(cachespaceHost) : cachespaceHost)
-    cmd.add("-v")
-    cmd.add(cachespaceHost + ":" + cachespaceContainer)
+    cachespaceHostFile = new File(cachespaceHost)
+    if (cachespaceHostFile.exists() && cachespaceHostFile.canRead()) {
+        cmd.add("-v")
+        cmd.add(cachespaceHost + ":" + cachespaceContainer)
+    } else {
+        println cachespaceHost + " does not exist or is not readable, access to cache space will be disabled in the container"
+    }
 
     if (!isWindows) {
         // when not on windows, mount and use the current JRE
