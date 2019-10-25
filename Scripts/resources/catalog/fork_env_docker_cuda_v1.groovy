@@ -61,7 +61,7 @@ if (DOCKER_ENABLED) {
     cmd.add("--rm")
     cmd.add("--env")
     cmd.add("HOME=/tmp")
-    if (UDA_ENABLED && DOCKER_GPU_ENABLED) {
+    if (CUDA_ENABLED && DOCKER_GPU_ENABLED) {
         cmd.add("--runtime=nvidia")
     }
 
