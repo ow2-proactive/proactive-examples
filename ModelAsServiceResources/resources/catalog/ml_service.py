@@ -54,7 +54,7 @@ def predict(dataframe):
   return predictions
 
 # deploy api
-def deploy_api():
+def deploy_api() -> str:
   api_token = connexion.request.form["api_token"]
   if api_token == API_KEY:
     modelfile = connexion.request.files['modelfile']
