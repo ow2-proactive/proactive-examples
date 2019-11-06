@@ -54,7 +54,7 @@ def predict(dataframe):
   return predictions
 
 # deploy api
-def deploy_api():
+def deploy_api() -> str:
   api_token = connexion.request.form["api_token"]
   if api_token == API_KEY:
     modelfile = connexion.request.files['modelfile']
@@ -84,8 +84,8 @@ def load_yaml(yaml_url):
   context = ssl._create_unverified_context()
   yaml_file = urlopen(yaml_url, context=context).read()
   os.mkdir("/model_as_a_service/swagger/")
-  yaml_file_name="/model_as_a_service/swagger/ml_service_swagger.yaml"
-  yaml_file_content=yaml_file.decode('utf-8')
+  yaml_file_name = "/model_as_a_service/swagger/ml_service_swagger.yaml"
+  yaml_file_content = yaml_file.decode('utf-8')
   f = open(yaml_file_name, "w")
   f.write(yaml_file_content)
   f.close()

@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Deploy_Model_Service" projectName="Cloud Automation - Lifecycle" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="USER_NAME" value="user" />
+    <variable name="MODEL_URL" value="https://activeeon-public.s3.eu-west-2.amazonaws.com/models/model.pkl" />
+  </variables>
+  <description>
+    <![CDATA[ Deploy Model_Service instance. ]]>
+  </description>
+  <genericInformation>
+    <info name="pca.service.id" value="Model_Service"/>
+    <info name="bucketName" value="cloud-automation"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png"/>
+    <info name="pca.states" value="(RUNNING,MODEL_DEPLOYED)(MODEL_DEPLOYED,MODEL_DEPLOYED)(DEPLOYMENT_FAILURE,MODEL_DEPLOYED)(DEPLOYMENT_FAIL,FINISHED)"/>
+    <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Deploy_Model_Service" fork="true">
+      <description>
+        <![CDATA[ Deploy Model_Service instance ]]>
+      </description>
+      <variables>
+        <variable name="MODEL_URL" value="" inherited="true" />
+        <variable name="USER_NAME" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr" ></forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+ * THIS PRESCRIPT INFORMS PLATFORM THAT PCA SERVICE ACTION IS TRIGGERED                   *
+ *********************************************************************************/
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+action = args[0]
+
+// Connect to Cloud Automation API
+def apiClient = new ApiClient()
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+// Acquire service instance id and instance name from synchro channel
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def channel = "Service_Instance_" + instanceId
+def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+def api_endpoint_map = serviceInstanceData.getInstanceEndpoints()
+api_endpoint=api_endpoint_map[instanceName]
+variables.put("INSTANCE_NAME", instanceName)
+variables.put("API_ENDPOINT", api_endpoint)
+
+// Inform other platforms that service is running through Synchronization API
+if(action.equals("RESUME_LAUNCHED")){
+    synchronizationapi.put(channel, "RUNNING", true)
+    synchronizationapi.put(channel, "RESUMED", true)
+    synchronizationapi.put(channel, "DEPLOY_LAUNCHED", false)
+}
+else{
+    synchronizationapi.put(channel, action, true)
+}
+]]>
+          </code>
+          <arguments>
+            <argument value="DEPLOY_LAUNCHED"/>
+          </arguments>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import os, sys, bz2, uuid, json, time
+from urllib.parse import unquote
+
+# Install required Python libraries if they are not already installed
+try:
+    import pickle
+except ImportError:
+    from pip._internal import main
+    main(['install', 'pickle'])
+    import pickle
+    
+try:
+    import wget
+except ImportError:
+    from pip._internal import main
+    main(['install', 'wget'])
+    import wget
+
+try:
+    import requests
+except ImportError:
+    from pip._internal import main
+    main(['install', 'requests'])
+    import requests
+
+# Set default variables
+current_status = "MODEL_DEPLOYED"
+model_path = "last_model.pkl"
+
+# Edit these variables if they don't correspond to your service endpoints
+api_deploy = "/api/deploy"
+api_token = "/api/get_token"
+
+# Define failure procedure that will be executed if something goes wrong
+def failure(error_msg):  
+    current_status = "DEPLOYMENT_FAILURE"
+    variables.put("CURRENT_STATUS", current_status)
+    print(error_msg)
+    print("CURRENT_STATUS: ", current_status)
+    sys.exit(0)
+
+# Save Status File
+instance_name = variables.get("INSTANCE_NAME")
+file_name = instance_name + "_status"
+file = open(file_name, "w")
+file.write(instance_name)
+file.close()
+
+# Get variables
+api_endpoint = variables.get("API_ENDPOINT")
+api_deploy_endpoint = api_endpoint + api_deploy
+api_token_endpoint = api_endpoint + api_token
+user_name = variables.get("USER_NAME") if variables.get("USER_NAME") else failure("USER_NAME must be defined!")
+print("API_DEPLOY_ENDPOINT: ", api_deploy_endpoint)
+print("API_TOKEN_ENDPOINT: ", api_token_endpoint)
+print("USER_NAME: ", user_name)
+
+# Get a token to be able to deploy the model
+try:
+    data = {'user': user_name}
+    req = requests.post(api_token_endpoint, data=data)    
+    token = req.text
+    if token == "Invalid user":
+        failure("USER_NAME is invalid")
+    print("TOKEN: ", token)
+except requests.exceptions.RequestException as e:
+    failure(e)
+
+# Download the model that will be deployed
+model_url = variables.get("MODEL_URL") if variables.get("MODEL_URL") else failure("MODEL_URL must be defined!")
+model_url = unquote(model_url)
+model_path = os.path.join(os.getcwd(), model_path)
+try:
+    wget.download(model_url, model_path)
+except Exception as e:
+    failure(e)
+
+#Deploy the downloaded model
+final_model = open(model_path, 'rb')
+files = {'modelfile': final_model}
+data = {'api_token': token}
+try:
+    req = requests.post(api_deploy_endpoint, files=files, data=data)
+    model_deployment_status = req.text
+    if not model_deployment_status != "Model deployed":
+        current_status = "DEPLOYMENT_FAILURE"
+    print("MODEL DEPLOYMENT STATUS: ", model_deployment_status)
+except Exception as e:
+    failure(e)
+finally:
+    final_model.close()
+
+# Propagate the status of the deployment to the Post_Scrpit 
+variables.put("CURRENT_STATUS", current_status)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS POSTSCRIPT INFORMS PLATFORM THAT PCA SERVICE ACION IS TRIGGERED                   *
+*********************************************************************************/
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+def action = variables.get("CURRENT_STATUS")
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+
+def ALREADY_REMOVED_MESSAGE = "Error: No such container: " + instanceName    
+
+// Connect to Cloud Automation API
+def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
+
+// Update service instance data : (status, endpoint)
+def status = new File(instanceName+"_status").text.trim()
+def currentStatus = (!status.equals(ALREADY_REMOVED_MESSAGE) && !status.equals(instanceName)) ? "ERROR" : action
+
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+serviceInstanceData.setInstanceStatus(currentStatus)
+serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+
+if(action.equals("FINISHED")){
+    // Inform other jobs that the service is finished and deleted.
+	def channel = "Service_Instance_" + instanceId
+	synchronizationapi.put(channel, "FINISH_DONE", true)
+}
+
+// Print warning or error messages and force job to exit with error if there are any.
+if (status.equals(ALREADY_REMOVED_MESSAGE)){
+    println("[WARNING] docker container: " + instanceName + " is already removed.")
+} else if (!status.equals(instanceName)){
+    println("[ERROR] Could not remove docker container: " + instanceName + ". Docker output: " + status)
+    System.exit(1)
+}
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            297.890625
+        </positionTop>
+        <positionLeft>
+            467.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2864px;
+            height:3432px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-292.890625px;left:-462.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_4" style="top: 297.891px; left: 467.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Deploy_Model_Service</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 526.5px; top: 328px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
