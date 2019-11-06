@@ -123,7 +123,7 @@ if DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
         df = pd.DataFrame(prediction_result)
         os.makedirs(join(LOCALSPACE, 'images'), exist_ok=True)
         os.makedirs(join(LOCALSPACE, 'outputs'), exist_ok=True)
-        imgs = df['Image Paths']
+        imgs = df['Images']        
         preds = df['Outputs']
         for index, elem in enumerate(preds): 
         	shutil.copy2(imgs[index], LOCALSPACE + '/' + 'images') 
