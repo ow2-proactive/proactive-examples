@@ -83,8 +83,10 @@ def load_yaml(yaml_url):
   import ssl, os
   context = ssl._create_unverified_context()
   yaml_file = urlopen(yaml_url, context=context).read()
-  os.mkdir("/model_as_a_service/swagger/")
-  yaml_file_name = "/model_as_a_service/swagger/ml_service_swagger.yaml"
+  YAML_FOLDER_PATH = "/model_as_a_service/swagger/"
+  if not os.path.exists(YAML_FOLDER_PATH):
+    os.mkdir(YAML_FOLDER_PATH)
+  yaml_file_name =  os.path.join(YAML_FOLDER_PATH, "ml_service_swagger.yaml")
   yaml_file_content = yaml_file.decode('utf-8')
   f = open(yaml_file_name, "w")
   f.write(yaml_file_content)
