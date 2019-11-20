@@ -39,8 +39,6 @@ def predict_api(data: str):
     dataframe_json = data['dataframe_json']
     dataframe = pd.read_json(dataframe_json, orient='values')
     predictions = predict(dataframe)
-    #df_predictions = pd.DataFrame(list(predictions))
-    #predictions_json = df_predictions.to_json(orient='records').encode()
   return json.dumps(list(predictions))
 
 def predict(dataframe):
