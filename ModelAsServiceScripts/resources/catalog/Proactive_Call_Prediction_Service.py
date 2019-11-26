@@ -65,7 +65,6 @@ with pd.option_context('display.max_colwidth', -1):
   result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
 
 result = """
-  
 <!DOCTYPE html>
 <html>
 <head>
