@@ -96,4 +96,4 @@ if __name__ == '__main__':
   load_yaml(os.getenv('YAML_FILE'))
   app = connexion.FlaskApp(__name__, port=9090, specification_dir='/model_as_a_service/swagger/')
   app.add_api('ml_service_swagger.yaml', arguments={'title': 'Machine Learning Model Service'})
-  app.run()
+  app.run(ssl_context='adhoc')
