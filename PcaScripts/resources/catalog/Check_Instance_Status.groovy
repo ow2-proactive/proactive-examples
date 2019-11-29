@@ -18,6 +18,13 @@ if (currentStatus.equals("FINISHED") || currentStatus.equals("PAUSED") || (pcaSt
     variables.put("IS_FINISHED",true)
     if (currentStatus.equals("FINISHED")){
         synchronizationapi.deleteChannel(channel)
+        // Remove token in the current node
+        token = instanceName
+        nodeUrl = variables.get("PA_NODE_URL")
+        println("Current nodeUrl: " + nodeUrl)
+        println("Removing token:  " + token)
+        rmapi.connect()
+        rmapi.removeNodeToken(nodeUrl, token)
     }
 } else {
     // Check if container has been stopped abnormally

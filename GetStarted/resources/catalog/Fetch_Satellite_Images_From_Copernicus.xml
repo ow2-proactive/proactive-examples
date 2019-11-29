@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Fetch_Satellite_Images_From_Copernicus" onTaskError="continueJobExecution" priority="normal" projectName="5. Satellite Imagery Datasets" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+<description>
+  <![CDATA[ Load and return a copernicus dataset. ]]>
+</description>
+<genericInformation>
+<info name="bucketName" value="basic-examples"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png"/>
+<info name="Documentation" value="MLOS/MLOSUserGuide.html#_import_image_dataset"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Fetch_Satellite_Images_From_Copernicus">
+      <description>
+        <![CDATA[ Load and return a copernicus dataset.
+You can see more details in: https://pypi.org/project/sentinelsat/
+
+Warning:
+See bellow some prerequisites to have this workflow working:
+Two third party credentials to connect to Copernicus  (USER_EMAIL and USER_PASS:)
+
+Parameter description
+##################################
+PLATFORM_NAME: specific instrument on a Sentinel satellite. Type: String. Options=[Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5, Precursor, Sentinel-6].
+FOOTPRINT: type: geojson file search_footprints.geojson with footprints of the query result. Type: String.
+START_DATE:  Start date of the query in the format YYYYMMDD. Type: String.
+end date of the query in the format YYYYMMDD. Type: String.
+USER_NAME: User email. Type: String.
+LONGITUDE: User password. Type: String.
+OUTPUT_PATH: address path to save downloaded images. Type: String. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" model="PA:LIST(Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5 Precursor, Sentinel-6)" name="PLATFORM_NAME" value="Sentinel-2"/>
+        <variable inherited="false" name="FOOTPRINT" value="expected_search_footprints_s1"/>
+        <variable inherited="false" name="START_DATE" value="2015-12-19"/>
+        <variable inherited="false" name="END_DATE" value="2015-12-21"/>
+        <variable inherited="false" name="OUTPUT_PATH" value="/tmp/"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import ssl, sys
+
+if sys.version_info[0] < 3:
+    try:
+        from urllib2 import urlopen
+    except ImportError:
+        import pip
+        pip.main(['install', 'request'])
+        from urllib2 import urlopen
+else:
+    try:
+        from urllib.request import urlopen
+    except ImportError:
+        import pip
+        pip.main(['install', 'request'])
+        from urllib.request import urlopen
+
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+FOOTPRINT = variables.get("FOOTPRINT")
+
+satellite_imagery_resources_url = PA_CATALOG_REST_URL +"/buckets/satellite-imagery-resources/resources/"+FOOTPRINT+"/raw"
+print("satellite-imagery-resources-url: ", satellite_imagery_resources_url)
+
+# This restores the same behavior as before.
+context        = ssl._create_unverified_context()
+json_file      = urlopen(satellite_imagery_resources_url, context=context).read()
+json_content   = json_file.decode('utf-8')
+json_file_name = FOOTPRINT + ".geojson"
+
+f = open(json_file_name, "w")
+f.write(json_content)
+f.close()
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import sys
+import os
+import uuid
+import datetime 
+import subprocess
+from os.path import join, exists, os, isfile
+
+try:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+except ImportError:
+    subprocess.call([sys.executable, "-m", "pip", "install", 'sentinelsat'])
+finally:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+
+
+if 'variables' in locals():
+  PLATFORM_NAME  = variables.get("PLATFORM_NAME")     # Specific instrument a satellite [Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5, Precursor, Sentinel-6]
+  FOOTPRINT      = variables.get("FOOTPRINT")         # Geojson file search_footprints.geojson with footprints of the query result
+  FOOTPRINT      = FOOTPRINT + ".geojson"
+  FOOTPRINT_FILE = os.path.join(os.getcwd(), FOOTPRINT)
+  START_DATE     = variables.get("START_DATE")        # Start date of the query in the format YYYYMMDD
+  END_DATE       = variables.get("END_DATE")          # End date of the query in the format YYYYMMDD
+  USER_NAME      = credentials.get("USER_NAME")       # User email
+  USER_PASS      = credentials.get("USER_PASS")       # User password
+  OUTPUT_PATH    = variables.get("OUTPUT_PATH")       # Folder output path 
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Define dataset path
+os.chdir(OUTPUT_PATH)
+dataset_path = join(OUTPUT_PATH, ID)
+os.makedirs(dataset_path, exist_ok=True)
+
+# Define path to save result
+os.chdir(dataset_path)
+
+# Data format
+start_date_format = START_DATE.replace('-', '')
+end_date_format =  END_DATE.replace('-', '')
+
+#  SentinelAPI
+api = SentinelAPI(USER_NAME, USER_PASS)
+footprint = geojson_to_wkt(read_geojson(FOOTPRINT_FILE))
+products = api.query(footprint, date=(start_date_format, end_date_format), platformname=PLATFORM_NAME)
+api.download_all(products)
+
+print(os.path.isdir(dataset_path))
+print(os.listdir(dataset_path))
+
+if 'variables' in locals():
+  variables.put("DATASET_PATH", dataset_path)
+  
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            260.5
+        </positionTop>
+        <positionLeft>
+            597.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2864px;
+            height:3428px;
+            }
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-255.5px;left:-592.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_1" style="top: 260.5px; left: 597.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_Copernicus</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 700px; top: 291px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
