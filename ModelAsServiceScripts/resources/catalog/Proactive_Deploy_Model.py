@@ -38,7 +38,7 @@ final_model = open(MODEL_PATH, 'rb')
 files = {'modelfile': final_model}
 data = {'api_token': SERVICE_TOKEN}
 try:
-    req = requests.post(API_DEPLOY_ENDPOINT, files=files, data=data)
+    req = requests.post(API_DEPLOY_ENDPOINT, files=files, data=data, verify=False)
     print(req.text)
 finally:
     final_model.close()
