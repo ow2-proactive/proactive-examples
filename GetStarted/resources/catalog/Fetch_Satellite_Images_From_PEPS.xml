@@ -1,27 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Fetch_Satellite_Images_From_PEPS" onTaskError="continueJobExecution" priority="normal" projectName="5. Satellite Imagery Datasets" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <description>
-    <![CDATA[ Load and return a peps dataset.
-Warning:
-See bellow some prerequisites to have this workflow working:
-1: Two third party credentials to connect to PEPS (USER_EMAIL and USER_PASS:)
-2: Support the versions of Python > 3.2
-3: Use a PYTHON_COMMAND  in the Generic Information (GI) field to specify the full path of your python3.
-
-Note that the workflow does not work on try, trydev and tryqa servers, only in local.
-
-Parameter description
-##################################
-LOCATION: town name. Type: String
-COLLECTION: collection within theia collections. Options=[S1, S2, S2ST, S3]. Type: String
-PRODUCT_TYPE: product type. Options=GRD, SLC, OCN (for S1) or S2MSI1C S2MSI2A S2MSI2Ap (for S2). Type: String
-SENSOR_MODE: sensor mode. Options=EW, IW , SM, WV (for S1) or INS-NOBS, INS-RAW (for S3). Type: String
-START_DATE: start date. Type: String
-END_DATE: end date. Type: String
-TILE:  sentinel tile number. Type: String
-LATITUDE: latitude in decimal degrees. Type: Float
-LONGITUDE: longitude in decimal degrees. Type: Float
-OUTPUT_PATH: address path to save downloaded images ]]>
+    <![CDATA[ Load and return a peps dataset. ]]>
   </description>
   <genericInformation>
 <info name="bucketName" value="basic-examples"/>
@@ -35,7 +15,7 @@ OUTPUT_PATH: address path to save downloaded images ]]>
         <![CDATA[ Load and return a peps dataset.
 Warning:
 See bellow some prerequisites to have this workflow working:
-1: Two third party credentials to connect to PEPS (USER_EMAIL and USER_PASS:)
+1: Two third party credentials to connect to PEPS (USER_NAME_PEPS and USER_PASS_PEPS)
 2: Support the versions of Python > 3.2
 3: Use a PYTHON_COMMAND  in the Generic Information (GI) field to specify the full path of your python3.
 
@@ -74,16 +54,19 @@ OUTPUT_PATH: address path to save downloaded images. ]]>
         <script>
           <code language="cpython">
             <![CDATA[
-print("BEGIN Import_Peps")
+__file__ = variables.get("PA_TASK_NAME")
 
 import sys
 import uuid
 import json
 import time
+import shutil
 import zipfile
 import optparse 
-from os.path import join, exists, os, isfile
 from datetime import date
+from zipfile import ZipFile 
+from os.path import join, exists, os, isfile
+
 
 if 'variables' in locals():
   LOCATION      = variables.get("LOCATION") 		 # location 
@@ -95,10 +78,11 @@ if 'variables' in locals():
   TILE = variables.get("TILE")						 # Sentinel-2 tile number type= string 
   LATITUDE = variables.get("LATITUDE")               # Latitude in decimal degrees 
   LONGITUDE = variables.get("LONGITUDE")             # Longitude in decimal degrees 
-  EMAIL = credentials.get("USER_EMAIL")              # User email
-  PASSWD = credentials.get("USER_PASSWD")              # User password
+  EMAIL = credentials.get("USER_NAME_PEPS")              # User email
+  PASSWD = credentials.get("USER_PASS_PEPS")              # User password
   OUTPUT_PATH = variables.get("OUTPUT_PATH")         # Folder output path 
     
+
 COLLECTION =   COLLECTION.upper()
 PRODUCT_TYPE = PRODUCT_TYPE.upper()
 SENSOR_MODE =  SENSOR_MODE.upper()
@@ -112,8 +96,8 @@ LONGITUDE = None if LONGITUDE == "" else float(LONGITUDE)
 NO_DOWNLOAD = False  # Do not download products, just print curl command
 LATMIN = None		 # Min latitude in decimal degrees  
 LATMAX = None		 # Max latitude in decimal degreess 
-LONMIN = None       # Min longitude in decimal degrees
-LONMAX = None       # Max longitude in decimal degrees
+LONMIN = None        # Min longitude in decimal degrees
+LONMAX = None        # Max longitude in decimal degrees
 ORBIT = None         # Orbit Path number # type int
 SEARCH_JSON_FILE = None   
 WINDOWS = False
@@ -121,10 +105,16 @@ WINDOWS = False
 # Get an unique ID
 ID = str(uuid.uuid4())
 
-# Define dataset_path
+# Define the current 'dataset_path'
 os.getcwd() if OUTPUT_PATH == "" else os.chdir(OUTPUT_PATH)
-DATASET_PATH = join(OUTPUT_PATH, ID)
-os.makedirs(DATASET_PATH, exist_ok=True)
+
+dataset_path = join(OUTPUT_PATH, ID, 'dataset')
+output_path = join(OUTPUT_PATH, ID, 'peps')
+os.makedirs(dataset_path, exist_ok=True)
+os.makedirs(output_path, exist_ok=True)
+
+print('The path input PEPS dataset', dataset_path)
+print('The path output PEPS dataset', output_path)
 
 class OptionParser (optparse.OptionParser):
 
@@ -151,11 +141,10 @@ def check_rename(tmpfile, prodsize):
                 os.remove(tmpfile)
                 pass
     else:
-        os.rename("%s" % tmpfile, "%s/%s.zip" % (DATASET_PATH, prod))
-        print("product saved as : %s/%s.zip" % (DATASET_PATH, prod))
+        os.rename("%s" % tmpfile, "%s/%s.zip" % (dataset_path, prod))
+        print("product saved as : %s/%s.zip" % (dataset_path, prod))
 
 ###########################################################################
-
 
 def parse_catalog(SEARCH_JSON_FILE):
     # Filter catalog result
@@ -315,16 +304,16 @@ if len(download_dict) == 0:
     print("No product matches the criteria")
 else:
     # first try for the products on tape
-    if DATASET_PATH == None:
-        DATASET_PATH = os.getcwd()
+    if dataset_path == None:
+        dataset_path = os.getcwd()
 
     for prod in list(download_dict.keys()):
-        file_exists = os.path.exists(("%s/%s.SAFE") % (DATASET_PATH, prod)
-                                     ) or os.path.exists(("%s/%s.zip") % (DATASET_PATH, prod))
+        file_exists = os.path.exists(("%s/%s.SAFE") % (dataset_path, prod)
+                                     ) or os.path.exists(("%s/%s.zip") % (dataset_path, prod))
         if (not(NO_DOWNLOAD) and not(file_exists)):
             if storage_dict[prod] == "tape":
                 tmticks = time.time()
-                tmpfile = ("%s/tmp_%s.tmp") % (DATASET_PATH, tmticks)
+                tmpfile = ("%s/tmp_%s.tmp") % (dataset_path, tmticks)
                 print("\nStage tape product: %s" % prod)
                 get_product = 'curl -o %s -k -u "%s:%s" https://peps.cnes.fr/resto/collections/%s/%s/download/?issuerId=peps &>/dev/null' % (
                     tmpfile, EMAIL, PASSWD, COLLECTION, download_dict[prod])
@@ -356,18 +345,18 @@ else:
         NbProdsToDownload = 0
         # download all products on disk
         for prod in list(download_dict.keys()):
-            file_exists = os.path.exists(("%s/%s.SAFE") % (DATASET_PATH, prod)) or os.path.exists(("%s/%s.zip") % (DATASET_PATH, prod))
+            file_exists = os.path.exists(("%s/%s.SAFE") % (dataset_path, prod)) or os.path.exists(("%s/%s.zip") % (dataset_path, prod))
             if (not(NO_DOWNLOAD) and not(file_exists)):
                 if storage_dict[prod] == "disk":
                     tmticks = time.time()
-                    tmpfile = ("%s/tmp_%s.tmp") % (DATASET_PATH, tmticks)
+                    tmpfile = ("%s/tmp_%s.tmp") % (dataset_path, tmticks)
                     print("\nDownload of product : %s" % prod)
                     get_product = 'curl -o %s -k -u "%s:%s" https://peps.cnes.fr/resto/collections/%s/%s/download/?issuerId=peps' % (
                         tmpfile, EMAIL, PASSWD, COLLECTION, download_dict[prod])
                     print(get_product)
                     os.system(get_product)
                     # check binary product, rename tmp file
-                    if not os.path.exists(("%s/tmp_%s.tmp") % (DATASET_PATH, tmticks)):
+                    if not os.path.exists(("%s/tmp_%s.tmp") % (dataset_path, tmticks)):
                         NbProdsToDownload += 1
                     else:
                          check_rename(tmpfile, size_dict[prod])
@@ -377,8 +366,8 @@ else:
 
         # download all products on tape
         for prod in list(download_dict.keys()):
-            file_exists = os.path.exists(("%s/%s.SAFE") % (DATASET_PATH, prod)
-                                         ) or os.path.exists(("%s/%s.zip") % (DATASET_PATH, prod))
+            file_exists = os.path.exists(("%s/%s.SAFE") % (dataset_path, prod)
+                                         ) or os.path.exists(("%s/%s.zip") % (dataset_path, prod))
             if (not(NO_DOWNLOAD) and not(file_exists)):
                 if storage_dict[prod] == "tape" or storage_dict[prod] == "staging" :
                     NbProdsToDownload += 1
@@ -388,11 +377,59 @@ else:
             print("%d remaining products are on tape, lets's wait 1 minute before trying again" % NbProdsToDownload)
             print("##############################################################################")
             time.sleep(60)
+            
+            
+# List all .zip folders
+folder_zip = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.zip')]
+
+# Unzip folders 
+print('Extracting all the files...')
+for file_name in folder_zip: 
+    with ZipFile(file_name, 'r') as zip: 
+        zip.printdir() 
+        # extracting all the files 
+        print('File name:', file_name) 
+        zip.extractall(dataset_path) 
+print('Finished!')            
+            
+# List all .safe folders
+folder_safe = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.SAFE')]
+
+# Copy and organize files
+def folder_copy(image_path):
+    for root, dirs, files in os.walk(image_path): 
+        os.makedirs(os.path.join(output_path, 'measurement') , exist_ok=True)
+        for file in files:   
+            fullpath = join(root, file)
+            print('File name:', fullpath) 
+            shutil.copy(fullpath, os.path.join(output_path, 'measurement'))
+    
+# Looking for the "measurement" directory 
+def folder_search():
+    print('Copying the images to the peps directory...')
+    for foldername in folder_safe:
+        for path, dirs, filename in os.walk(foldername): #omit files, loop through later
+            for dirname in dirs:
+                fullpath = os.path.join(path, dirname)
+                if "measurement" in dirname:
+                    folder_copy(fullpath)
+    print('Finished!')
+                    
+# Call folder_search function
+folder_search()
+
+# Remove the "dataset_path" directory
+shutil.rmtree(dataset_path)
+while os.path.exists(dataset_path):
+  pass
+print('Remove all directory in the', dataset_path)
+print('Finished!')  
+
 
 if 'variables' in locals():
-	variables.put("DATASET_PATH", DATASET_PATH)
+	variables.put("DATASET_PATH", output_path)
   
-print("END Import_Peps")
+print("END " + __file__)
 ]]>
           </code>
         </script>
@@ -400,10 +437,10 @@ print("END Import_Peps")
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            372.953125
+            371.953125
         </positionTop>
         <positionLeft>
-            366.484375
+            367.484375
         </positionLeft>
       </metadata>
     </task>
@@ -417,10 +454,10 @@ print("END Import_Peps")
             width:2864px;
             height:3432px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-367.953125px;left:-361.484375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_13" style="top: 372.953px; left: 366.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a peps dataset.
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-366.953125px;left:-362.484375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_181" style="top: 371.953px; left: 367.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a peps dataset.
 Warning:
 See bellow some prerequisites to have this workflow working:
-1: Two third party credentials to connect to PEPS (USER_EMAIL and USER_PASS:)
+1: Two third party credentials to connect to PEPS (USER_NAME_PEPS and USER_PASS_PEPS)
 2: Support the versions of Python > 3.2
 3: Use a PYTHON_COMMAND  in the Generic Information (GI) field to specify the full path of your python3.
 
@@ -437,7 +474,7 @@ END_DATE: end date. Type: String
 TILE:  sentinel tile number. Type: String
 LATITUDE: latitude in decimal degrees. Type: Float
 LONGITUDE: longitude in decimal degrees. Type: Float
-OUTPUT_PATH: address path to save downloaded images."><img src="/automation-dashboard/styles/patterns/img/wf-icons/peps-logo.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_PEPS</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 456.5px; top: 403px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+OUTPUT_PATH: address path to save downloaded images."><img src="/automation-dashboard/styles/patterns/img/wf-icons/peps-logo.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_PEPS</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 457.5px; top: 402px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
