@@ -1,40 +1,57 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Azure_Blob_Storage" projectName="4. Cloud" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Azure_Blob_Storage" projectName="4. Cloud" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="STORAGE_ACCOUNT" value="" model=""/>
+    <variable name="ACCOUNT_KEY" value="$STORAGE_ACCOUNT" model="PA:CREDENTIAL"/>
+  </variables>
   <description>
-    <![CDATA[ Import data from (or export data to) Azure Blob Storage. ]]>
+    <![CDATA[ Import data from (or export data to) Azure Blob Storage. Before the execution, the user has to provide the $STORAGE_ACCOUNT name.
+Besides, this workflow template requires the following third-party credential: {key: STORAGE_ACCOUNT, value: ACCOUNT_KEY} Please refer to the User documentation to learn how to add third-party credentials. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="data-connectors"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_blob_storage.png"/>
-    <info name="Documentation" value="doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_blob_storage"/>
+    <info name="Documentation" value="user/ProActiveUserGuide.html#_azure_blob_storage"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Export_to_Azure_Blob" >
+    <task name="Export_to_Azure_Blob" 
+    
+    
+    
+    
+    fork="true">
       <description>
         <![CDATA[ This task allows to export data to Azure Blob Storage.
 The task requires the following third-party credential: {key: STORAGE_ACCOUNT, value: ACCOUNT_KEY}. Please refer to the User documentation to learn how to add third-party credentials.
 It uses the following variables:
 $INPUT_PATH (optional) is the local relative path in the data space from which we upload file(s). INPUT_PATH can contain either a path to a file, a directory terminated by / or an empty value for the root.
 $CONTAINER_NAME (required) is a new or an existing container name under which your uploaded data will be stored.
-$BLOB_NAME (optional) is the blob name or the directory to which file(s) are uploaded. It can be empty if the INPUT_PATH contains a path to a directory. ]]>
+$BLOB_NAME (optional) is the blob name or the directory to which file(s) are uploaded. It can be empty if the INPUT_PATH contains a path to a directory.
+$STORAGE_ACCOUNT (required) is the storage account name. ]]>
       </description>
       <variables>
         <variable name="INPUT_PATH" value="" inherited="false" />
         <variable name="CONTAINER_NAME" value="" inherited="false" />
         <variable name="BLOB_NAME" value="" inherited="false" />
-        <variable name="STORAGE_ACCOUNT" value="" inherited="false" />
+        <variable name="STORAGE_ACCOUNT" value="" inherited="true" />
         <variable name="TRANSFER_DIRECTIVE" value="" inherited="false" model="PA:SPEL(! ( variables[&#39;INPUT_PATH&#39;].endsWith(&#39;/&#39;) || variables[&#39;INPUT_PATH&#39;].isEmpty() ? variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;INPUT_PATH&#39;] + &#39;**&#39; : variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;INPUT_PATH&#39;]).isEmpty())"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_blob_storage.png"/>
-        <info name="task.documentation" value="doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_blob_storage"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_azure_blob_storage"/>
       </genericInformation>
       <inputFiles>
         <files  includes="$TRANSFER_DIRECTIVE" accessMode="transferFromGlobalSpace"/>
+        <files  includes="proactive-examples-dependencies.jar" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="proactive-examples-dependencies.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
       <pre>
         <script>
           <code language="bash">
@@ -44,38 +61,241 @@ $BLOB_NAME (optional) is the blob name or the directory to which file(s) are upl
           </code>
         </script>
       </pre>
-      <javaExecutable class="org.ow2.proactive.scheduler.examples.AzureBlobUploader">
-        <parameters>
-          <parameter name="containerName" value="$CONTAINER_NAME"/>
-          <parameter name="blobName" value="$BLOB_NAME"/>
-          <parameter name="inputPath" value="$INPUT_PATH"/>
-          <parameter name="storageAccount" value="$STORAGE_ACCOUNT"/>
-        </parameters>
-      </javaExecutable>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.Serializable
+import java.nio.channels.FileChannel
+import java.nio.file.Paths
+import java.util.ArrayList
+import java.util.List
+import java.util.Map
+import java.util.concurrent.ExecutionException
+
+import com.microsoft.azure.storage.blob.BlockBlobURL
+import com.microsoft.azure.storage.blob.ContainerURL
+import com.microsoft.azure.storage.blob.TransferManager
+import java.net.MalformedURLException
+import java.net.URL
+import java.security.InvalidKeyException;
+import com.microsoft.azure.storage.blob.PipelineOptions
+import com.microsoft.azure.storage.blob.ServiceURL
+import com.microsoft.azure.storage.blob.SharedKeyCredentials
+import com.microsoft.azure.storage.blob.StorageURL
+import com.microsoft.rest.v2.RestException
+
+
+//Set Azure Blob Storage connection parameters and retrieve the account key
+containerName = variables.get("CONTAINER_NAME")
+inputPath = variables.get("INPUT_PATH")
+blobName = variables.get("BLOB_NAME")
+storageAccount = variables.get("STORAGE_ACCOUNT")
+accountKey = checkParametersAndReturnAccountKey()
+
+File file = new File(inputPath)
+containerURL = createContainerURL(storageAccount, accountKey, containerName)
+if (file.exists()) {
+    uploadResources(file)
+} else {
+    throw new FileNotFoundException("The input file cannot be found at " + inputPath)
+}
+
+
+/**
+* This method uploads resources (file or folder to an Azure Blob Storage
+* @param file
+* @throws InterruptedException
+* @throws ExecutionException
+* @throws IOException
+*/
+
+def uploadResources(File file) throws InterruptedException, ExecutionException, IOException {
+    List<String> filesRelativePathName = new ArrayList<>()
+    if (file.isDirectory()) {
+        if (blobName) {
+            filesRelativePathName = recursiveFolderUpload(inputPath, blobName, true)
+        } else {
+            filesRelativePathName = recursiveFolderUpload(inputPath, "", false)
+        }
+
+    } else {
+        if (blobName) {
+            //remove all white spaces from the blob name
+            blobName = blobName.replaceAll("\\s+", "")
+        }
+        //this condition is true in the case where the blob name is initially a white spaces string and becomes an empty string
+        if (blobName.isEmpty()) {
+            uploadFile(file, file.getName())
+        } else {
+            uploadFile(file, blobName)
+        }
+        filesRelativePathName.add(file.getPath())
+    }
+    return filesRelativePathName;
+}
+
+/**
+* This method uploads a local file to an Azure Storage blob
+*
+* @param file
+* @param blobName
+* @throws IOException
+*/
+def uploadFile(File file, String blobName) throws IOException, ExecutionException, InterruptedException {
+    println("Uploading " + file.getName() + " file into the container: " + containerURL);
+    FileChannel fileChannel = FileChannel.open(file.toPath());
+
+    // Create a BlockBlobURL to run operations on Blobs
+    final BlockBlobURL blob = containerURL.createBlockBlobURL(blobName);
+
+    // Uploading a file to the blobURL using the high-level methods available in TransferManager class
+    // Alternatively call the PutBlob/PutBlock low-level methods from BlockBlobURL type
+    TransferManager.uploadFileToBlockBlob(fileChannel, blob, 8 * 1024 * 1024, null).toFuture().get();
+    println("Completed upload request.");
+
+}
+
+/**
+* This method recursively uploads a local file/folder to an Azure Storage blob
+*
+* @param sourcePath
+* @param destinationPath
+* @throws IOException
+*/
+def recursiveFolderUpload(String sourcePath, String destinationPath, boolean ignoreRoot)
+throws IOException, ExecutionException, InterruptedException {
+    List<String> filesRelativePathName = new ArrayList<>()
+
+    File sourceFile = new File(sourcePath)
+    String remoteFilePath = Paths.get(destinationPath, sourceFile.getName()).toString()
+
+    if (sourceFile.isFile()) {
+        // copy if it is a file
+        println("Uploading " + sourcePath)
+        uploadFile(sourceFile, remoteFilePath)
+        println("File uploaded successfully to " + remoteFilePath)
+        filesRelativePathName.add(remoteFilePath)
+
+    } else {
+        if (ignoreRoot) {
+            remoteFilePath = destinationPath
+        }
+
+        File[] files = sourceFile.listFiles()
+        if (!sourceFile.isHidden()) {
+            for (File f : files) {
+                filesRelativePathName.addAll(recursiveFolderUpload(f.getAbsolutePath(), remoteFilePath, false))
+            }
+        }
+    }
+    return filesRelativePathName
+}
+
+def createContainerURL(String accountName, String accountKey, String containerName) throws MalformedURLException {
+    // Create a ServiceURL to call the Blob service. We will also use this to construct the ContainerURL
+    SharedKeyCredentials creds = null
+    try {
+        creds = new SharedKeyCredentials(accountName, accountKey)
+    } catch (InvalidKeyException e) {
+        throw new Exception(e.getMessage())
+    }
+    // We are using a default pipeline here, you can learn more about it at https://github.com/Azure/azure-storage-java/wiki/Azure-Storage-Java-V10-Overview
+    final ServiceURL serviceURL = new ServiceURL(new URL("http://" + accountName + ".blob.core.windows.net"),
+                                                 StorageURL.createPipeline(creds, new PipelineOptions()))
+
+    // Let's create a container using a blocking call to Azure Storage
+    // If container exists, we'll catch and continue
+    ContainerURL containerURL = serviceURL.createContainerURL(containerName)
+
+    try {
+        containerURL.create(null, null).blockingGet()
+        println("The " + containerName + " container is created")
+    } catch (RestException e) {
+        if (e.response().statusCode() != 409) {
+            throw new Exception(e.getMessage())
+        } else {
+            println("The " + containerName + " container already exists, resuming...")
+        }
+    }
+    return containerURL
+}
+
+/**
+* Checks and initialize parameters
+* returns the Azure Blob account key using the third party credentials mechanism
+*/
+def checkParametersAndReturnAccountKey() {
+    if (containerName.isEmpty()) {
+        throw new IllegalArgumentException("CONTAINER_NAME variable is not provided by the user. Empty value is not allowed.")
+    }
+    if (inputPath.isEmpty()) {
+        //Default value is getLocalSpace() because it will always be writable and moreover can be used to transfer files to another data space (global, user)
+        inputPath = localspace
+    }
+    if (storageAccount.isEmpty()) {
+        throw new IllegalArgumentException("STORAGE_ACCOUNT variable is not provided by the user. Empty value is not allowed.")
+    }
+    def accountKey = credentials.get(storageAccount)
+    if (accountKey == null || accountKey.isEmpty()) {
+        throw new IllegalArgumentException("Please add your secret key to 3rd-party credentials under the key :\"" +
+                                           storageAccount + "\"")
+    }
+    return accountKey
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            301
+        </positionTop>
+        <positionLeft>
+            435.5
+        </positionLeft>
+      </metadata>
     </task>
-    <task name="Import_from_Azure_Blob" >
+    <task name="Import_from_Azure_Blob" 
+    
+    
+    
+    
+    fork="true">
       <description>
         <![CDATA[ This task allows to import data from Azure Blob Storage.
 The task requires the following third-party credential: {key: STORAGE_ACCOUNT, value: ACCOUNT_KEY}. Please refer to the User documentation to learn how to add third-party credentials.
 It uses the following variables:
 $OUTPUT_PATH (optional) is the local relative path in the data space in which the downloaded data are stored. OUTPUT_PATH can contain either a path to a file, a directory terminated by / or an empty value for the root.
 $CONTAINER_NAME (required) is an existing container name from which you download blob(s).
-$BLOB_NAME (optional) is the blob name to be downloaded. If it is empty, the entire container is downloaded. ]]>
+$BLOB_NAME (optional) is the blob name to be downloaded. If it is empty, the entire container is downloaded.
+$STORAGE_ACCOUNT (required) is the storage account name. ]]>
       </description>
       <variables>
         <variable name="OUTPUT_PATH" value="" inherited="false" />
         <variable name="CONTAINER_NAME" value="" inherited="false" />
         <variable name="BLOB_NAME" value="" inherited="false" />
-        <variable name="STORAGE_ACCOUNT" value="" inherited="false" />
+        <variable name="STORAGE_ACCOUNT" value="" inherited="true" />
         <variable name="TRANSFER_DIRECTIVE" value="" inherited="false" model="PA:SPEL(! ( variables[&#39;OUTPUT_PATH&#39;].endsWith(&#39;/&#39;) || variables[&#39;OUTPUT_PATH&#39;].isEmpty() ? variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;OUTPUT_PATH&#39;] + &#39;**&#39; : variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;OUTPUT_PATH&#39;]).isEmpty())"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_blob_storage.png"/>
-        <info name="task.documentation" value="doc.activeeon.com/latest/user/ProActiveUserGuide.html#_azure_blob_storage"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_azure_blob_storage"/>
       </genericInformation>
       <depends>
         <task ref="Export_to_Azure_Blob"/>
       </depends>
+      <inputFiles>
+        <files  includes="proactive-examples-dependencies.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="proactive-examples-dependencies.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
       <pre>
         <script>
           <code language="bash">
@@ -85,17 +305,240 @@ $BLOB_NAME (optional) is the blob name to be downloaded. If it is empty, the ent
           </code>
         </script>
       </pre>
-      <javaExecutable class="org.ow2.proactive.scheduler.examples.AzureBlobDownloader">
-        <parameters>
-          <parameter name="containerName" value="$CONTAINER_NAME"/>
-          <parameter name="blobName" value="$BLOB_NAME"/>
-          <parameter name="outputPath" value="$OUTPUT_PATH"/>
-          <parameter name="storageAccount" value="$STORAGE_ACCOUNT"/>
-        </parameters>
-      </javaExecutable>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.Serializable
+import java.nio.channels.FileChannel
+import java.nio.file.Paths
+import java.util.ArrayList
+import java.util.List
+import java.util.Map
+import java.util.concurrent.ExecutionException
+import java.nio.channels.AsynchronousFileChannel
+import java.nio.file.StandardOpenOption
+import java.util.Arrays
+
+import com.microsoft.azure.storage.blob.BlobRange
+import com.microsoft.azure.storage.blob.*
+import com.microsoft.azure.storage.blob.models.BlobItem
+import com.microsoft.azure.storage.blob.models.ContainerListBlobFlatSegmentResponse
+import com.microsoft.rest.v2.util.FlowableUtil
+import com.microsoft.azure.storage.blob.BlockBlobURL
+import com.microsoft.azure.storage.blob.ContainerURL
+import com.microsoft.azure.storage.blob.TransferManager
+import java.net.MalformedURLException
+import java.net.URL
+import java.security.InvalidKeyException
+import com.microsoft.azure.storage.blob.PipelineOptions
+import com.microsoft.azure.storage.blob.ServiceURL
+import com.microsoft.azure.storage.blob.SharedKeyCredentials
+import com.microsoft.azure.storage.blob.StorageURL
+import com.microsoft.rest.v2.RestException
+import io.reactivex.Single
+
+
+//Set Azure Blob connection parameters and retrieve the account key
+containerName = variables.get("CONTAINER_NAME")
+outputPath = variables.get("OUTPUT_PATH")
+blobName = variables.get("BLOB_NAME")
+storageAccount = variables.get("STORAGE_ACCOUNT")
+accountKey = checkParametersAndReturnAccountKey()
+
+File file = new File(outputPath)
+containerURL = createContainerURL(storageAccount, accountKey, containerName)
+//download a single blob
+if (blobName) {
+    String azureBlobLocalRelativePath = Paths.get(outputPath,
+                                                  Paths.get(blobName).getFileName().toString()).toString()
+    //check that the outputPath is either a path to a directory terminated by / or a path for the local space or a path for a file.
+    if (isDirectoryPath(outputPath)) {
+        createDirIfNotExists(file)
+        downloadBlob(new File(azureBlobLocalRelativePath), blobName)
+    } else if (outputPath.equals(getLocalSpace())) {
+        downloadBlob(new File(azureBlobLocalRelativePath), blobName)
+    } else {
+        downloadBlob(file, blobName)
+    }
+} else { //download the whole container
+    createDirIfNotExists(file)
+    downloadContainerBlobs(containerURL)
+}
+
+def downloadContainerBlobs(ContainerURL containerURL) {
+    // Each ContainerURL.listBlobsFlatSegment call return up to maxResults (maxResults=10 passed into ListBlobOptions below).
+    // To list all Blobs, we are creating a helper method called downloadAllBlobs,
+    // and calling it after the initial listBlobsFlatSegment call
+    ListBlobsOptions options = new ListBlobsOptions(null, null, 1)
+    containerURL.listBlobsFlatSegment(null, options)
+    .flatMap{downloadAllBlobs(containerURL, it)}.blockingGet()
+    println("Downloading of the container blobs completed.")
+}
+
+def downloadAllBlobs(ContainerURL url,
+                     ContainerListBlobFlatSegmentResponse response) {
+    // Process the blobs returned in this result segment (if the segment is empty, blobs() will be null.
+    if (response.body().segment() != null) {
+        for (BlobItem b : response.body().segment().blobItems()) {
+            File azureBlobFile = new File(Paths.get(outputPath, b.name()).toString())
+            if (!azureBlobFile.getParentFile().exists()) {
+                azureBlobFile.getParentFile().mkdirs()
+            }
+            println("blob name: " + b.name())
+            downloadBlob(azureBlobFile, b.name())
+        }
+    } else {
+        println("There are no more blobs to list off.")
+    }
+
+    // If there is not another segment, return this response as the final response.
+    if (response.body().nextMarker() == null) {
+        return Single.just(response);
+    } else {
+        /*
+             * IMPORTANT: ListBlobsFlatSegment returns the start of the next segment; you MUST use
+             * this to get the next
+             * segment (after processing the current result segment
+             */
+
+        String nextMarker = response.body().nextMarker();
+
+        /*
+             * The presence of the marker indicates that there are more blobs to list, so we make
+             * another call to
+             * listBlobsFlatSegment and pass the result through this helper function.
+             */
+
+        return url.listBlobsFlatSegment(nextMarker, new ListBlobsOptions(null, null, 1))
+        .flatMap{downloadAllBlobs(url, it)}
+    }
+}
+
+def downloadBlob(File destinationFile, String blobName) {
+    println("Downloading " + blobName + " blob into the file: " + destinationFile)
+
+    // Create a BlockBlobURL to run operations on Blobs
+    final BlockBlobURL blobURL = containerURL.createBlockBlobURL(blobName);
+    try {
+        // Get the blob using the low-level download method in BlockBlobURL type
+        // com.microsoft.rest.v2.util.FlowableUtil is a static class that contains helpers to work with Flowable
+        blobURL.download(new BlobRange(0, Long.MAX_VALUE), null, false)
+        .flatMapCompletable {
+            AsynchronousFileChannel channel = AsynchronousFileChannel.open(Paths.get(destinationFile.getPath()),
+                                                                           StandardOpenOption.CREATE,
+                                                                           StandardOpenOption.WRITE)
+            return FlowableUtil.writeFile(it.body(), channel)
+        }
+        .doOnComplete{
+            println("The blob was downloaded to " + destinationFile.getAbsolutePath())
+        }
+        // To call it synchronously add .blockingAwait()
+        .blockingAwait()
+    } catch (Exception ex) {
+        throw new Exception(ex.toString())
+    }
+}
+
+
+def ContainerURL createContainerURL(String accountName, String accountKey, String containerName)
+throws MalformedURLException {
+    // Create a ServiceURL to call the Blob service. We will also use this to construct the ContainerURL
+    SharedKeyCredentials creds = null
+    try {
+        creds = new SharedKeyCredentials(accountName, accountKey)
+    } catch (InvalidKeyException e) {
+        throw new Exception(e.getMessage())
+    }
+    // We are using a default pipeline here, you can learn more about it at https://github.com/Azure/azure-storage-java/wiki/Azure-Storage-Java-V10-Overview
+    final ServiceURL serviceURL = new ServiceURL(new URL("http://" + accountName + ".blob.core.windows.net"),
+                                                 StorageURL.createPipeline(creds, new PipelineOptions()))
+
+    // Let's create a container using a blocking call to Azure Storage
+    // If container exists, we'll catch and continue
+    ContainerURL containerURL = serviceURL.createContainerURL(containerName);
+
+    try {
+        containerURL.create(null, null).blockingGet()
+        println("The " + containerName + " container is created")
+    } catch (RestException e) {
+        if (e.response().statusCode() != 409) {
+            throw new Exception(e.getMessage())
+        } else {
+            println("The " + containerName + " container already exists, resuming...")
+        }
+    }
+    return containerURL
+}
+
+
+/**
+* Creates a directory if it does not exist
+* @param file
+*/
+def createDirIfNotExists(File file) {
+    // If the path already exists, print a warning.
+    if (!file.exists()) {
+        try {
+            file.mkdir()
+            println("The " + file.getName() + " directory is created")
+        } catch (Exception e) {
+            throw new Exception("Couldn't create destination directory! " + file.getName())
+        }
+    } else {
+        println("The given local path " + file.getName() + " already exists");
+    }
+}
+
+/**
+* check whether or not the given file path is a path to a directory terminated by /
+* @param filePath
+* @return
+*/
+def isDirectoryPath(String filePath) {
+    return filePath.endsWith(File.separator)
+}
+
+/**
+* Checks and initialize parameters
+* returns the Azure Blob account key using the third party credentials mechanism
+*/
+def checkParametersAndReturnAccountKey() {
+    if (containerName.isEmpty()) {
+        throw new IllegalArgumentException("CONTAINER_NAME variable is not provided by the user. Empty value is not allowed.")
+    }
+    if (outputPath.isEmpty()) {
+        //Default value is getLocalSpace() because it will always be writable and moreover can be used to transfer files to another data space (global, user)
+        outputPath = localspace
+    }
+    if (storageAccount.isEmpty()) {
+        throw new IllegalArgumentException("STORAGE_ACCOUNT variable is not provided by the user. Empty value is not allowed.")
+    }
+    def accountKey = credentials.get(storageAccount)
+    if (accountKey == null || accountKey.isEmpty()) {
+        throw new IllegalArgumentException("Please add your secret key to 3rd-party credentials under the key :\"" +
+                                           storageAccount + "\"")
+    }
+    return accountKey
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
       <outputFiles>
         <files  includes="$TRANSFER_DIRECTIVE" accessMode="transferToGlobalSpace"/>
       </outputFiles>
+      <metadata>
+        <positionTop>
+            429
+        </positionTop>
+        <positionLeft>
+            435.5
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
   <metadata>
@@ -104,18 +547,18 @@ $BLOB_NAME (optional) is the blob name to be downloaded. If it is empty, the ent
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1139px;
-            height:566px;
+            width:2080px;
+            height:2712px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-269.9875030517578px;left:-463px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1217" style="top: 275px; left: 468px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_blob_storage.png" width="20px">&nbsp;<span class="name">Export_to_Azure_Blob</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1220" style="top: 403px; left: 468px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_blob_storage.png" width="20px">&nbsp;<span class="name">Import_from_Azure_Blob</span></a></div><svg style="position:absolute;left:525px;top:314.5px" width="26.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 5.5 88 C 15.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-296px;left:-430.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_277" style="top: 301px; left: 435.5px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_blob_storage.png" width="20px">&nbsp;<span class="name">Export_to_Azure_Blob</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_280" style="top: 429px; left: 435.5px; z-index: 24;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_blob_storage.png" width="20px">&nbsp;<span class="name">Import_from_Azure_Blob</span></a></div><svg style="position:absolute;left:492.5px;top:340.5px" width="26" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 5 88 C 15 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M7.868953124999999,66.78168750000002 L12.848095417762192,46.18537370290451 L6.478576933147113,52.85089950918167 L-1.0826925730561543,47.575749894757394 L7.868953124999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 525.5px; top: 305px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M7.409531250000001,66.78168750000002 L12.520990380459518,46.21781175738666 L6.108748919827519,52.84224829573104 L-1.4184488238094648,47.518594087559144 L7.409531250000001,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M7.409531250000001,66.78168750000002 L12.520990380459518,46.21781175738666 L6.108748919827519,52.84224829573104 L-1.4184488238094648,47.518594087559144 L7.409531250000001,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 493px; top: 331px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 531px; top: 433px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 498px; top: 459px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 531px; top: 393px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 498px; top: 419px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
