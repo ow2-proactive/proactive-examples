@@ -32,15 +32,14 @@ def get_token_api() -> str:
     return token
 
 # predict api
-def predict_api(data: str) -> str:
+def predict_api(data: str):
   api_token = data['api_token']
   result = ""
   if api_token == API_KEY:
     dataframe_json = data['dataframe_json']
     dataframe = pd.read_json(dataframe_json, orient='values')
     predictions = predict(dataframe)
-    result = np.array2string(predictions)
-  return json.dumps(result)
+  return json.dumps(list(predictions))
 
 def predict(dataframe):
   global SERVICE_CONFIG
@@ -97,4 +96,4 @@ if __name__ == '__main__':
   load_yaml(os.getenv('YAML_FILE'))
   app = connexion.FlaskApp(__name__, port=9090, specification_dir='/model_as_a_service/swagger/')
   app.add_api('ml_service_swagger.yaml', arguments={'title': 'Machine Learning Model Service'})
-  app.run()
+  app.run(ssl_context='adhoc')

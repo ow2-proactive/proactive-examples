@@ -1,3 +1,5 @@
+import javax.net.ssl.HttpsURLConnection;
+
 sleep(5000) // wait 5s for the container startup
 
 variables.put("ENDPOINT_MODEL", variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME")))
@@ -12,10 +14,26 @@ USER_NAME = variables.get("USER_NAME")
 assert !USER_NAME?.trim() == false : "USER_NAME must be defined!"
 println "USER_NAME: " + USER_NAME
 
+def nullTrustManager = [
+    checkClientTrusted: { chain, authType ->  },
+    checkServerTrusted: { chain, authType ->  },
+    getAcceptedIssuers: { null }
+]
+
+def nullHostnameVerifier = [
+    verify: { hostname, session -> true 
+    }
+]
+
+javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("SSL")
+sc.init(null, [nullTrustManager as  javax.net.ssl.X509TrustManager] as  javax.net.ssl.X509TrustManager[], null)
+javax.net.ssl.HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory())
+HttpsURLConnection.setDefaultHostnameVerifier(nullHostnameVerifier as javax.net.ssl.HostnameVerifier);
+
 // POST request
 def post = null
 try {
-    post = new URL(API_TOKEN_ENDPOINT).openConnection();
+    post = (HttpsURLConnection) new URL(API_TOKEN_ENDPOINT).openConnection();
     post.setRequestMethod("POST")
     post.setDoOutput(true)
     post.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")

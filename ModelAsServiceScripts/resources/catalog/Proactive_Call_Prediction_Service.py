@@ -52,7 +52,32 @@ else:
 headers = {'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}
 data = {'dataframe_json': dataframe_json, 'api_token': SERVICE_TOKEN}
 data_json = json.dumps(data)
-req = requests.post(API_PREDICT_ENDPOINT, data=data_json, headers=headers)
+req = requests.post(API_PREDICT_ENDPOINT, data=data_json, headers=headers, verify=False)
 
 predictions = json.loads(req.text)
 print("predictions:\n", predictions)
+
+predictions = pd.read_json(predictions, orient='records')
+df_dataframe = pd.read_json(dataframe_json, orient='records')
+dataframe = df_dataframe.assign(predictions=predictions)
+    
+with pd.option_context('display.max_colwidth', -1):
+  result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
+
+result = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Machine Learning Preview</title>
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+</head>
+<body class="container">
+<h1 class="text-center my-4" style="color:#003050;">Data Preview</h1>
+<div style="text-align:center">{0}</div>
+</body></html>""".format(result)
+
+result = result.encode('utf-8')
+resultMetadata.put("file.extension", ".html")
+resultMetadata.put("file.name", "output.html")
+resultMetadata.put("content.type", "text/html")
