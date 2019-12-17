@@ -52,7 +52,7 @@ else:
 headers = {'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}
 data = {'dataframe_json': dataframe_json, 'api_token': SERVICE_TOKEN}
 data_json = json.dumps(data)
-req = requests.post(API_PREDICT_ENDPOINT, data=data_json, headers=headers)
+req = requests.post(API_PREDICT_ENDPOINT, data=data_json, headers=headers, verify=False)
 
 predictions = json.loads(req.text)
 print("predictions:\n", predictions)
