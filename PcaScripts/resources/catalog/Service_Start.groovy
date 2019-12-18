@@ -48,7 +48,7 @@ for (ServiceInstanceData serviceInstanceData : service_instances) {
         if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
             instance_exists = true
             def instanceId = serviceInstanceData.getInstanceId()
-            endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+            endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
             println("INSTANCE_ID: " + instanceId)
             println("ENDPOINT:    " + endpoint)
             variables.put("INSTANCE_ID_" + instanceName, instanceId)
@@ -106,7 +106,7 @@ if (!instance_exists){
     // Acquire service endpoint
     serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
     def instanceId = serviceInstanceData.getInstanceId()
-    endpoint = serviceInstanceData.getInstanceEndpoints().entrySet().iterator().next().getValue()
+    endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
 
     println("INSTANCE_ID: " + instanceId)
     println("ENDPOINT: " + endpoint)
