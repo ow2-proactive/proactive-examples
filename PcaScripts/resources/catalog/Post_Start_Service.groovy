@@ -16,7 +16,6 @@ import org.ow2.proactive.pca.service.client.model.Node
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")    
-def hostname = variables.get("PA_NODE_HOST")
 def endpointID = variables.get("ENDPOINT_ID")
 def httpEnabled = variables.get("HTTP_ENABLED")
     
