@@ -21,12 +21,15 @@ def endpointID = variables.get("ENDPOINT_ID")
 def httpEnabled = variables.get("HTTP_ENABLED")
     
 // Handle service parameters
+def hostname = variables.get("PA_NODE_HOST")
 def port = new File(instanceName+"_port").text.trim()
 def containerID = new File(instanceName+"_containerID").text.trim()
 def containerUrl = hostname+":"+port
 if (httpEnabled.toLowerCase()=="true"){
     containerUrl = "http://"+containerUrl
 }
+variables.put("HOSTNAME", hostname)
+variables.put("PORT", port)
 
 // Determine Cloud Automation URL
 def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL') 
