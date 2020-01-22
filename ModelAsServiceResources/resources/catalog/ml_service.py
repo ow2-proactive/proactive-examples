@@ -6,6 +6,7 @@ import numpy as np
 
 from joblib import load
 from binascii import hexlify
+from flask_cors import CORS
 
 # models folder
 UPLOAD_MODELS_FOLDER = "model_as_a_service"
@@ -77,23 +78,9 @@ def load_model(model_file_path):
   SERVICE_CONFIG['model'] = model
   print("model:\n", model)
 
-def load_yaml(yaml_url):
-  from urllib.request import urlopen
-  import ssl, os
-  context = ssl._create_unverified_context()
-  yaml_file = urlopen(yaml_url, context=context).read()
-  YAML_FOLDER_PATH = "/model_as_a_service/swagger/"
-  if not os.path.exists(YAML_FOLDER_PATH):
-    os.mkdir(YAML_FOLDER_PATH)
-  yaml_file_name =  os.path.join(YAML_FOLDER_PATH, "ml_service_swagger.yaml")
-  yaml_file_content = yaml_file.decode('utf-8')
-  f = open(yaml_file_name, "w")
-  f.write(yaml_file_content)
-  f.close()
-
 # main
 if __name__ == '__main__':
-  load_yaml(os.getenv('YAML_FILE'))
-  app = connexion.FlaskApp(__name__, port=9090, specification_dir='/model_as_a_service/swagger/')
+  app = connexion.FlaskApp(__name__, port=9090, specification_dir='/model_as_a_service')
+  CORS(app.app)
   app.add_api('ml_service_swagger.yaml', arguments={'title': 'Machine Learning Model Service'})
   app.run(ssl_context=('/model_as_a_service/certificate_mas.pem', '/model_as_a_service/key_mas.pem'))

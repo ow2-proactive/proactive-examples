@@ -3,15 +3,14 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Model_Service" projectName="Cloud Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
-    <variable name="INSTANCE_NAME" value="model-server" />
-    <variable name="PYTHON_ENTRYPOINT" value="ml_service" />
-    <variable name="YAML_FILE" value="ml_service-api" />
+    <variable name="PROXYFIED" value="false" model="PA:Boolean"/>
+    <variable name="HTTPS_ENABLED" value="true" model="PA:Boolean"/>
     <variable name="DOCKER_IMAGE" value="activeeon/dlm3" />
-    <variable name="PROXYFIED" value="False" model="PA:Boolean"/>
-    <variable name="ENDPOINT_ID" value="maas-gui" />
-    <variable name="HTTPS_ENABLED" value="True" model="PA:Boolean"/>
+    <variable name="INSTANCE_NAME" value="model-server" />
     <variable name="NODE_NAME" value="" />
-    <variable name="ENDPOINT_PATH" value="/api/ui" />
+    <variable name="ENDPOINT_ID" value="maas-gui" />
+    <variable name="YAML_FILE" value="ml_service-api" />
+    <variable name="PYTHON_ENTRYPOINT" value="ml_service" />
   </variables>
   <description>
     <![CDATA[ Deploy a server to deploy and call ML models.
@@ -110,16 +109,26 @@ else:
 
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PYTHON_ENTRYPOINT = variables.get("PYTHON_ENTRYPOINT")
+YAML_FILE = variables.get("YAML_FILE")
 
 ml_service_api_resource_url = PA_CATALOG_REST_URL +"/buckets/model-as-a-service-resources/resources/"+PYTHON_ENTRYPOINT+"/raw"
+yaml_file_url = PA_CATALOG_REST_URL +"/buckets/model-as-a-service-resources/resources/"+YAML_FILE+"/raw"
 print("ml_service_api_resource_url: ", ml_service_api_resource_url)
-# This restores the same behavior as before.
+print("yaml_file_url: ", yaml_file_url)
+# Download the two configuration file "ml_service" for the service definition
 context = ssl._create_unverified_context()
 python_file = urlopen(ml_service_api_resource_url, context=context).read()
 python_content = python_file.decode('utf-8')
 python_file_name = PYTHON_ENTRYPOINT+".py"
 f = open(python_file_name, "w")
 f.write(python_content)
+f.close()
+# Download the configuration file "ml_service-api" for the swagger specification
+yaml_file = urlopen(yaml_file_url, context=context).read()
+yaml_file_content = yaml_file.decode('utf-8')
+yaml_file_name = YAML_FILE+".yaml"
+f = open(yaml_file_name, "w")
+f.write(yaml_file_content)
 f.close()
 ]]>
           </code>
@@ -136,11 +145,10 @@ echo BEGIN "$variables_PA_TASK_NAME"
 PORT=9090
 DOCKER_IMAGE=$variables_DOCKER_IMAGE
 PYTHON_ENTRYPOINT=$variables_PYTHON_ENTRYPOINT
-PYTHON_ENTRYPOINT_FILE="${PWD}/${PYTHON_ENTRYPOINT}.py"
-###echo"$PYTHON_ENTRYPOINT_FILE"
-chmod +x $PYTHON_ENTRYPOINT_FILE
 YAML_FILE=$variables_YAML_FILE
-yaml_env="${variables_PA_CATALOG_REST_URL}/buckets/model-as-a-service-resources/resources/${YAML_FILE}/raw"
+PYTHON_ENTRYPOINT_FILE="${PWD}/${PYTHON_ENTRYPOINT}.py"
+YAML_FILE="${PWD}/${YAML_FILE}.yaml"
+chmod +x $PYTHON_ENTRYPOINT_FILE $YAML_FILE
 ################################################################################
 
 ls -la
@@ -168,27 +176,22 @@ if [ -z "$INSTANCE_NAME" ]; then
     exit 1
 fi
 
-if [ "$(docker ps --format '{{.Names}}' | grep ^$INSTANCE_NAME$)" ]; then
-    RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
-    STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
-    if [ "$RUNNING" == "true" ]; then
-        echo "$INSTANCE_NAME container is running"
-    elif [ "$STOPPED" == "exited" ]; then
-        echo "Starting $INSTANCE_NAME container"
-        docker start $INSTANCE_NAME
-    fi
+if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then   
+        echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
+        exit 128
 else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running $INSTANCE_NAME container"
     F_PORT=$(GET_RANDOM_PORT)
-    echo "docker run -dit --name $INSTANCE_NAME -p $F_PORT:$PORT -e YAML_FILE=$yaml_env $DOCKER_IMAGE"
-    docker run -dit --name $INSTANCE_NAME -p $F_PORT:$PORT -e YAML_FILE=$yaml_env $DOCKER_IMAGE 
+    echo "docker run -dit --name $INSTANCE_NAME -p $F_PORT:$PORT $DOCKER_IMAGE"
+    docker run -dit --name $INSTANCE_NAME -p $F_PORT:$PORT $DOCKER_IMAGE 
     echo "docker cp $PYTHON_ENTRYPOINT_FILE $INSTANCE_NAME:/model_as_a_service/ml_service.py"
     docker exec $INSTANCE_NAME mkdir /model_as_a_service
     #Copy the needed files to launch the service
     echo "copying the needed files to launch the service" 
     docker cp $PYTHON_ENTRYPOINT_FILE $INSTANCE_NAME:/model_as_a_service/ml_service.py
+    docker cp $YAML_FILE $INSTANCE_NAME:/model_as_a_service/ml_service_swagger.yaml
     docker cp key_mas.pem $INSTANCE_NAME:/model_as_a_service/key_mas.pem
     docker cp certificate_mas.pem $INSTANCE_NAME:/model_as_a_service/certificate_mas.pem
     echo "docker exec $INSTANCE_NAME ls -la /model_as_a_service"
@@ -234,16 +237,16 @@ def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")    
 def hostname = variables.get("PA_NODE_HOST")
-def endpointID = variables.get("ENDPOINT_ID")
-def endpointPath = variables.get("ENDPOINT_PATH")
+def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
 def httpsEnabled = variables.get("HTTPS_ENABLED")
+def ENDPOINT_PATH = "/api/ui"
     
 // Handle service parameters
 def port = new File(instanceName+"_port").text.trim()
 def containerID = new File(instanceName+"_containerID").text.trim()
 def containerUrl = hostname+":"+port
 if (httpsEnabled.toLowerCase()=="true"){
-    containerUrl = "https://"+containerUrl+endpointPath
+    containerUrl = "https://"+containerUrl+ENDPOINT_PATH
     containerUrl = URLDecoder.decode( containerUrl, "UTF-8" );
 }
 
@@ -324,10 +327,10 @@ println("END " + variables.get("PA_TASK_NAME"))
       </post>
       <metadata>
         <positionTop>
-            210.609375
+            239.59375
         </positionTop>
         <positionLeft>
-            442
+            339.875
         </positionLeft>
       </metadata>
     </task>
@@ -372,10 +375,10 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
       </controlFlow>
       <metadata>
         <positionTop>
-            337.609375
+            367.59375
         </positionTop>
         <positionLeft>
-            442
+            339.875
         </positionLeft>
       </metadata>
     </task>
@@ -386,27 +389,27 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2144px;
+            width:2080px;
             height:2712px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-205.609375px;left:-437px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_73" style="top: 210.609px; left: 442px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Elasticsearch image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_76" style="top: 337.609px; left: 442px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:495.5px;top:250.5px" width="38" height="88" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 17 87 C 27 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-234.59375px;left:-334.875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_214" style="top: 239.594px; left: 339.875px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Elasticsearch image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_217" style="top: 367.594px; left: 339.875px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:393px;top:279.5px" width="38" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 17 88 C 27 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,65.388768 L20.144527959052745,44.272760719594906 L14.871462510144921,51.83548382516571 L6.591243784218459,47.78110620944998 L18.379808,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,65.388768 L20.144527959052745,44.272760719594906 L14.871462510144921,51.83548382516571 L6.591243784218459,47.78110620944998 L18.379808,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:584.0266769263776px;top:287.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,66.303232 L20.2120063325601,45.19297266312391 L14.914797127178112,52.7388042696744 L6.6475786022345025,48.6579835359458 L18.379808,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,66.303232 L20.2120063325601,45.19297266312391 L14.914797127178112,52.7388042696744 L6.6475786022345025,48.6579835359458 L18.379808,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:481.0266769263776px;top:317.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_87" style="position: absolute; transform: translate(-50%, -50%); left: 596px; top: 357.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 496px; top: 241px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_228" style="position: absolute; transform: translate(-50%, -50%); left: 493px; top: 387.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 393.5px; top: 270px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 513px; top: 368px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 410.5px; top: 398px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 513px; top: 328px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 410.5px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 594px; top: 328px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 491px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 594px; top: 368px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 491px; top: 398px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>
