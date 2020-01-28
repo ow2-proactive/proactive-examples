@@ -23,7 +23,7 @@ TOKENS = {
 }
 
 # get token api
-def get_token_api() -> str:
+def get_token_api(user) -> str:
   user = connexion.request.form["user"]
   token = TOKENS.get(user)
   if not token:
@@ -83,4 +83,8 @@ if __name__ == '__main__':
   app = connexion.FlaskApp(__name__, port=9090, specification_dir='/model_as_a_service')
   CORS(app.app)
   app.add_api('ml_service_swagger.yaml', arguments={'title': 'Machine Learning Model Service'})
-  app.run(ssl_context=('/model_as_a_service/certificate_mas.pem', '/model_as_a_service/key_mas.pem'))
+  https_enabled = os.getenv('HTTPS_ENABLED')
+  if https_enabled.lower()=="true":
+    app.run(ssl_context=('/model_as_a_service/certificate_mas.pem', '/model_as_a_service/key_mas.pem'))
+  else:
+    app.run()
