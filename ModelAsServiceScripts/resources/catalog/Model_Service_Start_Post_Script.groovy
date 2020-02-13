@@ -2,7 +2,8 @@ import javax.net.ssl.HttpsURLConnection;
 
 sleep(5000) // wait 5s for the container startup
 
-variables.put("ENDPOINT_MODEL", variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME")))
+def ENDPOINT_PATH = "/api/ui"
+variables.put("ENDPOINT_MODEL", variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME"))-ENDPOINT_PATH)
 
 ENDPOINT_MODEL = variables.get("ENDPOINT_MODEL")
 assert !ENDPOINT_MODEL?.trim() == false : "ENDPOINT_MODEL must be defined!"

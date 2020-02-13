@@ -9,7 +9,7 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 from visdom import Visdom
 
-visdom_endpoint = variables.get("VISDOM_ENDPOINT") if variables.get("VISDOM_ENDPOINT") else results[0].__str__()
+visdom_endpoint = variables.get("ENDPOINT_VISDOM") if variables.get("ENDPOINT_VISDOM") else results[0].__str__()
 print("VISDOM_ENDPOINT: ", visdom_endpoint)
 
 if visdom_endpoint is not None:

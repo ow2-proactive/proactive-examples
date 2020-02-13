@@ -14,8 +14,8 @@ from visdom import Visdom
 from sklearn.metrics import *
 from pandas.api.types import is_string_dtype
 
-visdom_endpoint = variables.get("VISDOM_ENDPOINT") if variables.get("VISDOM_ENDPOINT") else results[0].__str__()
-print("VISDOM_ENDPOINT: ", visdom_endpoint)
+visdom_endpoint = variables.get("ENDPOINT_VISDOM") if variables.get("ENDPOINT_VISDOM") else results[0].__str__()
+print("ENDPOINT_VISDOM: ", visdom_endpoint)
 assert visdom_endpoint is not None
 visdom_endpoint = visdom_endpoint.replace("http://", "")
 (VISDOM_HOST, VISDOM_PORT) = visdom_endpoint.split(":")
