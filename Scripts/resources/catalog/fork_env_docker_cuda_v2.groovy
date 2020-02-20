@@ -87,17 +87,17 @@ if (DOCKER_ENABLED) {
         cmd.add("--runtime=nvidia")
     }
 
-    String osName = System.getProperty("os.name");
-    println "Operating system : " + osName;
-    OperatingSystem operatingSystem = OperatingSystem.resolveOrError(osName);
-    OperatingSystemFamily family = operatingSystem.getFamily();
+    String osName = System.getProperty("os.name")
+    println "Operating system : " + osName
+    OperatingSystem operatingSystem = OperatingSystem.resolveOrError(osName)
+    OperatingSystemFamily family = operatingSystem.getFamily()
 
     switch (family) {
         case OperatingSystemFamily.WINDOWS:
-            isWindows = true;
-            break;
+            isWindows = true
+            break
         default:
-            isWindows = false;
+            isWindows = false
     }
     forkEnvironment.setDockerWindowsToLinux(isWindows)
 
@@ -149,18 +149,21 @@ if (DOCKER_ENABLED) {
     cmd.add("-w")
     cmd.add(workspaceContainer)
 
-    sigar = new org.hyperic.sigar.Sigar()
-    try {
-        pid = sigar.getPid()
-        creds = sigar.getProcCred(pid)
-        uid = creds.getUid()
-        gid = creds.getGid()
-        userDefinition = "--user=" + uid + ":" + gid + " "
-    } catch (Exception e) {
-        println "Cannot retrieve user or group id : " + e.getMessage()
-        userDefinition = "";
-    } finally {
-        sigar.close()
+    if (isWindows) {
+        // linux on windows does not allow sharing identities (such as AD identities)
+    } else {
+        sigar = new org.hyperic.sigar.Sigar()
+        try {
+            pid = sigar.getPid()
+            creds = sigar.getProcCred(pid)
+            uid = creds.getUid()
+            gid = creds.getGid()
+            cmd.add("--user=" + uid + ":" + gid)
+        } catch (Exception e) {
+            println "Cannot retrieve user or group id : " + e.getMessage()
+        } finally {
+            sigar.close()
+        }
     }
 
     cmd.add(containerName)
