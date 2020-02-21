@@ -1,6 +1,6 @@
 // This script creates a docker fork environment configured using job or task variables
 // Variables:
-// DOCKER_ENABLED: true/false, set to false to disable docker completely (default=false)
+// DOCKER_ENABLED: true/false, set to false to disable docker completely (default=true)
 // DOCKER_IMAGE: docker image name (default=activeeon/dlm3)
 
 // If used on windows:
@@ -11,11 +11,15 @@
 import org.ow2.proactive.utils.OperatingSystem;
 import org.ow2.proactive.utils.OperatingSystemFamily;
 
-DOCKER_ENABLED = "true".equalsIgnoreCase(variables.get("DOCKER_ENABLED"))
+DOCKER_ENABLED = true
+if ("false".equalsIgnoreCase(variables.get("DOCKER_ENABLED"))) {
+    DOCKER_ENABLED = false
+}
 if ((new File("/.dockerenv")).exists() && ! (new File("/var/run/docker.sock")).exists()) {
     println ("Already inside docker container, without host docker access")
     DOCKER_ENABLED = false
 }
+
 if (DOCKER_ENABLED) {
 
     // Prepare Docker parameters

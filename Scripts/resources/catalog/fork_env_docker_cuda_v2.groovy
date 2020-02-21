@@ -1,6 +1,6 @@
 // This script creates a docker fork environment for various machine learning usages (CUDA, GPU, RAPIDS ...) and uses task or job variables for configuration.
 // Variables:
-// DOCKER_ENABLED: true/false, set to false to disable docker completely (default=false)
+// DOCKER_ENABLED: true/false, set to false to disable docker completely (default=true)
 // DOCKER_IMAGE: docker image name (default=activeeon/dlm3)
 // DOCKER_GPU_ENABLED: true/false, set to true to enable gpu parameters and use activeeon/cuda image (default=false)
 // USE_NVIDIA_RAPIDS: true/false, set to true to use activeeon/rapidsai image (default=false)
@@ -16,9 +16,9 @@
 import org.ow2.proactive.utils.OperatingSystem
 import org.ow2.proactive.utils.OperatingSystemFamily
 
-DOCKER_ENABLED = false
-if ("true".equalsIgnoreCase(variables.get("DOCKER_ENABLED"))) {
-    DOCKER_ENABLED = true
+DOCKER_ENABLED = true
+if ("false".equalsIgnoreCase(variables.get("DOCKER_ENABLED"))) {
+    DOCKER_ENABLED = false
 }
 if ((new File("/.dockerenv")).exists() && ! (new File("/var/run/docker.sock")).exists()) {
     println ("Already inside docker container, without host docker access")
@@ -28,9 +28,9 @@ if ((new File("/.dockerenv")).exists() && ! (new File("/var/run/docker.sock")).e
 MOUNT_LOG_PATH = variables.get("MOUNT_LOG_PATH")
 DOCKER_LOG_PATH = variables.get("DOCKER_LOG_PATH")
 
-DOCKER_GPU_ENABLED = true
-if (variables.get("DOCKER_GPU_ENABLED") != null && variables.get("DOCKER_GPU_ENABLED").toLowerCase().equals("false")) {
-    DOCKER_GPU_ENABLED = false
+DOCKER_GPU_ENABLED = false
+if (variables.get("DOCKER_GPU_ENABLED") != null && variables.get("DOCKER_GPU_ENABLED").toLowerCase().equals("true")) {
+    DOCKER_GPU_ENABLED = true
 }
 
 CUDA_ENABLED = false

@@ -1,6 +1,6 @@
 // This script creates a docker fork environment for various machine learning usages (CUDA, GPU, ...) and uses task or job variables for configuration.
 // Variables:
-// DOCKER_ENABLED: true/false, set to false to disable docker completely (default=false)
+// DOCKER_ENABLED: true/false, set to false to disable docker completely (default=true)
 // DOCKER_IMAGE: docker image name (default=activeeon/dlm3)
 // DOCKER_GPU_ENABLED: true/false, set to false to disable gpu parameters (default=false)
 // MOUNT_LOG_PATH: optional host path to store logs
@@ -15,9 +15,9 @@
 import org.ow2.proactive.utils.OperatingSystem;
 import org.ow2.proactive.utils.OperatingSystemFamily;
 
-DOCKER_ENABLED = false
-if ("true".equalsIgnoreCase(variables.get("DOCKER_ENABLED"))) {
-    DOCKER_ENABLED = true
+DOCKER_ENABLED = true
+if ("false".equalsIgnoreCase(variables.get("DOCKER_ENABLED"))) {
+    DOCKER_ENABLED = false
 }
 if ((new File("/.dockerenv")).exists() && ! (new File("/var/run/docker.sock")).exists()) {
     println ("Already inside docker container, without host docker access")

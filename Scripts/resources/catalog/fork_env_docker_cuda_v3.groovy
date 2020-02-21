@@ -158,7 +158,7 @@ if (DOCKER_ENABLED) {
             creds = sigar.getProcCred(pid)
             uid = creds.getUid()
             gid = creds.getGid()
-            //cmd.add("--user=" + uid + ":" + gid)
+            cmd.add("--user=" + uid + ":" + gid)
         } catch (Exception e) {
             println "Cannot retrieve user or group id : " + e.getMessage()
         } finally {
