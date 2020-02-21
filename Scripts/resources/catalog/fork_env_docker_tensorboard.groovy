@@ -29,8 +29,8 @@ MOUNT_LOG_PATH = variables.get("MOUNT_LOG_PATH")
 DOCKER_LOG_PATH = variables.get("DOCKER_LOG_PATH")
 
 DOCKER_GPU_ENABLED = true
-if (variables.get("DOCKER_GPU_ENABLED") != null && variables.get("DOCKER_GPU_ENABLED").toLowerCase().equals("true")) {
-    DOCKER_GPU_ENABLED = true
+if (variables.get("DOCKER_GPU_ENABLED") != null && variables.get("DOCKER_GPU_ENABLED").toLowerCase().equals("false")) {
+    DOCKER_GPU_ENABLED = false
 }
 
 CUDA_ENABLED = false
