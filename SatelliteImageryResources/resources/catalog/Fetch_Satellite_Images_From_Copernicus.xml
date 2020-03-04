@@ -43,6 +43,8 @@ OUTPUT_PATH: address path to save downloaded images. Type: String. ]]>
         <variable name="END_DATE" value="2018-12-21" inherited="false" model="PA:DATETIME(yyyy-MM-dd)"/>
         <variable name="OUTPUT_PATH" value="/tmp/" inherited="false" />
         <variable name="USE_START_AND_END_DATE" value="True" inherited="false" model="PA:Boolean"/>
+        <variable name="SPATIAL_RESOLUTION" value="10m" inherited="false" model="PA:LIST(10m, 20m, 60m)"/>
+        <variable name="IMAGE_BAND" value="All" inherited="false" model="PA:LIST(All, B01, B02, B03, B04, B05, B06, B07, B08, B8A, B09, B10, B11, B12, TCI)"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png"/>
@@ -113,16 +115,21 @@ finally:
 
 
 if 'variables' in locals():
-  PLATFORM_NAME  = variables.get("PLATFORM_NAME")                 # Specific instrument a satellite [Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5, Precursor, Sentinel-6]
-  FOOTPRINT      = variables.get("FOOTPRINT")                     # Geojson file search_footprints.geojson with footprints of the query result
+  PLATFORM_NAME  = variables.get("PLATFORM_NAME")                        # Specific platform [Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5, Precursor, Sentinel-6]
+  FOOTPRINT      = variables.get("FOOTPRINT")                            # Geojson file search_footprints.geojson with footprints of the query result
   FOOTPRINT      = FOOTPRINT + ".geojson"
   FOOTPRINT_FILE = os.path.join(os.getcwd(), FOOTPRINT)
-  START_DATE     = variables.get("START_DATE")                     # Start date of the query in the format YYYYMMDD
-  END_DATE       = variables.get("END_DATE")                       # End date of the query in the format YYYYMMDD
-  USER_NAME      = credentials.get("USER_NAME_COP")                # User email
-  USER_PASS      = credentials.get("USER_PASS_COP")                # User password
-  OUTPUT_PATH    = variables.get("OUTPUT_PATH")                    # Folder output path 
-  USE_START_AND_END_DATE = variables.get("USE_START_AND_END_DATE") # True or False to use start and end data
+  START_DATE     = variables.get("START_DATE")                           # Start date of the query in the format YYYYMMDD
+  END_DATE       = variables.get("END_DATE")                             # End date of the query in the format YYYYMMDD
+  USER_NAME      = credentials.get("USER_NAME_COP")                      # User email
+  USER_PASS      = credentials.get("USER_PASS_COP")                      # User password
+  OUTPUT_PATH    = variables.get("OUTPUT_PATH")                          # Folder output path 
+  USE_START_AND_END_DATE = bool(variables.get("USE_START_AND_END_DATE")) # True or False to use start and end data
+  SPATIAL_RESOLUTION = variables.get("SPATIAL_RESOLUTION")               # Spatial resolutions of 10m, 20m and 60m
+  IMAGE_BAND = variables.get("IMAGE_BAND")                               # Image band (TC1,  B01, B02, B03, 0B4, 0B5, 0B6,B07, B08, B8A, B09, B10, B11, B12)																
+    
+# Spatial resolutions
+spatial_resolution_check = 'R' + SPATIAL_RESOLUTION
 
 # Get an unique ID
 ID = str(uuid.uuid4())
@@ -169,11 +176,9 @@ print('Extracting all the files...')
 for file_name in folder_zip: 
     with ZipFile(file_name, 'r') as zip: 
         zip.printdir() 
-        # extracting all the files 
-        print('Unzip file name:', file_name) 
+        print('Unzip file name: {} '.format(file_name))
         zip.extractall(dataset_path) 
-print('Finished!')               
-            
+                       
 # List all .safe folders
 folder_safe = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.SAFE')]
 
@@ -186,8 +191,7 @@ def folder_copy(image_path):
             files2 = os.listdir(fullpath) 
             for filefull in files2:
                 filepath = os.path.join(fullpath, filefull)
-                #print('Image Name:', filefull) 
-                print('Image Name:', os.path.join(output_path, dire,  filefull)) 
+                print('Image name: {} '.format(os.path.join(output_path, dire,  filefull)))
                 shutil.copy(filepath, os.path.join(output_path, dire))
 
 # Looking for the "IMG_DATA" directory 
@@ -199,11 +203,10 @@ def images_search():
                 fullpath = os.path.join(path, dirname)
                 if "IMG_DATA" in dirname:
                     folder_copy(fullpath)
-    print('Finished!')
     
 # Searching for metadata files
 def metadata_search(output_path_metadata, folder_safe):
-    print('Searching for metadata files...')
+    print('Searching for  metadata files...')
     for file_xml in folder_safe:
         file_rename = r.randint(0,9999)
         for fn in os.listdir(file_xml):
@@ -211,16 +214,45 @@ def metadata_search(output_path_metadata, folder_safe):
                 shutil.copy(os.path.join(file_xml,fn), os.path.join(output_path_metadata, fn))
                 new_file_rename =  str(file_rename) + '_' +  fn 
                 os.rename(os.path.join(output_path_metadata, fn), os.path.join(output_path_metadata, new_file_rename)) 
-                print('Metadata Name:', join(output_path_metadata, new_file_rename))     
-            
-    print('Finished')
+                print('Metadata name: {} '.format(join(output_path_metadata, new_file_rename)))
+                
+# Searching for spatial resolutions (R10m, R20m and R60m)
+def resolution_search(spatial_resolution_check):
+    print('Selecting image by resolution and metadata files')
+    image_resolution  = [name for name in os.listdir(output_path) if not name.endswith('DS_Store')]
+    for foldername in image_resolution:
+        fullpath = os.path.join(output_path, foldername)
+        if spatial_resolution_check in foldername or "metadata" in foldername:
+            print('File name: {} '.format(fullpath))
+        else:
+            shutil.rmtree(fullpath)
     
-    
+# Searching for image band (All,  B01, B02, B03, B04, B05, B06,B07, B08, B8A, B09, B10, B11, B12, TC1)
+def image_band(image_band_check):
+    print('Selecting {} image band..."'.format(image_band_check))  
+    resolution_path = join(output_path, spatial_resolution_check)
+    image_band_list  = [name for name in os.listdir(resolution_path) if not name.endswith('DS_Store')]
+    for foldername in image_band_list:
+        fullpath = os.path.join(resolution_path, foldername)
+        if image_band_check in foldername:
+            print('Image name: {} "'.format(fullpath))   
+        elif image_band_check == 'All':
+            print('Image name: {} '.format(fullpath))  
+            break
+        else: 
+            os.remove(fullpath)
+        
 # Call folder_search function
 images_search()
  
 # Call metadata_search function 
 metadata_search(output_path_metadata, folder_safe)
+
+# Call resolution_search function
+resolution_search(spatial_resolution_check)
+
+# Call image_search function
+image_band(IMAGE_BAND)
     
 # Remove the "dataset_path" directory
 shutil.rmtree(dataset_path)
@@ -228,7 +260,6 @@ while os.path.exists(dataset_path):
   pass
 print('Remove all directory in the', dataset_path)
 print('Finished!')  
-
 
 
 if 'variables' in locals():
@@ -265,7 +296,7 @@ print("END " + __file__)
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-358.984375px;left:-369.984375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_761" style="top: 363.984px; left: 374.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a copernicus dataset.
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-358.984375px;left:-369.984375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_108" style="top: 363.984px; left: 374.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a copernicus dataset.
 You can see more details in: https://pypi.org/project/sentinelsat/
 
 Warning:
