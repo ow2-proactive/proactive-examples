@@ -85,7 +85,7 @@ println(serviceInstanceData)
 
 // Inform other platforms that service is running through Synchronization API
 channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, false)
+synchronizationapi.createChannelIfAbsent(channel, true)
 synchronizationapi.put(channel, "RUNNING", true)
 synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
 
