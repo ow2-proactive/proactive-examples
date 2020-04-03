@@ -133,6 +133,10 @@ if (CONTAINER_ENABLED && (
     cmd.add("HOME=/tmp")
     if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
         cmd.add("--runtime=nvidia")
+        // rootless containers leveraging NVIDIA GPUs
+        // needed when cgroups is disabled in nvidia-container-runtime
+        // /etc/nvidia-container-runtime/config.toml => no-cgroups = true
+        cmd.add("--privileged") 
     }
 
     switch (family) {
