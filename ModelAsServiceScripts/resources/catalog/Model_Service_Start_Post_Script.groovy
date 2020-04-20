@@ -7,6 +7,12 @@ variables.put("ENDPOINT_MODEL", variables.get("ENDPOINT_" + variables.get("INSTA
 
 ENDPOINT_MODEL = variables.get("ENDPOINT_MODEL")
 assert !ENDPOINT_MODEL?.trim() == false : "ENDPOINT_MODEL must be defined!"
+assert ENDPOINT_MODEL.startsWith("http") : "ENDPOINT_MODEL should starts with http*!"
+
+HTTPS_ENABLED = false
+if (ENDPOINT_MODEL.startsWith("https://")) {
+    HTTPS_ENABLED = true
+}
 
 API_TOKEN_ENDPOINT = ENDPOINT_MODEL + "/api/get_token"
 println "API_TOKEN_ENDPOINT: " + API_TOKEN_ENDPOINT
@@ -26,15 +32,19 @@ def nullHostnameVerifier = [
     }
 ]
 
-javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("SSL")
-sc.init(null, [nullTrustManager as  javax.net.ssl.X509TrustManager] as  javax.net.ssl.X509TrustManager[], null)
-javax.net.ssl.HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory())
-HttpsURLConnection.setDefaultHostnameVerifier(nullHostnameVerifier as javax.net.ssl.HostnameVerifier);
-
 // POST request
-def post = null
 try {
-    post = (HttpsURLConnection) new URL(API_TOKEN_ENDPOINT).openConnection();
+    def post = null
+    if (HTTPS_ENABLED) {
+        javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("SSL")
+        sc.init(null, [nullTrustManager as javax.net.ssl.X509TrustManager] as javax.net.ssl.X509TrustManager[], null)
+        javax.net.ssl.HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory())
+        HttpsURLConnection.setDefaultHostnameVerifier(nullHostnameVerifier as javax.net.ssl.HostnameVerifier);
+        post = (HttpsURLConnection) new URL(API_TOKEN_ENDPOINT).openConnection();
+    } else {
+        post = new URL(API_TOKEN_ENDPOINT).openConnection();
+    }
+    
     post.setRequestMethod("POST")
     post.setDoOutput(true)
     post.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
