@@ -326,11 +326,9 @@ else:
 #-----------------------------------------------------------------
 # Data drift measures
 #
-mean_df_train = dataframe_train.mean(axis = 0) # mean
-std_df_train = dataframe_train.std(axis = 0)   # standard deviation 
-
-dataframe_model_metadata = pd.DataFrame({'Means': mean_df_train})
-dataframe_model_metadata['Std'] = std_df_train
+mean_df_train = dataframe_train.mean(axis = 0)  # mean
+std_df_train = dataframe_train.std(axis = 0)  # standard deviation 
+dataframe_model_metadata = pd.DataFrame({'Means': mean_df_train, 'Std': std_df_train})
 
 #-----------------------------------------------------------------
 # Use nvidia rapids
@@ -349,7 +347,6 @@ variables.put(dataframe_id, compressed_data)
 
 model_metadata_id = str(uuid.uuid4())
 variables.put(model_metadata_id, compressed_model_metadata)
-
 
 print("dataframe id (out): ", dataframe_id)
 print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
