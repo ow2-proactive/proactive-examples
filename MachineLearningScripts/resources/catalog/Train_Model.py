@@ -323,15 +323,30 @@ if model is not None:
 else:
   print("Algorithm not found!")
 
-#-------------------------------------------------------------
+#-----------------------------------------------------------------
+# Data drift measures
+#
+mean_df_train = dataframe_train.mean(axis = 0)  # mean
+std_df_train = dataframe_train.std(axis = 0)  # standard deviation 
+dataframe_model_metadata = pd.DataFrame({'Means': mean_df_train, 'Std': std_df_train})
+
+#-----------------------------------------------------------------
 # Use nvidia rapids
 #
 dataframe = dataframe.to_pandas() if USE_NVIDIA_RAPIDS else dataframe
+dataframe_model_metadata = dataframe_model_metadata.to_pandas() if USE_NVIDIA_RAPIDS else dataframe_model_metadata
+
 dataframe_json = dataframe.to_json(orient='split').encode()
+dataframe_model_meta_json = dataframe_model_metadata.to_json(orient='split').encode()
+
 compressed_data = bz2.compress(dataframe_json)
+compressed_model_metadata = bz2.compress(dataframe_model_meta_json)
 
 dataframe_id = str(uuid.uuid4())
 variables.put(dataframe_id, compressed_data)
+
+model_metadata_id = str(uuid.uuid4())
+variables.put(model_metadata_id, compressed_model_metadata)
 
 print("dataframe id (out): ", dataframe_id)
 print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
@@ -341,6 +356,7 @@ print(dataframe.head())
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
+resultMetadata.put("task.train_model_metadata", model_metadata_id)
 
 token = variables.get("TOKEN")
 # Convert from JSON to dict
