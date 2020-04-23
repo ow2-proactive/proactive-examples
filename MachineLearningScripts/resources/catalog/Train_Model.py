@@ -356,7 +356,7 @@ print(dataframe.head())
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
-resultMetadata.put("task.train_model_metadata", model_metadata_id)
+resultMetadata.put("task.model_metadata_id", model_metadata_id)
 
 token = variables.get("TOKEN")
 # Convert from JSON to dict
