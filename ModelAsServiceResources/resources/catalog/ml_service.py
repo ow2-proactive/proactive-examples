@@ -15,18 +15,20 @@ from shutil import move
 from flask_cors import CORS
 from joblib import load
 
+# Environment variables
+DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
+TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
+HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
+
 # General parameters
 APP_BASE_DIR = "/model_as_a_service"
 UPLOAD_MODELS_FOLDER = "/model_as_a_service"  # model folder
 CURRENT_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last.pkl')  # default model path
 TRACE_FILE = join(UPLOAD_MODELS_FOLDER, 'trace.txt')  # default trace file
-API_KEY = hexlify(os.urandom(16)).decode()  # api key
-TOKENS = {'user': API_KEY}  # user tokens
-
-# Environment variables
-DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
-TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
-HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
+TOKENS = {
+    'user': hexlify(os.urandom(16)).decode(),  # api key
+    'test': hexlify(os.urandom(16)).decode()
+}  # user tokens
 
 
 def trace(message, token=""):
@@ -52,21 +54,29 @@ def backup_previous_deployed_model():
         log("Current model file was moved to:\n" + PREVIOUS_MODEL_FILE)
 
 
+def auth_token(token):
+    for user, key in TOKENS.items():
+        if key == token:
+            return True
+    return False
+
+
 def get_token_api(user) -> str:
     user = connexion.request.form["user"]
+    addr = connexion.request.remote_addr
     token = TOKENS.get(user)
     if not token:
-        log('Invalid user: {u}'.format(u=user))
+        log('Invalid user: {u} ({a})'.format(u=user, a=addr))
         return "Invalid user"
     else:
-        log('{u} token is {t}'.format(u=user, t=token))
+        log('{u} token is {t} ({a})'.format(u=user, t=token, a=addr))
         return token
 
 
 def predict_api(data: str) -> str:
     api_token = data['api_token']
     log("calling predict_api", api_token)
-    if api_token == API_KEY:
+    if auth_token(api_token):
         if exists(CURRENT_MODEL_FILE) and isfile(CURRENT_MODEL_FILE):
             try:
                 dataframe_json = data['dataframe_json']
@@ -88,7 +98,7 @@ def predict_api(data: str) -> str:
 def deploy_api() -> str:
     api_token = connexion.request.form["api_token"]
     log("calling deploy_api", api_token)
-    if api_token == API_KEY:
+    if auth_token(api_token):
         backup_previous_deployed_model()
         model_file = connexion.request.files['model_file']
         model_file.save(CURRENT_MODEL_FILE)
@@ -101,7 +111,7 @@ def deploy_api() -> str:
 def list_models_api() -> str:
     api_token = connexion.request.form["api_token"]
     log("calling list_models_api", api_token)
-    if api_token == API_KEY:
+    if auth_token(api_token):
         models_list = glob.glob(join(UPLOAD_MODELS_FOLDER, "*.pkl"))
         log("List of deployed models:\n" + str(models_list))
         return json.dumps(models_list)
@@ -112,7 +122,7 @@ def list_models_api() -> str:
 def undeploy_api() -> str:
     api_token = connexion.request.form["api_token"]
     log("calling undeploy_api", api_token)
-    if api_token == API_KEY:
+    if auth_token(api_token):
         model_file = connexion.request.form["model_file"]
         if exists(model_file) and isfile(model_file):
             os.remove(model_file)
@@ -125,7 +135,7 @@ def undeploy_api() -> str:
 def redeploy_api() -> str:
     api_token = connexion.request.form["api_token"]
     log("calling redeploy_api", api_token)
-    if api_token == API_KEY:
+    if auth_token(api_token):
         backup_previous_deployed_model()
         model_file = connexion.request.form["model_file"]
         if exists(model_file) and isfile(model_file):
@@ -141,7 +151,7 @@ def redeploy_api() -> str:
 def trace_api() -> str:
     api_token = connexion.request.form["api_token"]
     log("calling trace_api", api_token)
-    if api_token == API_KEY:
+    if auth_token(api_token):
         with open(TRACE_FILE) as f:
             lines = f.readlines()
         return lines
@@ -153,7 +163,6 @@ if __name__ == '__main__':
     app = connexion.FlaskApp(__name__, port=9090, specification_dir=APP_BASE_DIR)
     CORS(app.app)
     app.add_api('ml_service_swagger.yaml', arguments={'title': 'Machine Learning Model Service'})
-
     
     if HTTPS_ENABLED:
         # from OpenSSL import SSL
