@@ -1,6 +1,6 @@
 import javax.net.ssl.HttpsURLConnection;
 
-sleep(5000) // wait 5s for the container startup
+sleep(10000) // wait 5s for the container startup
 
 def ENDPOINT_PATH = "/api/ui"
 variables.put("ENDPOINT_MODEL", variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME"))-ENDPOINT_PATH)

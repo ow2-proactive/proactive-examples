@@ -3,22 +3,44 @@
 # import os, sys, bz2, uuid, pickle, json, connexion, wget
 # import numpy as np
 import os
+import sys
 import glob
 import json
 import connexion
+import subprocess
+import numbers
 import pandas as pd
 
+from cryptography.fernet import Fernet
 from datetime import datetime as dt
 from os.path import join, exists, isfile
 from binascii import hexlify
 from shutil import move
 from flask_cors import CORS
 from joblib import load
+from flask import jsonify
+
+
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+
+# Install required Python libraries if they are not already installed
+try:
+    import proactive
+except ImportError:
+    install('proactive')
+    import proactive
+
 
 # Environment variables
 DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
 TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
 HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
+USER_KEY = os.getenv('USER_KEY')
+assert USER_KEY is not None, "USER_KEY is required!"
+USER_KEY = str(USER_KEY).encode()
+
 
 # General parameters
 APP_BASE_DIR = "/model_as_a_service"
@@ -29,6 +51,53 @@ TOKENS = {
     'user': hexlify(os.urandom(16)).decode(),  # api key
     'test': hexlify(os.urandom(16)).decode()
 }  # user tokens
+
+
+# Decrypt user credentials
+USER_DATA_FILE = join(APP_BASE_DIR, 'user_data.enc')
+with open(USER_DATA_FILE, 'rb') as f:
+    encrypted_data = f.read()
+fernet = Fernet(USER_KEY)
+decrypted_data = fernet.decrypt(encrypted_data)
+message = decrypted_data.decode()
+user_credentials = json.loads(message)
+
+
+# Get proactive server url
+proactive_rest = user_credentials['ciUrl']
+proactive_url = proactive_rest[:-5]
+
+
+def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables={}, token=""):
+    result = False
+    try:
+        log("Connecting on " + proactive_url, token)
+        gateway = proactive.ProActiveGateway(proactive_url, [])
+        gateway.connect(
+            username=user_credentials['ciLogin'],
+            password=user_credentials['ciPasswd'])
+        if gateway.isConnected():
+            log("Connected to " + proactive_url, token)
+            try:
+                log("Submitting a workflow from the catalog", token)
+                jobId = gateway.submitWorkflowFromCatalog(bucket_name, workflow_name, workflow_variables)
+                assert jobId is not None
+                assert isinstance(jobId, numbers.Number)
+                workflow_path = bucket_name + "/" + workflow_name
+                log("Workflow " + workflow_path + " submitted successfully with jobID: " + str(jobId), token)
+                result = True
+            finally:
+                log("Disconnecting from " + proactive_url, token)
+                gateway.disconnect()
+                log("Disconnected from " + proactive_url, token)
+                gateway.terminate()
+                log("Connection finished from " + proactive_url, token)
+        else:
+            log("Couldn't connect to " + proactive_url, token)
+    except Exception as e:
+        log("Error while connecting on " + proactive_url, token)
+        log(str(e), token)
+    return result
 
 
 def trace(message, token=""):
@@ -155,6 +224,16 @@ def trace_api() -> str:
         with open(TRACE_FILE) as f:
             lines = f.readlines()
         return lines
+    else:
+        return log("Invalid token", api_token)
+
+
+def test_workflow_submission_api() -> str:
+    api_token = connexion.request.form["api_token"]
+    log("calling test_workflow_submission_api", api_token)
+    if auth_token(api_token):
+        res = submit_workflow_from_catalog("basic-examples", "Print_File_Name", {'file': 'test_from_maas'}, api_token)
+        return jsonify(res)
     else:
         return log("Invalid token", api_token)
 

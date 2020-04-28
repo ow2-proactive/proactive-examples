@@ -88,6 +88,8 @@ selected = regexMatcher.find()
 import ssl
 import subprocess
 import sys
+import json
+import cryptography
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -105,31 +107,58 @@ except ImportError:
     else:
         from urllib.request import urlopen
 
+# Get user credentials and convert to json
+schedulerapi.connect()
+sessionId = str(schedulerapi.getSession())
+connectionInfo = schedulerapi.getConnectionInfo()
+ciLogin = str(connectionInfo.getLogin())
+ciPasswd = str(connectionInfo.getPassword())
+ciUrl = str(connectionInfo.getUrl())
+user_credentials = {
+  'sessionId': sessionId,
+  'ciLogin': ciLogin,
+  'ciPasswd': ciPasswd,
+  'ciUrl': ciUrl
+}
+user_credentials_json = json.dumps(user_credentials)
+
+# Encrypt user data into a binary file
+from cryptography.fernet import Fernet
+key = Fernet.generate_key()
+f = Fernet(key)
+message = user_credentials_json.encode()
+encrypted = f.encrypt(message)
+user_data_file = 'user_data.enc'
+with open(user_data_file, 'wb') as f:
+    f.write(encrypted)
+variables.put("USER_KEY", key.decode())
+variables.put("USER_DATA_FILE", user_data_file)
+
+# Get workflows variables
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PYTHON_ENTRYPOINT = variables.get("PYTHON_ENTRYPOINT")
 YAML_FILE = variables.get("YAML_FILE")
 
-ml_service_api_resource_url = PA_CATALOG_REST_URL +"/buckets/model-as-a-service-resources/resources/"+PYTHON_ENTRYPOINT+"/raw"
-yaml_file_url = PA_CATALOG_REST_URL +"/buckets/model-as-a-service-resources/resources/"+YAML_FILE+"/raw"
-print("ml_service_api_resource_url: ", ml_service_api_resource_url)
-print("yaml_file_url: ", yaml_file_url)
+PA_MAAS_RESOURCES_URL = "/buckets/model-as-a-service-resources/resources/"
+python_file_url = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + PYTHON_ENTRYPOINT + "/raw"
+yaml_file_url   = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + YAML_FILE + "/raw"
+print("python_file_url: ", python_file_url)
+print("yaml_file_url:   ", yaml_file_url)
 
 # Download the two configuration file "ml_service" for the service definition
 context = ssl._create_unverified_context()
-python_file = urlopen(ml_service_api_resource_url, context=context).read()
+python_file = urlopen(python_file_url, context=context).read()
 python_content = python_file.decode('utf-8')
-python_file_name = PYTHON_ENTRYPOINT+".py"
-f = open(python_file_name, "w")
-f.write(python_content)
-f.close()
+python_file_name = PYTHON_ENTRYPOINT + ".py"
+with open(python_file_name, 'w') as f:
+    f.write(python_content)
 
 # Download the configuration file "ml_service-api" for the swagger specification
 yaml_file = urlopen(yaml_file_url, context=context).read()
 yaml_file_content = yaml_file.decode('utf-8')
-yaml_file_name = YAML_FILE+".yaml"
-f = open(yaml_file_name, "w")
-f.write(yaml_file_content)
-f.close()
+yaml_file_name = YAML_FILE + ".yaml"
+with open(yaml_file_name, 'w') as f:
+    f.write(yaml_file_content)
 ]]>
           </code>
         </script>
@@ -147,11 +176,10 @@ DOCKER_IMAGE=$variables_DOCKER_IMAGE
 HTTPS_ENABLED=$variables_HTTPS_ENABLED
 DEBUG_ENABLED=$variables_DEBUG_ENABLED
 TRACE_ENABLED=$variables_TRACE_ENABLED
-
-PYTHON_ENTRYPOINT=$variables_PYTHON_ENTRYPOINT
-YAML_FILE=$variables_YAML_FILE
-PYTHON_ENTRYPOINT_FILE="${PWD}/${PYTHON_ENTRYPOINT}.py"
-YAML_FILE="${PWD}/${YAML_FILE}.yaml"
+USER_KEY=$variables_USER_KEY
+USER_DATA_FILE="${PWD}/${variables_USER_DATA_FILE}"
+PYTHON_ENTRYPOINT_FILE="${PWD}/${variables_PYTHON_ENTRYPOINT}.py"
+YAML_FILE="${PWD}/${variables_YAML_FILE}.yaml"
 chmod +x $PYTHON_ENTRYPOINT_FILE $YAML_FILE
 ################################################################################
 
@@ -186,12 +214,13 @@ else
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running $INSTANCE_NAME container"
     F_PORT=$(GET_RANDOM_PORT)
-    echo "docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e TRACE_ENABLED=$TRACE_ENABLED -p $F_PORT:$PORT $DOCKER_IMAGE"
-    docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e TRACE_ENABLED=$TRACE_ENABLED -p $F_PORT:$PORT $DOCKER_IMAGE
+    echo "docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e TRACE_ENABLED=$TRACE_ENABLED -e USER_KEY=$USER_KEY -p $F_PORT:$PORT $DOCKER_IMAGE"
+    docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e TRACE_ENABLED=$TRACE_ENABLED -e USER_KEY=$USER_KEY -p $F_PORT:$PORT $DOCKER_IMAGE
     echo "docker exec $INSTANCE_NAME mkdir /model_as_a_service"
     docker exec $INSTANCE_NAME mkdir /model_as_a_service
     #Copy the needed files to launch the service
     echo "Copying the needed files to launch the service"
+    docker cp $USER_DATA_FILE $INSTANCE_NAME:/model_as_a_service/user_data.enc
     docker cp $PYTHON_ENTRYPOINT_FILE $INSTANCE_NAME:/model_as_a_service/ml_service.py
     docker cp $YAML_FILE $INSTANCE_NAME:/model_as_a_service/ml_service_swagger.yaml
     docker cp key_mas.pem $INSTANCE_NAME:/model_as_a_service/key_mas.pem
