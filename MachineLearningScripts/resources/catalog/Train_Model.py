@@ -6,16 +6,13 @@ if str(variables.get("TASK_ENABLED")).lower() != 'true':
 
 print("BEGIN " + __file__)
 
-import sys, bz2, uuid, json
-import random, pickle
-import pandas as pd
+import shap
 import numpy as np
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import f1_score
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import f1_score
-from sklearn.metrics import accuracy_score 
+import pandas as pd
+import random, pickle
+import sys, bz2, uuid, json
+from sklearn.metrics import f1_score, accuracy_score
+from sklearn.model_selection import cross_val_score, StratifiedKFold, train_test_split
 
 #-------------------------------------------------------------
 # Use nvidia rapids
@@ -286,12 +283,28 @@ if model is not None:
       dataframe_label = dataframe_label.to_pandas()
     else:
       model.fit(dataframe_train.values, dataframe_label.values.ravel())
-    if (alg.type == 'classification' or alg.type == 'anomaly') and automl:
+    if (alg.type == 'classification') and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
+      # Explainer shap
+      explainer = shap.KernelExplainer(model.predict_proba, dataframe_train)  # feature importance
+    if (alg.type == 'anomaly') and automl:
+      scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+      loss = 1 - np.mean(scores)
+      # Explainer shap
+      explainer = shap.KernelExplainer(model.predict, dataframe_train)  # feature importance
     if alg.type == 'regression' and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-      loss = np.abs(np.mean(scores))   
+      loss = np.abs(np.mean(scores)) 
+      if alg.name == 'SupportVectorRegression':
+        # Explainer shap
+        explainer = shap.KernelExplainer(model.predict, dataframe_train)
+      elif alg.name == 'BayesianRidgeRegression' or alg.name == 'LinearRegression':
+        # Explainer shap
+        explainer = shap.LinearExplainer(model, dataframe_train)  
+      else:
+        # Explainer shap
+        explainer = shap.KernelExplainer(model.predict, dataframe_train)  
     if alg.sampling:
       model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
   else:
@@ -306,6 +319,8 @@ if model is not None:
       dataframe_label = dataframe_label.to_pandas() if dataframe_label is not None else None
     else:
       model.fit(dataframe_train.values)
+      # Explainer shap
+      explainer = shap.KernelExplainer(model.predict, dataframe_train)
     if is_labeled_data and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
@@ -330,6 +345,12 @@ mean_df_train = dataframe_train.mean(axis = 0)  # mean
 std_df_train = dataframe_train.std(axis = 0)  # standard deviation 
 dataframe_model_metadata = pd.DataFrame({'Means': mean_df_train, 'Std': std_df_train})
 
+# Explainer shap
+#
+if explainer:
+	explainer_bin = pickle.dumps(explainer)
+	explainer_compressed = bz2.compress(explainer_bin) # explainer object
+
 #-----------------------------------------------------------------
 # Use nvidia rapids
 #
@@ -348,6 +369,9 @@ variables.put(dataframe_id, compressed_data)
 model_metadata_id = str(uuid.uuid4())
 variables.put(model_metadata_id, compressed_model_metadata)
 
+explainer_id = str(uuid.uuid4())
+variables.put(explainer_id, explainer_compressed)
+
 print("dataframe id (out): ", dataframe_id)
 print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
 print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
@@ -357,6 +381,7 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.model_metadata_id", model_metadata_id)
+resultMetadata.put("task.explainer_id", explainer_id)
 
 token = variables.get("TOKEN")
 # Convert from JSON to dict
