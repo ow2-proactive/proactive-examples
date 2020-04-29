@@ -100,6 +100,10 @@ def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables=
     return result
 
 
+def submit_web_notification(message, token):
+    return submit_workflow_from_catalog("notification-tools", "Web_Notification", {'MESSAGE': message}, token)
+
+
 def trace(message, token=""):
     if TRACE_ENABLED:
         datetime_str = dt.today().strftime('%Y-%m-%d %H:%M:%S')
@@ -128,6 +132,13 @@ def auth_token(token):
         if key == token:
             return True
     return False
+
+
+def get_token_user(token):
+    for user, key in TOKENS.items():
+        if key == token:
+            return user
+    return None
 
 
 def get_token_api(user) -> str:
@@ -233,6 +244,17 @@ def test_workflow_submission_api() -> str:
     log("calling test_workflow_submission_api", api_token)
     if auth_token(api_token):
         res = submit_workflow_from_catalog("basic-examples", "Print_File_Name", {'file': 'test_from_maas'}, api_token)
+        return jsonify(res)
+    else:
+        return log("Invalid token", api_token)
+
+
+def test_web_notification_api() -> str:
+    api_token = connexion.request.form["api_token"]
+    log("calling test_web_notification_api", api_token)
+    if auth_token(api_token):
+        message = "MaaS notification test from " + get_token_user(api_token) + " (" + api_token + ")"
+        res = submit_web_notification(message, api_token)
         return jsonify(res)
     else:
         return log("Invalid token", api_token)
