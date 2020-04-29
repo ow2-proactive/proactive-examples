@@ -45,7 +45,8 @@ if model_metadata_id is not None and variables.get(model_metadata_id) is not Non
     compressed_model_metadata_json = variables.get(model_metadata_id)
     assert compressed_model_metadata_json is not None
     model_metadata_json = bz2.decompress(compressed_model_metadata_json).decode()
-    dataframe_model_metadata = pd.read_json(model_metadata_json, orient='split')
+    #dataframe_model_metadata = pd.read_json(model_metadata_json, orient='split')
+    dataframe_model_metadata = pd.read_json(model_metadata_json, orient='values')
     print("model_metadata_id: ", model_metadata_id)
     print(dataframe_model_metadata.head())
     data['model_metadata_json'] = model_metadata_json
