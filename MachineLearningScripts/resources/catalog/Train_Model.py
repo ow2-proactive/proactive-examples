@@ -1,3 +1,4 @@
+
 __file__ = variables.get("PA_TASK_NAME")
 
 if str(variables.get("TASK_ENABLED")).lower() != 'true':
@@ -263,6 +264,8 @@ else:
 
 #-------------------------------------------------------------
 dataframe_label = None
+model_explainer = None
+
 if model is not None:
   if is_labeled_data:
     columns = [LABEL_COLUMN]
@@ -287,24 +290,21 @@ if model is not None:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
       # Explainer shap
-      explainer = shap.KernelExplainer(model.predict_proba, dataframe_train)  # feature importance
+      model_explainer = shap.KernelExplainer(model.predict_proba, dataframe_train)  # feature importance
     if (alg.type == 'anomaly') and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
       # Explainer shap
-      explainer = shap.KernelExplainer(model.predict, dataframe_train)  # feature importance
+      model_explainer = shap.KernelExplainer(model.predict, dataframe_train)  # feature importance
     if alg.type == 'regression' and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = np.abs(np.mean(scores)) 
-      if alg.name == 'SupportVectorRegression':
+      if alg.name == 'BayesianRidgeRegression' or alg.name == 'LinearRegression':
         # Explainer shap
-        explainer = shap.KernelExplainer(model.predict, dataframe_train)
-      elif alg.name == 'BayesianRidgeRegression' or alg.name == 'LinearRegression':
-        # Explainer shap
-        explainer = shap.LinearExplainer(model, dataframe_train)  
+        model_explainer = shap.LinearExplainer(model, dataframe_train)  
       else:
         # Explainer shap
-        explainer = shap.KernelExplainer(model.predict, dataframe_train)  
+        model_explainer = shap.KernelExplainer(model.predict, dataframe_train)  
     if alg.sampling:
       model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
   else:
@@ -320,7 +320,7 @@ if model is not None:
     else:
       model.fit(dataframe_train.values)
       # Explainer shap
-      explainer = shap.KernelExplainer(model.predict, dataframe_train)
+      model_explainer = shap.KernelExplainer(model.predict, dataframe_train)
     if is_labeled_data and automl:
       scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(), cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
       loss = 1 - np.mean(scores)
@@ -347,9 +347,9 @@ dataframe_model_metadata = pd.DataFrame({'Means': mean_df_train, 'Std': std_df_t
 
 # Explainer shap
 #
-if explainer:
-	explainer_bin = pickle.dumps(explainer)
-	explainer_compressed = bz2.compress(explainer_bin) # explainer object
+if model_explainer:
+	model_explainer_bin = pickle.dumps(model_explainer)
+	model_explainer_compressed = bz2.compress(model_explainer_bin) # explainer object
 
 #-----------------------------------------------------------------
 # Use nvidia rapids
@@ -369,8 +369,8 @@ variables.put(dataframe_id, compressed_data)
 model_metadata_id = str(uuid.uuid4())
 variables.put(model_metadata_id, compressed_model_metadata)
 
-explainer_id = str(uuid.uuid4())
-variables.put(explainer_id, explainer_compressed)
+model_explainer_id = str(uuid.uuid4())
+variables.put(model_explainer_id, model_explainer_compressed)
 
 print("dataframe id (out): ", dataframe_id)
 print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
@@ -381,7 +381,7 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.model_metadata_id", model_metadata_id)
-resultMetadata.put("task.explainer_id", explainer_id)
+resultMetadata.put("task.model_explainer_id", model_explainer_id)
 
 token = variables.get("TOKEN")
 # Convert from JSON to dict
