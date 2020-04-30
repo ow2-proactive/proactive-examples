@@ -19,6 +19,7 @@ from shutil import move
 from flask_cors import CORS
 from joblib import load
 from flask import jsonify
+from tempfile import TemporaryFile
 
 from scipy.stats import norm
 from scipy.stats import wasserstein_distance
@@ -83,7 +84,7 @@ def trace(message, token=""):
     if TRACE_ENABLED:
         datetime_str = dt.today().strftime('%Y-%m-%d %H:%M:%S')
         with open(TRACE_FILE, "a") as f:
-            f.write("%s %s %s\n" % (datetime_str, token, message))
+            f.write("%s|%s|%s\n" % (datetime_str, token, message))
 
 
 def log(message, token=""):
@@ -193,6 +194,15 @@ def get_token_user(token):
     return None
 
 
+def color_drift_detection(val):
+    color = 'red' if ("drift detected" in val) else 'black'
+    return 'color: %s' % color
+
+
+def highlight_drift_detection(vals):
+    return ['background-color: yellow' if ("drift detected" in v) else '' for v in vals]
+
+
 # ----- REST API endpoints ----- #
 
 
@@ -244,9 +254,11 @@ def deploy_api() -> str:
         if "model_metadata_json" in connexion.request.form:
             log("Adding model metadata")
             model_metadata_json = connexion.request.form['model_metadata_json']
+            log("model_metadata_json:\n" + str(model_metadata_json), api_token)
             model_metadata = pd.read_json(model_metadata_json, orient='values')
             # model_metadata = pd.read_json(model_metadata_json, orient='split')
             # print(model_metadata.head())
+            log("model_metadata:\n" + str(model_metadata), api_token)
             model_metadata.to_pickle(CURRENT_META_FILE)
             log("The new model metadata file was saved successfully at:\n" + CURRENT_META_FILE)
 
@@ -307,15 +319,42 @@ def redeploy_api() -> str:
         return log("Invalid token", api_token)
 
 
-def trace_api() -> str:
-    api_token = connexion.request.form["api_token"]
-    log("calling trace_api", api_token)
-    if auth_token(api_token):
-        with open(TRACE_FILE) as f:
-            lines = f.readlines()
-        return lines
+def trace_preview_api(key) -> str:
+    if USER_KEY == key.encode():
+        if exists(TRACE_FILE) and isfile(TRACE_FILE):
+            header = ["Date Time", "Token", "Traceability information"]
+            result = ""
+            with open(TRACE_FILE) as f, TemporaryFile("w+") as t:
+                for line in f:
+                    ln = len(line.strip().split("|"))
+                    if ln < 3:
+                        line = "||" + line
+                    t.write(line)
+                t.seek(0)
+                trace_dataframe = pd.read_csv(t, sep='|', names=header, engine='python')
+                trace_dataframe.fillna('', inplace=True)
+                result = (trace_dataframe.style.hide_index()
+                          .applymap(color_drift_detection)
+                          .apply(highlight_drift_detection)
+                          .set_properties(subset=['Date Time'], **{'width': '150px'})
+                          .set_properties(subset=['Token'], **{'width': '250px'})
+                          .render(table_title="Audit & Traceability"))
+            return result
+        else:
+            return log("Trace file is empty", key)
     else:
-        return log("Invalid token", api_token)
+        return log("Invalid key", key)
+
+
+# def trace_api() -> str:
+#     api_token = connexion.request.form["api_token"]
+#     log("calling trace_api", api_token)
+#     if auth_token(api_token):
+#         with open(TRACE_FILE) as f:
+#             lines = f.readlines()
+#         return lines
+#     else:
+#         return log("Invalid token", api_token)
 
 
 def test_workflow_submission_api() -> str:

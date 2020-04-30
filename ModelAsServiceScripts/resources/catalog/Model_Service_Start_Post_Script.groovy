@@ -2,10 +2,13 @@ import javax.net.ssl.HttpsURLConnection;
 
 sleep(10000) // wait 5s for the container startup
 
-def ENDPOINT_PATH = "/api/ui"
-variables.put("ENDPOINT_MODEL", variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME"))-ENDPOINT_PATH)
+//def ENDPOINT_PATH = "/api/ui"
+ENDPOINT_MODEL = variables.get("ENDPOINT_" + variables.get("INSTANCE_NAME")) // -ENDPOINT_PATH
+ENDPOINT_MODEL = ENDPOINT_MODEL.split("/api")[0]
 
-ENDPOINT_MODEL = variables.get("ENDPOINT_MODEL")
+variables.put("ENDPOINT_MODEL", ENDPOINT_MODEL)
+
+//ENDPOINT_MODEL = variables.get("ENDPOINT_MODEL")
 assert !ENDPOINT_MODEL?.trim() == false : "ENDPOINT_MODEL must be defined!"
 assert ENDPOINT_MODEL.startsWith("http") : "ENDPOINT_MODEL should starts with http*!"
 
