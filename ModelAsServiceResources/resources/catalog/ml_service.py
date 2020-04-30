@@ -23,6 +23,7 @@ from tempfile import TemporaryFile
 
 from scipy.stats import norm
 from scipy.stats import wasserstein_distance
+from urllib.parse import quote
 
 
 def install(package):
@@ -35,17 +36,11 @@ try:
 except ImportError:
     install('proactive')
     import proactive
-
-
-# Environment variables
-DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
-TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
-DRIFT_ENABLED = True if (os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
-DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_ENABLED') is not None else None
-HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
-USER_KEY = os.getenv('USER_KEY')
-assert USER_KEY is not None, "USER_KEY is required!"
-USER_KEY = str(USER_KEY).encode()
+# try:
+#     from json2html import *
+# except ImportError:
+#     install('json2html')
+#     from json2html import *
 
 
 # General parameters
@@ -56,10 +51,25 @@ META_FILE_EXT = '.meta'
 CURRENT_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + MODEL_FILE_EXT)  # default model path
 CURRENT_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + META_FILE_EXT)    # default meta path
 TRACE_FILE = join(UPLOAD_MODELS_FOLDER, 'trace.txt')  # default trace file
+CONFIG_FILE = join(UPLOAD_MODELS_FOLDER, 'config.json')  # default config file
+PREDICTIONS_FILE = join(UPLOAD_MODELS_FOLDER, 'predictions.csv')  # default predictions file
 TOKENS = {
     'user': hexlify(os.urandom(16)).decode(),  # api key
     'test': hexlify(os.urandom(16)).decode()
 }  # user tokens
+
+
+# Environment variables
+DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
+TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
+DRIFT_ENABLED = True if (os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
+DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_THRESHOLD') is not None else None
+DRIFT_NOTIFICATION = True if (os.getenv('DRIFT_NOTIFICATION') is not None and os.getenv('DRIFT_NOTIFICATION').lower() == "true") else False
+LOG_PREDICTIONS = True if (os.getenv('LOG_PREDICTIONS') is not None and os.getenv('LOG_PREDICTIONS').lower() == "true") else False
+HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
+USER_KEY = os.getenv('USER_KEY')
+assert USER_KEY is not None, "USER_KEY is required!"
+USER_KEY = str(USER_KEY).encode()
 
 
 # Decrypt user credentials
@@ -77,11 +87,47 @@ proactive_rest = user_credentials['ciUrl']
 proactive_url = proactive_rest[:-5]
 
 
+# Check if there is already a configuration file
+if not isfile(CONFIG_FILE):
+    print("Generating the configuration file")
+    config = {
+        'DEBUG_ENABLED': DEBUG_ENABLED,
+        'TRACE_ENABLED': TRACE_ENABLED,
+        'DRIFT_ENABLED': DRIFT_ENABLED,
+        'DRIFT_THRESHOLD': DRIFT_THRESHOLD,
+        'DRIFT_NOTIFICATION': DRIFT_NOTIFICATION,
+        'LOG_PREDICTIONS': LOG_PREDICTIONS,
+        'HTTPS_ENABLED': HTTPS_ENABLED
+    }
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+    print("Done")
+
+
 # ----- Helper functions ----- #
 
 
+def get_config(param, default_value=None):
+    # print("Loading parameters from the configuration file")
+    with open(CONFIG_FILE) as f:
+        config = json.load(f)
+    if param in config:
+        return config[param]
+    else:
+        return default_value
+
+
+def set_config(param, value):
+    # print("Writing to the configuration file")
+    with open(CONFIG_FILE) as f:
+        config = json.load(f)
+    config[param] = value
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+
+
 def trace(message, token=""):
-    if TRACE_ENABLED:
+    if get_config('TRACE_ENABLED'):
         datetime_str = dt.today().strftime('%Y-%m-%d %H:%M:%S')
         with open(TRACE_FILE, "a") as f:
             f.write("%s|%s|%s\n" % (datetime_str, token, message))
@@ -89,7 +135,7 @@ def trace(message, token=""):
 
 def log(message, token=""):
     trace(message, token)
-    if DEBUG_ENABLED:
+    if get_config('DEBUG_ENABLED'):
         datetime_str = dt.today().strftime('%Y-%m-%d %H:%M:%S')
         print(datetime_str, token, message)
     return message
@@ -116,18 +162,22 @@ def perform_drift_detection(predict_dataframe, token=""):
             size=size_data,
             loc=predict_metadata.iloc[0],    # mean
             scale=predict_metadata.iloc[1])  # std
-        # wasserstein distance
+        # Wasserstein distance
         score = wasserstein_distance(model_metadata_normal, predict_metadata_normal)
         log("Wasserstein distance: " + str(score), token)
+        # Data drift detection
+        DRIFT_THRESHOLD = get_config('DRIFT_THRESHOLD')
         log("Drift threshold was set to: " + str(DRIFT_THRESHOLD), token)
         # Send web notification alerts
         if DRIFT_THRESHOLD is not None and score > DRIFT_THRESHOLD:
-            log("Data drift detected!\nSending a web notification...", token)
-            message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
-            if submit_web_notification(message, token):
-                log("Web notification sent!")
-            else:
-                log("Error occurred while sending a web notification")
+            log("Data drift detected!", token)
+            if get_config('DRIFT_NOTIFICATION'):
+                log("Sending a web notification", token)
+                message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
+                if submit_web_notification(message, token):
+                    log("Web notification sent!")
+                else:
+                    log("Error occurred while sending a web notification")
     else:
         log("Model metadata not found")
 
@@ -199,8 +249,8 @@ def color_drift_detection(val):
     return 'color: %s' % color
 
 
-def highlight_drift_detection(vals):
-    return ['background-color: yellow' if ("drift detected" in v) else '' for v in vals]
+def highlight_drift_detection(values):
+    return ['background-color: yellow' if ("drift detected" in v) else '' for v in values]
 
 
 # ----- REST API endpoints ----- #
@@ -226,12 +276,17 @@ def predict_api(data: str) -> str:
             try:
                 dataframe_json = data['dataframe_json']
                 dataframe = pd.read_json(dataframe_json, orient='values')
-                if DRIFT_ENABLED:
+                if get_config('DRIFT_ENABLED'):
                     perform_drift_detection(dataframe, api_token)
                 model = load(CURRENT_MODEL_FILE)
                 log("model:\n" + str(model))
                 log("dataframe:\n" + str(dataframe.head()))
                 predictions = model.predict(dataframe.values)
+                if get_config('LOG_PREDICTIONS'):
+                    log("Logging predictions")
+                    dataframe_predictions = dataframe.assign(predictions=predictions)
+                    dataframe_predictions.to_csv(PREDICTIONS_FILE, header=False, index=False, mode="a")
+                    log("Done")
                 log("Model predictions done", api_token)
                 return json.dumps(list(predictions))
             except Exception as e:
@@ -261,7 +316,36 @@ def deploy_api() -> str:
             log("model_metadata:\n" + str(model_metadata), api_token)
             model_metadata.to_pickle(CURRENT_META_FILE)
             log("The new model metadata file was saved successfully at:\n" + CURRENT_META_FILE)
-
+        # Check if debug is enabled
+        if "debug_enabled" in connexion.request.form:
+            debug_enabled = connexion.request.form['debug_enabled']
+            log("Updating DEBUG_ENABLED to " + debug_enabled)
+            set_config('DEBUG_ENABLED', bool(debug_enabled))
+        # Check if trace is enabled
+        if "trace_enabled" in connexion.request.form:
+            trace_enabled = connexion.request.form['trace_enabled']
+            log("Updating TRACE_ENABLED to " + trace_enabled)
+            set_config('TRACE_ENABLED', bool(trace_enabled))
+        # Check if drift is enabled
+        if "drift_enabled" in connexion.request.form:
+            drift_enabled = connexion.request.form['drift_enabled']
+            log("Updating DRIFT_ENABLED to " + drift_enabled)
+            set_config('DRIFT_ENABLED', bool(drift_enabled))
+        # Check if the drift threshold is set
+        if "drift_threshold" in connexion.request.form:
+            drift_threshold = connexion.request.form['drift_threshold']
+            log("Updating DRIFT_THRESHOLD to " + drift_threshold)
+            set_config('DRIFT_THRESHOLD', float(drift_threshold))
+        # Check if the drift notification is enabled
+        if "drift_notification" in connexion.request.form:
+            drift_notification = connexion.request.form['drift_notification']
+            log("Updating DRIFT_NOTIFICATION to " + drift_notification)
+            set_config('DRIFT_NOTIFICATION', bool(drift_notification))
+        # Check if the log predictions is enabled
+        if "log_predictions" in connexion.request.form:
+            log_predictions = connexion.request.form['log_predictions']
+            log("Updating LOG_PREDICTIONS to " + log_predictions)
+            set_config('LOG_PREDICTIONS', bool(log_predictions))
         return log("Model deployed", api_token)
     else:
         return log("Invalid token", api_token)
@@ -339,6 +423,16 @@ def trace_preview_api(key) -> str:
                           .set_properties(subset=['Date Time'], **{'width': '150px'})
                           .set_properties(subset=['Token'], **{'width': '250px'})
                           .render(table_title="Audit & Traceability"))
+            # Add config information
+            with open(CONFIG_FILE) as f:
+                config = json.load(f)
+            # result = json2html.convert(json=config) + result
+            dataframe_config = pd.DataFrame.from_records([config])
+            result = dataframe_config.style.hide_index().render() + "<br/>" + result
+            # .set_table_styles([{'selector': '', 'props': [('border', '4px solid #7a7')]}])
+            # Add link to log predictions if enabled
+            if get_config('LOG_PREDICTIONS'):
+                result = "<p><a href='/api/predictions_preview?key="+quote(key)+"'>Click here to visualize the predictions</a></p>" + result
             return result
         else:
             return log("Trace file is empty", key)
@@ -355,6 +449,21 @@ def trace_preview_api(key) -> str:
 #         return lines
 #     else:
 #         return log("Invalid token", api_token)
+
+
+def predictions_preview_api(key) -> str:
+    if USER_KEY == key.encode():
+        if exists(PREDICTIONS_FILE) and isfile(PREDICTIONS_FILE):
+            predictions_dataframe = pd.read_csv(PREDICTIONS_FILE, header=None)
+            predictions_dataframe.columns = [*predictions_dataframe.columns[:-1], 'predictions']
+            predictions_dataframe.fillna('', inplace=True)
+            result = (predictions_dataframe.style.hide_index()
+                      .render(table_title="Predictions"))
+            return result
+        else:
+            return log("Predictions are empty", key)
+    else:
+        return log("Invalid key", key)
 
 
 def test_workflow_submission_api() -> str:
