@@ -24,6 +24,7 @@ from tempfile import TemporaryFile
 from scipy.stats import norm
 from scipy.stats import wasserstein_distance
 from urllib.parse import quote
+from distutils.util import strtobool
 
 
 def install(package):
@@ -320,17 +321,17 @@ def deploy_api() -> str:
         if "debug_enabled" in connexion.request.form:
             debug_enabled = connexion.request.form['debug_enabled']
             log("Updating DEBUG_ENABLED to " + debug_enabled)
-            set_config('DEBUG_ENABLED', bool(debug_enabled))
+            set_config('DEBUG_ENABLED', bool(strtobool(debug_enabled)))
         # Check if trace is enabled
         if "trace_enabled" in connexion.request.form:
             trace_enabled = connexion.request.form['trace_enabled']
             log("Updating TRACE_ENABLED to " + trace_enabled)
-            set_config('TRACE_ENABLED', bool(trace_enabled))
+            set_config('TRACE_ENABLED', bool(strtobool(trace_enabled)))
         # Check if drift is enabled
         if "drift_enabled" in connexion.request.form:
             drift_enabled = connexion.request.form['drift_enabled']
             log("Updating DRIFT_ENABLED to " + drift_enabled)
-            set_config('DRIFT_ENABLED', bool(drift_enabled))
+            set_config('DRIFT_ENABLED', bool(strtobool(drift_enabled)))
         # Check if the drift threshold is set
         if "drift_threshold" in connexion.request.form:
             drift_threshold = connexion.request.form['drift_threshold']
@@ -340,12 +341,12 @@ def deploy_api() -> str:
         if "drift_notification" in connexion.request.form:
             drift_notification = connexion.request.form['drift_notification']
             log("Updating DRIFT_NOTIFICATION to " + drift_notification)
-            set_config('DRIFT_NOTIFICATION', bool(drift_notification))
+            set_config('DRIFT_NOTIFICATION', bool(strtobool(drift_notification)))
         # Check if the log predictions is enabled
         if "log_predictions" in connexion.request.form:
             log_predictions = connexion.request.form['log_predictions']
             log("Updating LOG_PREDICTIONS to " + log_predictions)
-            set_config('LOG_PREDICTIONS', bool(log_predictions))
+            set_config('LOG_PREDICTIONS', bool(strtobool(log_predictions)))
         return log("Model deployed", api_token)
     else:
         return log("Invalid token", api_token)
@@ -417,19 +418,37 @@ def trace_preview_api(key) -> str:
                 t.seek(0)
                 trace_dataframe = pd.read_csv(t, sep='|', names=header, engine='python')
                 trace_dataframe.fillna('', inplace=True)
-                result = (trace_dataframe.style.hide_index()
-                          .applymap(color_drift_detection)
-                          .apply(highlight_drift_detection)
-                          .set_properties(subset=['Date Time'], **{'width': '150px'})
-                          .set_properties(subset=['Token'], **{'width': '250px'})
-                          .render(table_title="Audit & Traceability"))
+                #result = (trace_dataframe.style.hide_index()
+                #          .applymap(color_drift_detection)
+                #          .apply(highlight_drift_detection)
+                #          .set_properties(subset=['Date Time'], **{'width': '150px'})
+                #          .set_properties(subset=['Token'], **{'width': '250px'})
+                #          .render(table_title="Audit & Traceability"))
             # Add config information
             with open(CONFIG_FILE) as f:
                 config = json.load(f)
             # result = json2html.convert(json=config) + result
             dataframe_config = pd.DataFrame.from_records([config])
-            result = dataframe_config.style.hide_index().render() + "<br/>" + result
+            #result = dataframe_config.style.hide_index().render() + "<br/>" + result
             # .set_table_styles([{'selector': '', 'props': [('border', '4px solid #7a7')]}])
+            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center', index=False)
+            trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
+            result = """
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <title>Audit & Traceability</title>
+                  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+              </head>
+                <body class="container">
+                  <h1 class="text-center my-4" style="color:#003050;">Audit & Traceability</h1>
+                  <div style="test text-align:center">{0}</div>
+                  <br/>
+                  <br/>
+                  <br/>
+                  <div style="text-align:center">{1}</div>
+                </body></html>""".format(config_result, trace_result)
             # Add link to log predictions if enabled
             if get_config('LOG_PREDICTIONS'):
                 result = "<p><a href='/api/predictions_preview?key="+quote(key)+"'>Click here to visualize the predictions</a></p>" + result
@@ -457,8 +476,21 @@ def predictions_preview_api(key) -> str:
             predictions_dataframe = pd.read_csv(PREDICTIONS_FILE, header=None)
             predictions_dataframe.columns = [*predictions_dataframe.columns[:-1], 'predictions']
             predictions_dataframe.fillna('', inplace=True)
-            result = (predictions_dataframe.style.hide_index()
-                      .render(table_title="Predictions"))
+            #result = (predictions_dataframe.style.hide_index()
+            #          .render(table_title="Predictions"))
+            result = predictions_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
+            result = """
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="UTF-8">
+                  <title>Machine Learning Preview</title>
+                  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+              </head>
+                <body class="container">
+                  <h1 class="text-center my-4" style="color:#003050;">Predictions Preview</h1>
+                  <div style="text-align:center">{0}</div>
+                </body></html>""".format(result)
             return result
         else:
             return log("Predictions are empty", key)
