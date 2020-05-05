@@ -74,13 +74,12 @@ if DATA_PATH is not None and DATA_PATH.startswith("http"):
     remove(filename)
     print("OK")
 else:
-    print('CAROL')
     DATASET_PATH = variables.get('DATA_PATH')
     DATASET_NAME = DATASET_PATH
     globalspaceapi.connect()
     java_file = gateway.jvm.java.io.File(DATASET_PATH)
     globalspaceapi.pullFile(DATASET_PATH, java_file)
-    
+
 #CLASSIFICATION DATASET 
 if DATASET_TYPE == 'CLASSIFICATION':  
     k = 0
@@ -145,7 +144,7 @@ if DATASET_TYPE == 'CLASSIFICATION':
         variables.put("DATASET_TYPE", DATASET_TYPE)        
     
     print("END Import_Image_Dataset")
-    
+
 #DETECTION / SEGMENTATION DATASET    
 elif DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
     print(DATASET_TYPE)
