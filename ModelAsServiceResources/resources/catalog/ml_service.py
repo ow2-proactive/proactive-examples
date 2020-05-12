@@ -404,6 +404,39 @@ def redeploy_api() -> str:
         return log("Invalid token", api_token)
 
 
+def update_api() -> str:
+    api_token = connexion.request.form["api_token"]
+    log("calling update_api", api_token)
+    if auth_token(api_token):
+        # Update the debug parameter
+        debug_enabled = connexion.request.form['debug_enabled']
+        log("Updating DEBUG_ENABLED to " + debug_enabled)
+        set_config('DEBUG_ENABLED', bool(strtobool(debug_enabled)))
+        # Update the trace parameter
+        trace_enabled = connexion.request.form['trace_enabled']
+        log("Updating TRACE_ENABLED to " + trace_enabled)
+        set_config('TRACE_ENABLED', bool(strtobool(trace_enabled)))
+        # Update the drift parameter
+        drift_enabled = connexion.request.form['drift_enabled']
+        log("Updating DRIFT_ENABLED to " + drift_enabled)
+        set_config('DRIFT_ENABLED', bool(strtobool(drift_enabled)))
+        # Update the drift threshold parameter
+        drift_threshold = connexion.request.form['drift_threshold']
+        log("Updating DRIFT_THRESHOLD to " + drift_threshold)
+        set_config('DRIFT_THRESHOLD', float(drift_threshold))
+        # Update the drift notification parameter
+        drift_notification = connexion.request.form['drift_notification']
+        log("Updating DRIFT_NOTIFICATION to " + drift_notification)
+        set_config('DRIFT_NOTIFICATION', bool(strtobool(drift_notification)))
+        # Update the log predictions parameter
+        log_predictions = connexion.request.form['log_predictions']
+        log("Updating LOG_PREDICTIONS to " + log_predictions)
+        set_config('LOG_PREDICTIONS', bool(strtobool(log_predictions)))
+        return log("Service parameters updated", api_token)
+    else:
+        return log("Invalid token", api_token)
+
+
 def trace_preview_api(key) -> str:
     if USER_KEY == key.encode():
         if exists(TRACE_FILE) and isfile(TRACE_FILE):
