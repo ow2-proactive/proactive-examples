@@ -68,6 +68,10 @@ service.setWorkflowName(action)
 if( !actionVariables.isEmpty() ){
     actionVariables.each{ k, v -> service.putVariablesItem("${k}", "${v}") }
 }
-serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId as int, service, variables.get("PA_JOB_ID"))
+def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId as int, service, variables.get("PA_JOB_ID"))
+
+if (action.toLowerCase().contains("finish")) {
+    schedulerapi.waitForJob(serviceInstanceData.getJobSubmissions().get(0).getJobId().toString(), 30000)
+}
 
 println("END " + variables.get("PA_TASK_NAME"))
