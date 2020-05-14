@@ -1,24 +1,28 @@
+import base64
+import json
+import logging
 import re
+import shutil
 import time
 import uuid
-import json
-import shutil
-import base64
-import logging
-import requests
 import pandas as pd
-from PIL import Image
+import requests
+
 from io import BytesIO
-from os.path import join, exists
 from os import makedirs
+from os.path import join, exists
+from PIL import Image
+
 
 def raiser(msg): raise Exception(msg)
+
 
 def get_thumbnail(path):
     i = Image.open(path)
     extension = i.format
     i.thumbnail((200, 200), Image.LANCZOS)
     return i, extension
+
 
 def image_base64(im):
     if isinstance(im, str):
@@ -27,12 +31,14 @@ def image_base64(im):
         im.save(buffer, extension)
         return base64.b64encode(buffer.getvalue()).decode()
 
+
 def image_formatter(im):
-    extension = im.format
     return f'<img src="data:image/extension;base64,{image_base64(im)}" height="200" width="200">'
+
 
 def image_formatter_url(im_url):
     return """<img src="{0}" height="100" width="100"/>""".format(im_url)
+
 
 def variables_get(name, default_value=None):
     if 'variables' in locals():
@@ -43,24 +49,25 @@ def variables_get(name, default_value=None):
     else:
         return default_value
 
+
 # Keyword search
-search_term = "ants" 
+search_term = "ants"
 # Maximum number of images
-query_size = 2 
+query_size = 2
 # Get data folder
-DATA_FOLDER = 'images'
+data_folder = 'images'
 
 if 'variables' in locals():
-    host_site   = variables.get("HOST_SITE") 
-    query_size  = int(variables.get("QUERY_SIZE")) if variables.get("QUERY_SIZE") else raiser("QUERY_SIZE not defined!")
+    host_site = variables.get("HOST_SITE")
+    query_size = int(variables.get("QUERY_SIZE")) if variables.get("QUERY_SIZE") else raiser("QUERY_SIZE not defined!")
     search_term = variables.get('SEARCH_TERM') if variables.get("SEARCH_TERM") else raiser("SEARCH_TERM not defined!")
-    DATA_FOLDER = variables.get("DATA_FOLDER") if variables.get("DATA_FOLDER") else raiser("DATA_FOLDER not defined!")
+    data_folder = variables.get("DATA_FOLDER") if variables.get("DATA_FOLDER") else raiser("DATA_FOLDER not defined!")
 
 # Get an unique ID
 ID = str(uuid.uuid4())
 
 # Create an empty dir
-images_path = join(DATA_FOLDER, search_term)
+images_path = join(data_folder, search_term)
 if exists(images_path):
     shutil.rmtree(images_path)
 makedirs(images_path)
@@ -69,47 +76,46 @@ print("images_path: " + images_path)
 
 # search image from bing navigator
 def search_bing(query_size, search_term):
-	# Bing API config
-	# https://docs.microsoft.com/en-us/azure/cognitive-services/bing-image-search/quickstarts/python
-	subscription_key = "70b641bdd21647089d79c0ab0949ede1"
-	search_url = "https://api.cognitive.microsoft.com/bing/v7.0/images/search"
+    # Bing API config
+    # https://docs.microsoft.com/en-us/azure/cognitive-services/bing-image-search/quickstarts/python
+    subscription_key = "70b641bdd21647089d79c0ab0949ede1"
+    search_url = "https://api.cognitive.microsoft.com/bing/v7.0/images/search"
 
-	# Bing request
-	headers = {"Ocp-Apim-Subscription-Key" : subscription_key}
-	params  = {"q": search_term, "license": "public", "imageType": "photo"}
-	response = requests.get(search_url, headers=headers, params=params)
-	response.raise_for_status()
-	search_results = response.json()
-	thumbnail_urls = [img["thumbnailUrl"] for img in search_results["value"][:query_size]]
-    
-	return thumbnail_urls
-    
+    # Bing request
+    headers = {"Ocp-Apim-Subscription-Key": subscription_key}
+    params = {"q": search_term, "license": "public", "imageType": "photo"}
+    response = requests.get(search_url, headers=headers, params=params)
+    response.raise_for_status()
+    search_results = response.json()
+    thumbnail_urls = [img["thumbnailUrl"] for img in search_results["value"][:query_size]]
+
+    return thumbnail_urls
+
+
 # Search image from DuckDuckGo navigator    
-def search_DuckDuckGo(query_size, search_term):
-    
+def search_duckduckgo(query_size, search_term):
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
 
-    url = 'https://duckduckgo.com/';
+    url = 'https://duckduckgo.com/'
     thumbnail_image = []
-    list_size =  query_size -1
-    
+    list_size = query_size - 1
     params = {
-    	'q': search_term,
-    };
+        'q': search_term,
+    }
 
-    logger.debug("Hitting DuckDuckGo for Token");
+    logger.debug("Hitting DuckDuckGo for Token")
 
     #   First make a request to above URL, and parse out the 'vqd'
     #   This is a special token, which should be used in the subsequent request
     res = requests.post(url, data=params)
-    searchObj = re.search(r'vqd=([\d-]+)\&', res.text, re.M|re.I);
+    search_obj = re.search(r'vqd=([\d-]+)\&', res.text, re.M | re.I)
 
-    if not searchObj:
-        logger.error("Token Parsing Failed !");
-        return -1;
+    if not search_obj:
+        logger.error("Token Parsing Failed !")
+        return -1
 
-    logger.debug("Obtained Token");
+    logger.debug("Obtained Token")
 
     headers = {
         'authority': 'duckduckgo.com',
@@ -126,57 +132,58 @@ def search_DuckDuckGo(query_size, search_term):
         ('l', 'us-en'),
         ('o', 'json'),
         ('q', search_term),
-        ('vqd', searchObj.group(1)),
+        ('vqd', search_obj.group(1)),
         ('f', ',,,'),
         ('p', '1'),
         ('v7exp', 'a'),
     )
 
-    requestUrl = url + "i.js";
-
-    logger.debug("Hitting Url : %s", requestUrl)
+    request_url = url + "i.js"
+    logger.debug("Hitting Url : %s", request_url)
 
     while True:
         while True:
             try:
-                res = requests.get(requestUrl, headers=headers, params=params)
-                data = json.loads(res.text);
-                break;
+                res = requests.get(request_url, headers=headers, params=params)
+                data = json.loads(res.text)
+                break
             except ValueError as e:
-                logger.debug("Hitting Url Failure - Sleep and Retry: %s", requestUrl)
-                time.sleep(5);
-                continue;
+                logger.debug("Hitting Url Failure - Sleep and Retry: %s", request_url)
+                time.sleep(5)
+                continue
 
-        logger.debug("Hitting Url Success : %s", requestUrl)
+        logger.debug("Hitting Url Success : %s", request_url)
 
         if list_size < query_size:
-            thumbnail_image += data["results"] 
-        else: break
-        
-        
+            thumbnail_image += data["results"]
+        else:
+            break
+
         if "next" not in data:
             logger.debug("No Next Page - Exiting")
-            exit(0);
-            
+            exit(0)
+
         list_size = len(thumbnail_image)
-        requestUrl = url + data["next"]
+        request_url = url + data["next"]
         thumbnail_image[0: query_size]
         thumbnail_urls = [i['thumbnail'] for i in thumbnail_image if 'thumbnail' in i]
-        
+
     return thumbnail_urls
 
-# Check host site option 
-thumbnail_urls = search_DuckDuckGo(query_size, search_term) if host_site == 'DuckDuckGo' else search_bing(query_size, search_term)
+
+# Check host site option
+thumbnail_urls = search_duckduckgo(query_size, search_term) \
+    if host_site == 'DuckDuckGo' else search_bing(query_size, search_term)
 
 # Create a image dataframe for preview
-images_df = pd.DataFrame(columns = ['Images'])
+images_df = pd.DataFrame(columns=['Images'])
 
 # Save images results
 idx = 1
 for i in range(len(thumbnail_urls)):
     image_url = thumbnail_urls[i]
     print(i, image_url)
-    time.sleep(3)
+    # time.sleep(3)
     image_data = requests.get(image_url)
     image_data.raise_for_status()
     image = Image.open(BytesIO(image_data.content))
@@ -190,9 +197,9 @@ print(images_df)
 result = ''
 with pd.option_context('display.max_colwidth', -1):
     result = images_df.to_html(
-        escape=False, 
-        formatters=dict(Images=image_formatter), 
-        classes='table table-bordered table-striped', 
+        escape=False,
+        formatters=dict(Images=image_formatter),
+        classes='table table-bordered table-striped',
         justify='center')
 
 result = """
