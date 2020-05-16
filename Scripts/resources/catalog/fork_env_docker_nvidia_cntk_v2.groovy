@@ -21,6 +21,14 @@ if ((new File("/.dockerenv")).exists() && !(new File("/var/run/docker.sock")).ex
     println ("Already inside docker container, without host docker access")
     DOCKER_ENABLED = false
 }
+if (DOCKER_ENABLED) {
+    try {
+        Runtime.getRuntime().exec("docker")
+    } catch (Exception e) {
+        println "Docker does not exists : " + e.getMessage()
+        DOCKER_ENABLED = false
+    }
+}
 
 DOCKER_GPU_ENABLED = false
 if ("true".equals(variables.get("DOCKER_GPU_ENABLED"))) {
