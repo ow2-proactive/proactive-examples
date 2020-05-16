@@ -91,7 +91,7 @@ if (DOCKER_ENABLED) {
             }
         } catch (Exception e) {
             println "Error while getting the docker version: " + e.getMessage()
-            println "DOCKER_GPU_ENABLED is disabled"
+            println "DOCKER_GPU_ENABLED is off"
         }
         // rootless containers leveraging NVIDIA GPUs
         // needed when cgroups is disabled in nvidia-container-runtime
