@@ -12,6 +12,35 @@ from io import BytesIO
 from os import makedirs
 from os.path import join, exists
 from PIL import Image
+from ast import literal_eval as make_tuple
+
+
+# Keyword search
+search_term = "ants"
+# Maximum number of images
+query_size = 2
+# Get data folder
+data_path = 'images'
+
+if 'variables' in locals():
+    host_site = variables.get("HOST_SITE")
+    query_size = int(variables.get("QUERY_SIZE")) if variables.get("QUERY_SIZE") else raiser("QUERY_SIZE not defined!")
+    search_term = variables.get('SEARCH_TERM') if variables.get("SEARCH_TERM") else raiser("SEARCH_TERM not defined!")
+    data_path = variables.get("DATA_PATH") if variables.get("DATA_PATH") else raiser("DATA_PATH not defined!")
+    img_size =  variables.get("IMG_SIZE") if variables.get("IMG_SIZE") else raiser("IMG_SIZE not defined!")
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Get image size
+img_size = make_tuple(img_size)
+
+# Create an empty dir
+images_path = join(data_path, search_term)
+if exists(images_path):
+    shutil.rmtree(images_path)
+makedirs(images_path)
+print("images_path: " + images_path)
 
 
 def raiser(msg): raise Exception(msg)
@@ -33,11 +62,11 @@ def image_base64(im):
 
 
 def image_formatter(im):
-    return f'<img src="data:image/extension;base64,{image_base64(im)}" height="200" width="200">'
+    return f'<img src="data:image/extension;base64,{image_base64(im)}" height="img_size" width="img_size">'
 
 
-def image_formatter_url(im_url):
-    return """<img src="{0}" height="100" width="100"/>""".format(im_url)
+#def image_formatter_url(im_url):
+#    return """<img src="{0}" height="100" width="100"/>""".format(im_url)
 
 
 def variables_get(name, default_value=None):
@@ -48,30 +77,6 @@ def variables_get(name, default_value=None):
             return default_value
     else:
         return default_value
-
-
-# Keyword search
-search_term = "ants"
-# Maximum number of images
-query_size = 2
-# Get data folder
-data_folder = 'images'
-
-if 'variables' in locals():
-    host_site = variables.get("HOST_SITE")
-    query_size = int(variables.get("QUERY_SIZE")) if variables.get("QUERY_SIZE") else raiser("QUERY_SIZE not defined!")
-    search_term = variables.get('SEARCH_TERM') if variables.get("SEARCH_TERM") else raiser("SEARCH_TERM not defined!")
-    data_folder = variables.get("DATA_FOLDER") if variables.get("DATA_FOLDER") else raiser("DATA_FOLDER not defined!")
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Create an empty dir
-images_path = join(data_folder, search_term)
-if exists(images_path):
-    shutil.rmtree(images_path)
-makedirs(images_path)
-print("images_path: " + images_path)
 
 
 # search image from bing navigator
@@ -165,8 +170,8 @@ def search_duckduckgo(query_size, search_term):
 
         list_size = len(thumbnail_image)
         request_url = url + data["next"]
-        thumbnail_image[0: query_size]
-        thumbnail_urls = [i['thumbnail'] for i in thumbnail_image if 'thumbnail' in i]
+        thumbnail_img = thumbnail_image[0: query_size]
+        thumbnail_urls = [i['thumbnail'] for i in thumbnail_img if 'thumbnail' in i]
 
     return thumbnail_urls
 
