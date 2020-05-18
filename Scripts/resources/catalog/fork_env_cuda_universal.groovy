@@ -78,6 +78,14 @@ if ((new File("/.dockerenv")).exists() && ! (new File("/var/run/docker.sock")).e
     println ("Already inside docker container, without host docker access")
     CONTAINER_ENABLED = false
 }
+if (CONTAINER_ENABLED) {
+    try {
+        Runtime.getRuntime().exec(CONTAINER_PLATFORM + " --help")
+    } catch (Exception e) {
+        println CONTAINER_PLATFORM + " does not exists : " + e.getMessage()
+        CONTAINER_ENABLED = false
+    }
+}
 
 def HOST_LOG_PATH = null
 if (variables.get("HOST_LOG_PATH") != null && !variables.get("HOST_LOG_PATH").isEmpty()) {
@@ -131,12 +139,38 @@ if (CONTAINER_ENABLED && (
     cmd.add("--rm")
     cmd.add("--env")
     cmd.add("HOME=/tmp")
+
     if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
-        cmd.add("--runtime=nvidia")
+        if ("docker".equalsIgnoreCase(CONTAINER_PLATFORM)) {
+            // Versions earlier than 19.03 require nvidia-docker2 and the --runtime=nvidia flag.
+            // On versions including and after 19.03, you will use the nvidia-container-toolkit package
+            // and the --gpus all flag.
+            try {
+                def sout = new StringBuffer(), serr = new StringBuffer()
+                def proc = 'docker version -f "{{.Server.Version}}"'.execute()
+                proc.consumeProcessOutput(sout, serr)
+                proc.waitForOrKill(1000)
+                docker_version = sout.toString()
+                docker_version = docker_version.substring(1, docker_version.length()-2)
+                docker_version_major = docker_version.split("\\.")[0].toInteger()
+                docker_version_minor = docker_version.split("\\.")[1].toInteger()
+                println "Docker version: " + docker_version
+                if ((docker_version_major >= 19) && (docker_version_minor >= 3)) {
+                    cmd.add("--gpus=all")
+                } else {
+                    cmd.add("--runtime=nvidia")
+                }
+            } catch (Exception e) {
+                println "Error while getting the docker version: " + e.getMessage()
+                println "DOCKER_GPU_ENABLED is off"
+            }
+        } else {
+            cmd.add("--runtime=nvidia")
+        }
         // rootless containers leveraging NVIDIA GPUs
         // needed when cgroups is disabled in nvidia-container-runtime
         // /etc/nvidia-container-runtime/config.toml => no-cgroups = true
-        cmd.add("--privileged") 
+        cmd.add("--privileged") // https://github.com/NVIDIA/nvidia-docker/issues/1171
     }
 
     switch (family) {
