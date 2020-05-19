@@ -25,7 +25,9 @@ if (eventMessage == null || eventMessage.isEmpty()) {
 // Get event severity or set default
 def eventSeverity = variables.get("SEVERITY")
 if (eventSeverity == null || eventSeverity.isEmpty()) {
-    eventSeverity = "INFO"
+    eventSeverity = EventRequest.EventSeverityEnum.INFO
+} else {
+    eventSeverity = EventRequest.EventSeverityEnum.valueOf(eventSeverity)
 }
 
 //Get session id
