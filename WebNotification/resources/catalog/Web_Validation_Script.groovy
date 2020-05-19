@@ -38,7 +38,11 @@ def sessionId = schedulerapi.getSession()
 schedulerapi.pauseJob(variables.get("PA_JOB_ID"))
 
 //Create validation request
-def validationRequest = new ValidationRequest().jobId(jobId).message(validationMessage)
+def validationRequest = new ValidationRequest()
+        .bucketName(genericInformation.get("bucketName"))
+        .workflowName(variables.get("PA_JOB_NAME"))
+        .jobId(jobId)
+        .message(validationMessage)
 
 try {
     Validation result = validationRestApi.createValidationUsingPOST(sessionId, validationRequest)
