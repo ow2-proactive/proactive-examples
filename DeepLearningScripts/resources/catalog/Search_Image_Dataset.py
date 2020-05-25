@@ -14,6 +14,7 @@ from os.path import join, exists
 from PIL import Image
 from ast import literal_eval as make_tuple
 
+def raiser(msg): raise Exception(msg)
 
 # Keyword search
 search_term = "ants"
