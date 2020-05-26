@@ -1,7 +1,8 @@
-print("BEGIN Import_Image_Dataset")
+__file__ = variables.get("PA_TASK_NAME")
+
+#print("BEGIN Import_Image_Dataset")
 
 import re
-import os
 import json
 import wget
 import uuid 
@@ -18,30 +19,21 @@ from sklearn.model_selection import train_test_split
 
 SPLIT_SETS  = ['train','val','test']
 
-if 'variables' in locals():
-  if variables.get("DATASET_URL") is not None:
-    DATASET_URL = variables.get("DATASET_URL")
-  if variables.get("TRAIN_SPLIT") is not None:
+DATA_PATH = variables.get("DATA_PATH")
+print("DATA_PATH: " + DATA_PATH)
+
+if variables.get("TRAIN_SPLIT") is not None:
     SPLIT_TRAIN = float(str(variables.get("TRAIN_SPLIT")))
-  if variables.get("VAL_SPLIT") is not None:
+if variables.get("VAL_SPLIT") is not None:
     SPLIT_VAL = float(str(variables.get("VAL_SPLIT")))
-  if variables.get("TEST_SPLIT") is not None:
+if variables.get("TEST_SPLIT") is not None:
     SPLIT_TEST = float(str(variables.get("TEST_SPLIT")))
-  
+    
 DATASET_TYPE = variables.get("DATASET_TYPE")
 DATASET_TYPE = DATASET_TYPE.upper()
-print(DATASET_TYPE)
-# Get an unique ID
-ID = str(uuid.uuid4())
+print("DATASET_TYPE: ", DATASET_TYPE)
 
-# Define localspace
-LOCALSPACE = join('data', ID)
-os.makedirs(LOCALSPACE, exist_ok=True)
-print("LOCALSPACE:  " + LOCALSPACE)
-print("DATASET_URL: " + DATASET_URL)
-assert DATASET_URL is not None
-
-print("Split information: ")
+print("Split information:")
 print("SPLIT_TRAIN: " + str(SPLIT_TRAIN))
 print("SPLIT_VAL:   " + str(SPLIT_VAL))
 print("SPLIT_TEST:  " + str(SPLIT_TEST))
@@ -52,26 +44,41 @@ assert SPLIT_TEST >= 0.0
 assert (SPLIT_TRAIN + SPLIT_VAL + SPLIT_TEST) == 1.0
 if SPLIT_TRAIN == 0.0 and SPLIT_VAL > 0.0:
   raise AssertionError("SPLIT_VAL cannot be defined when SPLIT_TRAIN equals zero") 
+        
+if DATA_PATH is not None and DATA_PATH.startswith("http"):
+    # Get an unique ID
+    ID = str(uuid.uuid4())
 
-DATASET_NAME = splitext(DATASET_URL[DATASET_URL.rfind("/")+1:])[0]
-DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
-os.makedirs(DATASET_PATH, exist_ok=True)
+    # Define localspace
+    LOCALSPACE = join('data', ID)
+    os.makedirs(LOCALSPACE, exist_ok=True)
+    print("LOCALSPACE:  " + LOCALSPACE)
 
-print("Dataset information: ")
-print("DATASET_NAME: " + DATASET_NAME)
-print("DATASET_PATH: " + DATASET_PATH)
+    DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/")+1:])[0]
+    DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
+    os.makedirs(DATASET_PATH, exist_ok=True)
 
-print("Downloading...")
-filename = wget.download(DATASET_URL, DATASET_PATH)
-print("FILENAME: " + filename)
-print("OK")
+    print("Dataset information: ")
+    print("DATASET_NAME: " + DATASET_NAME)
+    print("DATASET_PATH: " + DATASET_PATH)
 
-print("Extracting...")
-dataset_zip = zipfile.ZipFile(filename)
-dataset_zip.extractall(DATASET_PATH)
-dataset_zip.close()
-remove(filename)
-print("OK")
+    print("Downloading...")
+    filename = wget.download(DATA_PATH, DATASET_PATH)
+    print("FILENAME: " + filename)
+    print("OK")
+
+    print("Extracting...")
+    dataset_zip = zipfile.ZipFile(filename)
+    dataset_zip.extractall(DATASET_PATH)
+    dataset_zip.close()
+    remove(filename)
+    print("OK")
+else:
+    DATASET_PATH = variables.get('DATA_PATH')
+    DATASET_NAME = DATASET_PATH
+    globalspaceapi.connect()
+    java_file = gateway.jvm.java.io.File(DATASET_PATH)
+    globalspaceapi.pullFile(DATASET_PATH, java_file)
 
 #CLASSIFICATION DATASET 
 if DATASET_TYPE == 'CLASSIFICATION':  
@@ -79,6 +86,13 @@ if DATASET_TYPE == 'CLASSIFICATION':
     images_list = []
     label_list = []
     folder_name = []
+     
+    # remove train, test and val folder if exists
+    for SPLIT_NAME in SPLIT_SETS:
+        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
+        if exists(SPLIT_PATH):
+            shutil.rmtree(SPLIT_PATH)
+        
     for root in listdir(DATASET_PATH):
         if (not root.startswith('.')):
             folder_name.append(root)
@@ -118,7 +132,9 @@ if DATASET_TYPE == 'CLASSIFICATION':
 
     for SPLIT_NAME in SPLIT_SETS:
         SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
-        print("SPLIT_PATH: " + SPLIT_PATH)
+        if exists(SPLIT_PATH):
+            shutil.rmtree(SPLIT_PATH)
+        print("SPLIT_PATH:" + SPLIT_PATH)
         move_images(SPLIT_PATH, images_split[SPLIT_NAME], labels_split[SPLIT_NAME], folder_name)
 
     if 'variables' in locals():
@@ -128,7 +144,7 @@ if DATASET_TYPE == 'CLASSIFICATION':
         variables.put("DATASET_TYPE", DATASET_TYPE)        
     
     print("END Import_Image_Dataset")
-    
+
 #DETECTION / SEGMENTATION DATASET    
 elif DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
     print(DATASET_TYPE)
@@ -137,7 +153,13 @@ elif DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
     images_list_gt = []
     folder_name = ['images', 'classes']          
     folder_number = len(next(os.walk(DATASET_PATH))[1])
-
+    
+    # remove train, test and val folder if exists
+    for SPLIT_NAME in SPLIT_SETS:
+        SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
+        if exists(SPLIT_PATH):
+            shutil.rmtree(SPLIT_PATH)
+            
     if folder_number == 2:
         image_dir = join(DATASET_PATH, 'images')
         label_dir = join(DATASET_PATH, 'classes')
@@ -166,7 +188,7 @@ elif DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
     
     images_list = sorted(images_list)
     images_list_gt = sorted(images_list_gt)
-
+            
     print("Splitting the dataset into train and test")
     images_train, images_test, images_train_gt, images_test_gt = train_test_split(images_list, images_list_gt, test_size=SPLIT_TEST, random_state=1)
     
@@ -215,3 +237,5 @@ elif DATASET_TYPE == 'DETECTION' or DATASET_TYPE == 'SEGMENTATION':
         
 else: 
     print('Please, check your dataset type variable!')
+    
+print("END " + __file__)

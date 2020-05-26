@@ -10,22 +10,19 @@ def channel = "Service_Instance_" + instanceId
 
 // Connect to Cloud Automation API
 def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
-def pcaStatesGI = genericInformation.get("pca.states")
 
 // If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
 def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
-if (currentStatus.equals("FINISHED") || currentStatus.equals("PAUSED") || (pcaStatesGI.equals("(VOID,RUNNING)") && synchronizationapi.get(channel, "RESUMED"))){
+if (currentStatus.equals("FINISHED")){
     variables.put("IS_FINISHED",true)
-    if (currentStatus.equals("FINISHED")){
-        synchronizationapi.deleteChannel(channel)
-        // Remove token in the current node
-        token = instanceName
-        nodeUrl = variables.get("PA_NODE_URL")
-        println("Current nodeUrl: " + nodeUrl)
-        println("Removing token:  " + token)
-        rmapi.connect()
-        rmapi.removeNodeToken(nodeUrl, token)
-    }
+    synchronizationapi.deleteChannel(channel)
+    // Remove token in the current node
+    token = instanceName
+    nodeUrl = variables.get("PA_NODE_URL")
+    println("Current nodeUrl: " + nodeUrl)
+    println("Removing token:  " + token)
+    rmapi.connect()
+    rmapi.removeNodeToken(nodeUrl, token)
 } else {
     // Check if container has been stopped abnormally
     def isContainerRunning = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().getText().trim().toBoolean()

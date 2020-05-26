@@ -125,17 +125,9 @@ if [ -z "$INSTANCE_NAME" ]; then
     exit 1
 fi
 
-if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
-    RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
-    STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
-    if [ "$RUNNING" == "true" ]; then
-        echo "$INSTANCE_NAME" container is running
-        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
-	elif [ "$STOPPED" == "exited" ]; then
-		echo Starting docker container: "$INSTANCE_NAME"
-        INSTANCE_STATUS=$(docker start $INSTANCE_NAME 2>&1)
-        echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
-    fi
+if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
+    echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
+    exit 128
 else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
@@ -151,7 +143,7 @@ else
         INSTANCE_STATUS=$(eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT "$DOCKER_OPTIONS" -d $DOCKER_IMAGE "$DOCKER_COMMAND"" 2>&1)
     fi
     ################################################################################
-    if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
+    if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
         if [ "$RUNNING" == "true" ]; then
             echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
@@ -177,6 +169,11 @@ echo "$containerID" > $INSTANCE_NAME"_containerID"
           <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw" language="groovy"></file>
         </script>
       </post>
+      <cleaning>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw" language="groovy"></file>
+        </script>
+      </cleaning>
       <metadata>
         <positionTop>
             387
@@ -205,66 +202,13 @@ echo "$containerID" > $INSTANCE_NAME"_containerID"
       </depends>
       <scriptExecutable>
         <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def channel = "Service_Instance_" + instanceId
-
-// Connect to Cloud Automation API
-def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
-
-// If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
-def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
-if (currentStatus.equals("FINISHED") || currentStatus.equals("PAUSED") || synchronizationapi.get(channel, "RESUMED")){
-    variables.put("IS_FINISHED",true)
-    if (currentStatus.equals("FINISHED")){
-        synchronizationapi.deleteChannel(channel)
-    }
-} else {
-    // Check if container has been stopped abnormally
-    def isContainerRunning = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().getText().trim().toBoolean()
-    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "FINISH_LAUNCHED")) && (!synchronizationapi.get(channel, "PAUSE_LAUNCHED"))){
-        currentStatus = 'ERROR'
-        println("[ERROR] An internal error occured in docker container: " + instanceName)
-        // Update docker container is not running
-        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
-        serviceInstanceData.setInstanceStatus(currentStatus)
-        serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
-        // Tell the CRON loop to stop
-        variables.put("IS_FINISHED",true)
-        // Exit with error
-        System.exit(1)
-    } else {
-        // Fetch all logs or only new logs since last fetch time mark
-        def lastTime=variables.get('LAST_TIME_MARKER')
-        def fetchLogsCmd = lastTime ? ["docker", "logs", "--since", lastTime, instanceName] : ["docker", "logs", instanceName]
-        fetchLogsCmd.execute().waitForProcessOutput(System.out, System.err)
-    }
-}
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw" language="groovy"></file>
         </script>
       </scriptExecutable>
       <controlFlow >
         <loop target="Loop_Over_Instance_Status">
           <script>
-            <code language="groovy">
-              <![CDATA[
-// Check if loop task has ordered to finish the loop
-def isFinished = variables.get('IS_FINISHED') as boolean
-loop = isFinished ? false : '*/1 * * * *'
-
-// Set a time marker to fetch logs since this marker.
-variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
-]]>
-            </code>
+            <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw" language="groovy"></file>
           </script>
         </loop>
       </controlFlow>

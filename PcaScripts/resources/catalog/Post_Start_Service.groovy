@@ -63,7 +63,8 @@ if (proxyfied.toLowerCase()=="true"){
 def Node node = new Node();
 node.setName(variables.get("PA_NODE_NAME"))
 node.setHost(variables.get("PA_NODE_HOST"))
-node.setNodeSourceName("")
+node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
+node.setUrl(variables.get("PA_NODE_URL"))
 
 // Deployment
 def Deployment deployment = new Deployment()
@@ -84,7 +85,7 @@ println(serviceInstanceData)
 
 // Inform other platforms that service is running through Synchronization API
 channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, false)
+synchronizationapi.createChannelIfAbsent(channel, true)
 synchronizationapi.put(channel, "RUNNING", true)
 synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
 

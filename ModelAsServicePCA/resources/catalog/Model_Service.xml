@@ -1,16 +1,18 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Model_Service" projectName="Cloud Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Model_Service" onTaskError="continueJobExecution" priority="normal" projectName="Cloud Automation - Deployment" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <variables>
-    <variable name="PROXYFIED" value="false" model="PA:Boolean"/>
-    <variable name="HTTPS_ENABLED" value="true" model="PA:Boolean"/>
-    <variable name="DOCKER_IMAGE" value="activeeon/dlm3" />
-    <variable name="INSTANCE_NAME" value="model-server" />
-    <variable name="NODE_NAME" value="" />
-    <variable name="ENDPOINT_ID" value="maas-gui" />
-    <variable name="YAML_FILE" value="ml_service-api" />
-    <variable name="PYTHON_ENTRYPOINT" value="ml_service" />
+    <variable model="PA:Boolean" name="DEBUG_ENABLED" value="True"/>
+    <variable model="PA:Boolean" name="TRACE_ENABLED" value="True"/>
+    <variable model="PA:Boolean" name="DRIFT_ENABLED" value="True"/>
+    <variable name="DRIFT_THRESHOLD" value="1.9"/>
+    <variable model="PA:Boolean" name="HTTPS_ENABLED" value="False"/>
+    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
+    <variable name="DOCKER_IMAGE" value="activeeon/model_as_a_service"/>
+    <variable name="INSTANCE_NAME" value="model-server"/>
+    <variable name="NODE_NAME" value=""/>
+    <variable name="ENDPOINT_ID" value="maas-gui"/>
+    <variable name="YAML_FILE" value="ml_service-api"/>
+    <variable name="PYTHON_ENTRYPOINT" value="ml_service"/>
   </variables>
   <description>
     <![CDATA[ Deploy a server to deploy and call ML models.
@@ -18,20 +20,15 @@ The service can be started using the following variable:
 $INSTANCE_NAME (Required): service instance name ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="cloud-automation"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png"/>
-    <info name="pca.states" value="(VOID,RUNNING)"/>
-    <info name="Documentation" value="../doc/MLOS/MLOSUserGuide.html#"/>
-    <info name="pca.service.id" value="Model_Service"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+<info name="bucketName" value="cloud-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png"/>
+<info name="pca.states" value="(VOID,RUNNING)"/>
+<info name="Documentation" value="../doc/MLOS/MLOSUserGuide.html#"/>
+<info name="pca.service.id" value="Model_Service"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Start_Model_Service" 
-    
-    
-    
-    
-    fork="true">
+    <task fork="true" name="Start_Model_Service" onTaskError="cancelJob">
       <description>
         <![CDATA[ Pull Elasticsearch image and start a container ]]>
       </description>
@@ -40,8 +37,8 @@ $INSTANCE_NAME (Required): service instance name ]]>
         <info name="task.documentation" value="../doc/MLOS/MLOSUserGuide.html#"/>
       </genericInformation>
       <inputFiles>
-        <files  includes="certificate_mas.pem" accessMode="transferFromGlobalSpace"/>
-        <files  includes="key_mas.pem" accessMode="transferFromGlobalSpace"/>
+        <files accessMode="transferFromGlobalSpace" includes="certificate_mas.pem"/>
+        <files accessMode="transferFromGlobalSpace" includes="key_mas.pem"/>
       </inputFiles>
       <selection>
         <script type="static">
@@ -90,46 +87,80 @@ selected = regexMatcher.find()
         <script>
           <code language="cpython">
             <![CDATA[
-import ssl, sys
+import ssl
+import subprocess
+import sys
+import json
+import cryptography
 
-if sys.version_info[0] < 3:
-    try:
-        from urllib2 import urlopen
-    except ImportError:
-        import pip
-        pip.main(['install', 'request'])
-        from urllib2 import urlopen
-else:
-    try:
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Install required Python libraries if they are not already installed
+try:
+    if sys.version_info[0] < 3:
+        from urllib import urlopen
+    else:
         from urllib.request import urlopen
-    except ImportError:
-        import pip
-        pip.main(['install', 'request'])
+except ImportError:
+    install('request')
+    if sys.version_info[0] < 3:
+        from urllib import urlopen
+    else:
         from urllib.request import urlopen
 
+# Get user credentials and convert to json
+schedulerapi.connect()
+sessionId = str(schedulerapi.getSession())
+connectionInfo = schedulerapi.getConnectionInfo()
+ciLogin = str(connectionInfo.getLogin())
+ciPasswd = str(connectionInfo.getPassword())
+ciUrl = str(connectionInfo.getUrl())
+user_credentials = {
+  'sessionId': sessionId,
+  'ciLogin': ciLogin,
+  'ciPasswd': ciPasswd,
+  'ciUrl': ciUrl
+}
+user_credentials_json = json.dumps(user_credentials)
+
+# Encrypt user data into a binary file
+from cryptography.fernet import Fernet
+key = Fernet.generate_key()
+f = Fernet(key)
+message = user_credentials_json.encode()
+encrypted = f.encrypt(message)
+user_data_file = 'user_data.enc'
+with open(user_data_file, 'wb') as f:
+    f.write(encrypted)
+variables.put("USER_KEY", key.decode())
+variables.put("USER_DATA_FILE", user_data_file)
+
+# Get workflows variables
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PYTHON_ENTRYPOINT = variables.get("PYTHON_ENTRYPOINT")
 YAML_FILE = variables.get("YAML_FILE")
 
-ml_service_api_resource_url = PA_CATALOG_REST_URL +"/buckets/model-as-a-service-resources/resources/"+PYTHON_ENTRYPOINT+"/raw"
-yaml_file_url = PA_CATALOG_REST_URL +"/buckets/model-as-a-service-resources/resources/"+YAML_FILE+"/raw"
-print("ml_service_api_resource_url: ", ml_service_api_resource_url)
-print("yaml_file_url: ", yaml_file_url)
+PA_MAAS_RESOURCES_URL = "/buckets/model-as-a-service-resources/resources/"
+python_file_url = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + PYTHON_ENTRYPOINT + "/raw"
+yaml_file_url   = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + YAML_FILE + "/raw"
+print("python_file_url: ", python_file_url)
+print("yaml_file_url:   ", yaml_file_url)
+
 # Download the two configuration file "ml_service" for the service definition
 context = ssl._create_unverified_context()
-python_file = urlopen(ml_service_api_resource_url, context=context).read()
+python_file = urlopen(python_file_url, context=context).read()
 python_content = python_file.decode('utf-8')
-python_file_name = PYTHON_ENTRYPOINT+".py"
-f = open(python_file_name, "w")
-f.write(python_content)
-f.close()
+python_file_name = PYTHON_ENTRYPOINT + ".py"
+with open(python_file_name, 'w') as f:
+    f.write(python_content)
+
 # Download the configuration file "ml_service-api" for the swagger specification
 yaml_file = urlopen(yaml_file_url, context=context).read()
 yaml_file_content = yaml_file.decode('utf-8')
-yaml_file_name = YAML_FILE+".yaml"
-f = open(yaml_file_name, "w")
-f.write(yaml_file_content)
-f.close()
+yaml_file_name = YAML_FILE + ".yaml"
+with open(yaml_file_name, 'w') as f:
+    f.write(yaml_file_content)
 ]]>
           </code>
         </script>
@@ -145,19 +176,21 @@ echo BEGIN "$variables_PA_TASK_NAME"
 PORT=9090
 DOCKER_IMAGE=$variables_DOCKER_IMAGE
 HTTPS_ENABLED=$variables_HTTPS_ENABLED
-PYTHON_ENTRYPOINT=$variables_PYTHON_ENTRYPOINT
-YAML_FILE=$variables_YAML_FILE
-PYTHON_ENTRYPOINT_FILE="${PWD}/${PYTHON_ENTRYPOINT}.py"
-YAML_FILE="${PWD}/${YAML_FILE}.yaml"
+DEBUG_ENABLED=$variables_DEBUG_ENABLED
+TRACE_ENABLED=$variables_TRACE_ENABLED
+DRIFT_ENABLED=$variables_DRIFT_ENABLED
+DRIFT_THRESHOLD=$variables_DRIFT_THRESHOLD
+USER_KEY=$variables_USER_KEY
+USER_DATA_FILE="${PWD}/${variables_USER_DATA_FILE}"
+PYTHON_ENTRYPOINT_FILE="${PWD}/${variables_PYTHON_ENTRYPOINT}.py"
+YAML_FILE="${PWD}/${variables_YAML_FILE}.yaml"
 chmod +x $PYTHON_ENTRYPOINT_FILE $YAML_FILE
 ################################################################################
-
-ls -la
 
 imagedecode() { : "${*//+/ }"; echo -e "${_//%/\\x}"; }
 DOCKER_IMAGE=$(imagedecode "$DOCKER_IMAGE")
 
-echo "Pulling "$variables_PA_JOB_NAME" image"
+echo "Pulling $DOCKER_IMAGE"
 docker pull $DOCKER_IMAGE
 
 GET_RANDOM_PORT(){
@@ -177,20 +210,21 @@ if [ -z "$INSTANCE_NAME" ]; then
     exit 1
 fi
 
-if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then   
-        echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
-        exit 128
+if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
+    echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
+    exit 128
 else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running $INSTANCE_NAME container"
     F_PORT=$(GET_RANDOM_PORT)
-    echo "docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -p $F_PORT:$PORT $DOCKER_IMAGE"
-    docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -p $F_PORT:$PORT $DOCKER_IMAGE 
-    echo "docker cp $PYTHON_ENTRYPOINT_FILE $INSTANCE_NAME:/model_as_a_service/ml_service.py"
+    echo "docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e TRACE_ENABLED=$TRACE_ENABLED -e USER_KEY=$USER_KEY -e DRIFT_ENABLED=$DRIFT_ENABLED -e DRIFT_THRESHOLD=$DRIFT_THRESHOLD -p $F_PORT:$PORT $DOCKER_IMAGE"
+    docker run -dit --name $INSTANCE_NAME -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e TRACE_ENABLED=$TRACE_ENABLED -e USER_KEY=$USER_KEY -e DRIFT_ENABLED=$DRIFT_ENABLED -e DRIFT_THRESHOLD=$DRIFT_THRESHOLD -p $F_PORT:$PORT $DOCKER_IMAGE
+    echo "docker exec $INSTANCE_NAME mkdir /model_as_a_service"
     docker exec $INSTANCE_NAME mkdir /model_as_a_service
     #Copy the needed files to launch the service
-    echo "copying the needed files to launch the service" 
+    echo "Copying the needed files to launch the service"
+    docker cp $USER_DATA_FILE $INSTANCE_NAME:/model_as_a_service/user_data.enc
     docker cp $PYTHON_ENTRYPOINT_FILE $INSTANCE_NAME:/model_as_a_service/ml_service.py
     docker cp $YAML_FILE $INSTANCE_NAME:/model_as_a_service/ml_service_swagger.yaml
     docker cp key_mas.pem $INSTANCE_NAME:/model_as_a_service/key_mas.pem
@@ -200,7 +234,7 @@ else
     echo "docker exec -dit $INSTANCE_NAME bash -c python /model_as_a_service/ml_service.py >> /proc/1/fd/1"
     docker exec -dit $INSTANCE_NAME bash -c "python /model_as_a_service/ml_service.py >> /proc/1/fd/1"
     ################################################################################
-    if [ "$(docker ps -a | grep $INSTANCE_NAME)" ]; then
+    if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
         if [ "$RUNNING" == "true" ]; then
             echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
@@ -248,8 +282,15 @@ def proxyfied = variables.get("PROXYFIED")
 def hostname = variables.get("PA_NODE_HOST")
 def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
 def httpsEnabled = variables.get("HTTPS_ENABLED")
-def ENDPOINT_PATH = "/api/ui"
-    
+def userKey = variables.get("USER_KEY")
+def traceEnabled = variables.get("TRACE_ENABLED")
+
+//def ENDPOINT_PATH = "/api/ui"
+//if (traceEnabled.toLowerCase()=="true"){
+//    ENDPOINT_PATH = "/api/trace_preview?key=" + userKey
+//}
+def ENDPOINT_PATH = "/api/trace_preview?key=" + userKey
+
 // Handle service parameters
 def port = new File(instanceName+"_port").text.trim()
 def containerID = new File(instanceName+"_containerID").text.trim()
@@ -296,7 +337,8 @@ if (proxyfied.toLowerCase()=="true"){
 def Node node = new Node();
 node.setName(variables.get("PA_NODE_NAME"))
 node.setHost(variables.get("PA_NODE_HOST"))
-node.setNodeSourceName("")
+node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
+node.setUrl(variables.get("PA_NODE_URL"))
 
 // Deployment
 def Deployment deployment = new Deployment()
@@ -338,6 +380,11 @@ println("END " + variables.get("PA_TASK_NAME"))
           </code>
         </script>
       </post>
+      <cleaning>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw"/>
+        </script>
+      </cleaning>
       <metadata>
         <positionTop>
             442.20703125
@@ -347,12 +394,7 @@ println("END " + variables.get("PA_TASK_NAME"))
         </positionLeft>
       </metadata>
     </task>
-    <task name="Loop_Over_Instance_Status" 
-    
-    
-    
-    
-    fork="true">
+    <task fork="true" name="Loop_Over_Instance_Status">
       <description>
         <![CDATA[ Loop over service instance status and fetch docker container logs.
 It will run every minute. ]]>
@@ -367,10 +409,10 @@ It will run every minute. ]]>
       </depends>
       <scriptExecutable>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow >
+      <controlFlow>
         <loop target="Loop_Over_Instance_Status">
           <script>
             <code language="groovy">
