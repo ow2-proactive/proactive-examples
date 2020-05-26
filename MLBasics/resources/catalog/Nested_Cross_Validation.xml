@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Nested_Cross_Validation" onTaskError="continueJobExecution" priority="normal" projectName="1. Basic Machine Learning" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:Integer" name="NUM_TRIALS" value="3"/>
+  </variables>
+  <description>
+    <![CDATA[ A sample workflow that solves a classic nested cross-validation problem. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="machine-learning-workflows"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/machine_learning.png"/>
+<info name="Documentation" value="https://scikit-learn.org/stable/auto_examples/model_selection/plot_nested_cross_validation_iris.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Split">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+import json
+import numpy as np
+
+from sklearn.datasets import load_iris
+
+# Number of random trials
+NUM_TRIALS = int(variables.get("NUM_TRIALS"))
+
+# Load the dataset
+iris = load_iris()
+X_iris = iris.data
+y_iris = iris.target
+
+# Convert dataset to json
+dataset = {
+    'X_iris': X_iris.tolist(),
+    'y_iris': y_iris.tolist()
+}
+
+# Loop for each trial
+result = {}
+for i in range(NUM_TRIALS): 
+	result[i] = json.dumps(dataset)
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <replicate>
+          <script>
+            <code language="cpython">
+              <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+runs = int(variables.get("NUM_TRIALS"))
+print("runs: ", runs)
+
+print("END " + __file__)
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            62.03125
+        </positionTop>
+        <positionLeft>
+            73.1640625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Process">
+      <description>
+        <![CDATA[ This task will be replicated according to the 'runs' value specified in
+				the replication script.
+				The replication index is used in each task's instance to select the
+				input. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+import json
+import numpy as np
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import RandomizedSearchCV, cross_val_score, KFold
+from scipy.stats import uniform
+
+# Print task replication number
+i = int(variables.get('PA_TASK_REPLICATION'))
+print("Task id: ", i)
+
+# Get data from the split task
+dataset = str(results[0].value()[i])
+dataset = json.loads(dataset)
+X_iris = np.array(dataset['X_iris'])
+y_iris = np.array(dataset['y_iris'])
+
+# Set up possible values of parameters to optimize over
+distributions = dict(C=uniform(loc=0, scale=4), penalty=['l2', 'l1'])
+
+# We will use a Logistic Classifier with "rbf" kernel
+logistic = LogisticRegression(solver='saga', tol=1e-2, max_iter=200, random_state=0)
+
+# Choose cross-validation techniques for the inner and outer loops,
+# independently of the dataset.
+# E.g "GroupKFold", "LeaveOneOut", "LeaveOneGroupOut", etc.
+inner_cv = KFold(n_splits=4, shuffle=True, random_state=i)
+outer_cv = KFold(n_splits=4, shuffle=True, random_state=i)
+
+# Non_nested parameter search and scoring
+clf = RandomizedSearchCV(estimator=logistic, param_distributions=distributions, cv=inner_cv)
+clf.fit(X_iris, y_iris)
+
+# Nested CV with parameter optimization
+nested_score = cross_val_score(clf, X=X_iris, y=y_iris, cv=outer_cv)
+result = str(nested_score.mean())
+print("result: ", result)
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            198.76953125
+        </positionTop>
+        <positionLeft>
+            221.15234375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Merge">
+      <description>
+        <![CDATA[ As a merge operation, we simply print the results from previous tasks. ]]>
+      </description>
+      <genericInformation>
+        <info name="TASK.ICON" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Process"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+import numpy as np
+
+# Number of random trials
+NUM_TRIALS = int(variables.get("NUM_TRIALS"))
+
+# Arrays to store scores
+nested_scores = np.zeros(NUM_TRIALS)
+
+# Get the generated results
+for i, result in enumerate(results):
+    nested_scores[i] = float(str(result.value()))
+
+# Print scores
+print("nested cross-validation scores: ", nested_scores)
+print("average of {:6f} with std. dev. of {:6f}."
+      .format(nested_scores.mean(), nested_scores.std()))
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            314.47265625
+        </positionTop>
+        <positionLeft>
+            347.1484375
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2646px;
+            height:3501px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-57.03125px;left:-68.1640625px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_118" style="top: 62.0313px; left: 73.1642px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task defines some input, here strings to be processed."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Split</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_121" style="top: 198.77px; left: 221.153px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task will be replicated according to the 'runs' value specified in
+				the replication script.
+				The replication index is used in each task's instance to select the
+				input."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Process</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_124" style="top: 314.473px; left: 347.149px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="As a merge operation, we simply print the results from previous tasks."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Merge</span></a></div><svg style="position:absolute;left:143.5px;top:92.5px" width="168" height="107" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 147 96 C 157 96 -10 -10 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M126.84375,79.59375 L114.303234437101,62.51348450391687 L115.29539726898025,71.67948760859872 L106.38897204569972,74.06183723493662 L126.84375,79.59375" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M126.84375,79.59375 L114.303234437101,62.51348450391687 L115.29539726898025,71.67948760859872 L106.38897204569972,74.06183723493662 L126.84375,79.59375" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_132" style="position: absolute; transform: translate(-50%, -50%); left: 227px; top: 146.75px;">replicate</div><svg style="position:absolute;left:113.5px;top:102.5px" width="168" height="97" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 147 96 C 157 46 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M126.84375,66.9375 L111.73138290100623,52.08434004444676 L114.17766433549559,60.973418013689276 L105.7673009146955,64.75042570895117 L126.84375,66.9375" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M126.84375,66.9375 L111.73138290100623,52.08434004444676 L114.17766433549559,60.973418013689276 L105.7673009146955,64.75042570895117 L126.84375,66.9375" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:260.5px;top:238.5px" width="148" height="77" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 127 76 C 137 26 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M111.41113600000001,50.741248000000006 L95.47740254460551,36.772850161577665 L98.42595035261505,45.50818448968911 L90.24433903429461,49.75803580896263 L111.41113600000001,50.741248000000006" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M111.41113600000001,50.741248000000006 L95.47740254460551,36.772850161577665 L98.42595035261505,45.50818448968911 L90.24433903429461,49.75803580896263 L111.41113600000001,50.741248000000006" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 114px; top: 93px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 144px; top: 93px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 261px; top: 229px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 291px; top: 189px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 261px; top: 189px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 388px; top: 345px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 388px; top: 305px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
