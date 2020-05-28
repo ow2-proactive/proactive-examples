@@ -1,8 +1,10 @@
-print("--- BEGIN Feature_Vector_Extractor ---")
+__file__ = variables.get("PA_TASK_NAME")
 
 if str(variables.get("TASK_ENABLED")).lower() == 'false':
     print("Task " + __file__ + " disabled")
     quit()
+
+print("BEGIN " + __file__)
 
 import bz2
 import sys
