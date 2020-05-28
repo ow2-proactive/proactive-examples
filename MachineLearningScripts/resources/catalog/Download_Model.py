@@ -1,20 +1,24 @@
 __file__ = variables.get("PA_TASK_NAME")
 
-if str(variables.get("TASK_ENABLED")).lower() != 'true':
-  print("Task " + __file__ + " disabled")
-  quit()
+if str(variables.get("TASK_ENABLED")).lower() == 'false':
+    print("Task " + __file__ + " disabled")
+    quit()
 
 print("BEGIN " + __file__)
 
-import os, sys, bz2
+import bz2
+import sys
 
+# -------------------------------------------------------------
+# Get data from the propagated variables
+#
 input_variables = {'task.model_id': None}
 for key in input_variables.keys():
-  for res in results:
-    value = res.getMetadata().get(key)
-    if value is not None:
-      input_variables[key] = value
-      break
+    for res in results:
+        value = res.getMetadata().get(key)
+        if value is not None:
+            input_variables[key] = value
+            break
 
 model_id = input_variables['task.model_id']
 model_compressed = variables.get(model_id)
@@ -28,8 +32,8 @@ print("model size (decompressed): ", sys.getsizeof(model_bin), " bytes")
 assert model_bin is not None
 result = model_bin
 
-#resultMetadata.put("task.name", __file__)
-#resultMetadata.put("task.model_bin", model_bin)
+# resultMetadata.put("task.name", __file__)
+# resultMetadata.put("task.model_bin", model_bin)
 
 resultMetadata.put("file.extension", ".model")
 resultMetadata.put("file.name", "myModel.model")

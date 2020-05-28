@@ -1,24 +1,26 @@
 __file__ = variables.get("PA_TASK_NAME")
 
-if str(variables.get("TASK_ENABLED")).lower() != 'true':
-  print("Task " + __file__ + " disabled")
-  quit()
+if str(variables.get("TASK_ENABLED")).lower() == 'false':
+    print("Task " + __file__ + " disabled")
+    quit()
 
 print("BEGIN " + __file__)
 
 import json
+from distutils.util import strtobool
 
 algorithm = {
-  'name': 'AutoSklearn_Regressor',
-  'is_supervised': True,
-  'type': 'regression',
-  'automl': False,
-  'task_time': int(variables.get("TASK_TIME")),
-  'run_time': int(variables.get("RUN_TIME")),
-  'sampling': variables.get("SAMPLING"),
-  'sampling_strategy': variables.get('RESAMPLING_STRATEGY'),
-  'folds': variables.get('FOLDS')
+    'name': 'AutoSklearn_Regressor',
+    'is_supervised': True,
+    'type': 'regression',
+    'automl': False,
+    'task_time': int(variables.get("TASK_TIME")),
+    'run_time': int(variables.get("RUN_TIME")),
+    'sampling': bool(strtobool(variables.get("SAMPLING"))),
+    'sampling_strategy': variables.get('SAMPLING_STRATEGY'),
+    'folds': int(variables.get('FOLDS'))
 }
+print("algorithm:\n", algorithm)
 
 algorithm_json = json.dumps(algorithm)
 resultMetadata.put("task.algorithm_json", algorithm_json)
