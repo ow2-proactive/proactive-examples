@@ -110,6 +110,8 @@ print("algorithm:\n", algorithm)
 alg = obj(algorithm)
 if not hasattr(alg, 'automl'):
     alg.automl = True
+if not hasattr(alg, 'sampling'):
+    alg.sampling = False
 
 model = None
 if alg.is_supervised:
