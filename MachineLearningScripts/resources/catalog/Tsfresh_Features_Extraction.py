@@ -21,7 +21,10 @@ time_column = variables.get("TIME_COLUMN")
 ref_column = variables.get("REF_COLUMN")
 all_features = variables.get("ALL_FEATURES")
 
-input_variables = {'task.dataframe_id': None}
+input_variables = {
+    'task.dataframe_id': None,
+    'task.label_column': None
+}
 for key in input_variables.keys():
     for res in results:
         value = res.getMetadata().get(key)
@@ -76,6 +79,7 @@ print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", input_variables['task.label_column'])
 
 # -------------------------------------------------------------
 # Preview results

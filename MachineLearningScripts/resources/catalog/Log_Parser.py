@@ -156,4 +156,4 @@ print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 
-print("Finshed " + LOG_FILE + "PARSING")
+print("Finshed " + LOG_FILE + " PARSING")

@@ -63,7 +63,10 @@ SCALER_NAME = variables.get("SCALER_NAME")
 assert COLUMNS_NAME is not None and COLUMNS_NAME is not ""
 assert SCALER_NAME is not None and SCALER_NAME is not ""
 
-input_variables = {'task.dataframe_id': None}
+input_variables = {
+    'task.dataframe_id': None,
+    'task.label_column': None
+}
 for key in input_variables.keys():
     for res in results:
         value = res.getMetadata().get(key)
@@ -97,6 +100,7 @@ print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", input_variables['task.label_column'])
 
 # -------------------------------------------------------------
 # Preview results

@@ -15,7 +15,10 @@ import pandas as pd
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-input_variables = {'task.dataframe_id': None}
+input_variables = {
+    'task.dataframe_id': None,
+    'task.label_column': None
+}
 dataframe_id1 = None
 dataframe_id2 = None
 
@@ -59,6 +62,7 @@ print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", input_variables['task.label_column'])
 
 # -------------------------------------------------------------
 # Preview results

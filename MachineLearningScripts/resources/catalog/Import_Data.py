@@ -18,6 +18,7 @@ import pandas as pd
 FILE_URL = variables.get("FILE_URL")
 FILE_DELIMITER = variables.get("FILE_DELIMITER")
 LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
 
 assert FILE_URL is not None and FILE_URL is not ""
 assert FILE_DELIMITER is not None and FILE_DELIMITER is not ""
@@ -38,6 +39,7 @@ print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", LABEL_COLUMN)
 
 # -------------------------------------------------------------
 # Preview results

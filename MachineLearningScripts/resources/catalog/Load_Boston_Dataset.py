@@ -13,6 +13,11 @@ import uuid
 import pandas as pd
 from sklearn.datasets import load_boston
 
+# -------------------------------------------------------------
+# Get data from the propagated variables
+#
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+
 boston = load_boston()
 dataframe_load = pd.DataFrame(boston.data)
 dataframe_load.columns = boston.feature_names
@@ -32,6 +37,7 @@ print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", LABEL_COLUMN)
 
 # -------------------------------------------------------------
 # Preview results

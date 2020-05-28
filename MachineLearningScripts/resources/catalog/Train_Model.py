@@ -69,15 +69,11 @@ else:
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-is_labeled_data = False
-LABEL_COLUMN = variables.get("LABEL_COLUMN")
-if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
-    is_labeled_data = True
-
 input_variables = {
     'task.dataframe_id': None,
     'task.dataframe_id_train': None,
-    'task.algorithm_json': None
+    'task.algorithm_json': None,
+    'task.label_column': None
 }
 
 for key in input_variables.keys():
@@ -102,6 +98,15 @@ if NVIDIA_RAPIDS_ENABLED:
     dataframe = cudf.read_json(dataframe_json, orient='split')
 else:
     dataframe = pd.read_json(dataframe_json, orient='split')
+
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+    is_labeled_data = True
+else:
+    LABEL_COLUMN = input_variables['task.label_column']
+    if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+        is_labeled_data = True
 
 algorithm_json = input_variables['task.algorithm_json']
 assert algorithm_json is not None

@@ -18,7 +18,10 @@ import pandas as pd
 QUERY = variables.get("QUERY")
 assert QUERY is not None and QUERY is not "", "Task parameter 'QUERY' need to be set!"
 
-input_variables = {'task.dataframe_id': None}
+input_variables = {
+    'task.dataframe_id': None,
+    'task.label_column': None
+}
 for key in input_variables.keys():
     for res in results:
         value = res.getMetadata().get(key)
@@ -50,6 +53,7 @@ print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", input_variables['task.label_column'])
 
 # -------------------------------------------------------------
 # Preview results

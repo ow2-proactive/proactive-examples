@@ -21,7 +21,10 @@ assert TRAIN_SIZE is not None and TRAIN_SIZE is not ""
 TRAIN_SIZE = float(TRAIN_SIZE)
 test_size = 1 - TRAIN_SIZE
 
-input_variables = {'task.dataframe_id': None}
+input_variables = {
+    'task.dataframe_id': None,
+    'task.label_column': None
+}
 for key in input_variables.keys():
     for res in results:
         value = res.getMetadata().get(key)
@@ -71,6 +74,7 @@ print(dataframe2.head())
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id_train", dataframe_id1)
 resultMetadata.put("task.dataframe_id_test", dataframe_id2)
+resultMetadata.put("task.label_column", input_variables['task.label_column'])
 
 # -------------------------------------------------------------
 # Preview results
