@@ -1,13 +1,20 @@
 __file__ = variables.get("PA_TASK_NAME")
 
-if str(variables.get("TASK_ENABLED")).lower() != 'true':
-  print("Task " + __file__ + " disabled")
-  quit()
+if str(variables.get("TASK_ENABLED")).lower() == 'false':
+    print("Task " + __file__ + " disabled")
+    quit()
 
 print("BEGIN " + __file__)
 
-import os, sys, bz2, uuid, wget, pickle
+import bz2
+import pickle
+import sys
+import uuid
+import wget
 
+# -------------------------------------------------------------
+# Get data from the propagated variables
+#
 MODEL_URL = variables.get("MODEL_URL")
 assert MODEL_URL is not None and MODEL_URL is not ""
 
@@ -29,9 +36,9 @@ print('model size (compressed): ', sys.getsizeof(compressed_model), " bytes")
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.model_id", model_id)
 
-#result = model_bin
-#resultMetadata.put("file.extension", ".model")
-#resultMetadata.put("file.name", "myModel.model")
-#resultMetadata.put("content.type", "application/octet-stream")
+# result = model_bin
+# resultMetadata.put("file.extension", ".model")
+# resultMetadata.put("file.name", "myModel.model")
+# resultMetadata.put("content.type", "application/octet-stream")
 
 print("END " + __file__)

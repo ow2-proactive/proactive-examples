@@ -1,5 +1,6 @@
 /*
-This script creates a container fork environment for various machine learning usages (CUDA, GPU, RAPIDS ...) and uses task or job variables for configuration.
+This script creates a container fork environment for various machine learning usages (CUDA, GPU, RAPIDS ...)
+and uses task or job variables for configuration.
 
 Variables:
  - CONTAINER_PLATFORM: docker, podman, singularity or null/empty (none)
