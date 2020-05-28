@@ -140,32 +140,32 @@ if alg.is_supervised:
             )
     elif alg.name == 'SupportVectorMachines':
         from sklearn.svm import SVC
-        model = SVC(**alg.input_variables)
+        model = SVC(**alg.input_variables.__dict__)
     elif alg.name == 'GaussianNaiveBayes':
         from sklearn.naive_bayes import GaussianNB
-        model = GaussianNB(**alg.input_variables)
+        model = GaussianNB(**alg.input_variables.__dict__)
     elif alg.name == 'LogisticRegression':
         from sklearn.linear_model import LogisticRegression
-        model = LogisticRegression(**alg.input_variables)
+        model = LogisticRegression(**alg.input_variables.__dict__)
     elif alg.name == 'AdaBoost' and alg.type == 'classification':
         from sklearn.ensemble import AdaBoostClassifier
-        model = AdaBoostClassifier(**alg.input_variables)
+        model = AdaBoostClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'GradientBoosting' and alg.type == 'classification':
         from sklearn.ensemble import GradientBoostingClassifier
-        model = GradientBoostingClassifier(**alg.input_variables)
+        model = GradientBoostingClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'RandomForest' and alg.type == 'classification':
         if NVIDIA_RAPIDS_ENABLED:
             from cuml.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(**alg.input_variables)
+            model = RandomForestClassifier(**alg.input_variables.__dict__)
         else:
             from sklearn.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(**alg.input_variables)
+            model = RandomForestClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'XGBoost' and alg.type == 'classification':
         from xgboost.sklearn import XGBClassifier
-        model = XGBClassifier(**alg.input_variables)
+        model = XGBClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'CatBoost' and alg.type == 'classification':
         from catboost import CatBoostClassifier
-        model = CatBoostClassifier(**alg.input_variables)
+        model = CatBoostClassifier(**alg.input_variables.__dict__)
 
     # -------------------------------------------------------------
     # Regression algorithms
@@ -195,54 +195,54 @@ if alg.is_supervised:
     elif alg.name == 'LinearRegression':
         if NVIDIA_RAPIDS_ENABLED:
             from cuml.linear_model import LinearRegression
-            model = LinearRegression(**alg.input_variables)
+            model = LinearRegression(**alg.input_variables.__dict__)
         else:
             from sklearn.linear_model import LinearRegression
-            model = LinearRegression(**alg.input_variables)
+            model = LinearRegression(**alg.input_variables.__dict__)
     elif alg.name == 'SupportVectorRegression':
         from sklearn.svm import SVR
-        model = SVR(**alg.input_variables)
+        model = SVR(**alg.input_variables.__dict__)
     elif alg.name == 'BayesianRidgeRegression':
         from sklearn.linear_model import BayesianRidge
-        model = BayesianRidge(**alg.input_variables)
+        model = BayesianRidge(**alg.input_variables.__dict__)
     elif alg.name == 'AdaBoost' and alg.type == 'regression':
         from sklearn.ensemble import AdaBoostRegressor
-        model = AdaBoostRegressor(**alg.input_variables)
+        model = AdaBoostRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'GradientBoosting' and alg.type == 'regression':
         from sklearn.ensemble import GradientBoostingRegressor
-        model = GradientBoostingRegressor(**alg.input_variables)
+        model = GradientBoostingRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'RandomForest' and alg.type == 'regression':
         from sklearn.ensemble import RandomForestRegressor
-        model = RandomForestRegressor(**alg.input_variables)
+        model = RandomForestRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'XGBoost' and alg.type == 'regression':
         from xgboost.sklearn import XGBRegressor
-        model = XGBRegressor(**alg.input_variables)
+        model = XGBRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'CatBoost' and alg.type == 'regression':
         from catboost import CatBoostRegressor
-        model = CatBoostRegressor(**alg.input_variables)
+        model = CatBoostRegressor(**alg.input_variables.__dict__)
 else:
     # -------------------------------------------------------------
     # Anomaly detection algorithms
     #
     if alg.name == 'OneClassSVM':
         from sklearn import svm
-        model = svm.OneClassSVM(**alg.input_variables)
+        model = svm.OneClassSVM(**alg.input_variables.__dict__)
     elif alg.name == 'IsolationForest':
         from sklearn.ensemble import IsolationForest
-        model = IsolationForest(**alg.input_variables)
+        model = IsolationForest(**alg.input_variables.__dict__)
     # -------------------------------------------------------------
     # Clustering algorithms
     #
     elif alg.name == 'MeanShift':
         from sklearn.cluster import MeanShift
-        model = MeanShift(**alg.input_variables)
+        model = MeanShift(**alg.input_variables.__dict__)
     elif alg.name == 'KMeans':
         if NVIDIA_RAPIDS_ENABLED:
             from cuml.cluster import KMeans
-            model = KMeans(**alg.input_variables)
+            model = KMeans(**alg.input_variables.__dict__)
         else:
             from sklearn.cluster import KMeans
-            model = KMeans(**alg.input_variables)
+            model = KMeans(**alg.input_variables.__dict__)
 # -------------------------------------------------------------
 dataframe_label = None
 model_explainer = None
