@@ -269,7 +269,7 @@ result = """
                                   <medium>Activeeon</medium>
                                 </a>
                                 <li class="nav-item">
-                                  <a class="nav-link" href="MLOS/MLOSUserGuide.html" target="_blank">
+                                  <a class="nav-link" href="https://doc.activeeon.com/latest/MLOS/MLOSUserGuide.html" target="_blank">
                                     <medium>Machine Learning Open Studio</medium>
                                   </a>
                                 </li>
