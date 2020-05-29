@@ -1,74 +1,136 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="Email_Validation" projectName="Notifications" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Email_Validation" projectName="Notifications" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <description>
-    <![CDATA[ Workflow to pause the job and send a validation email ]]>
+    <![CDATA[ Workflow to pause the job and send a validation email. ]]>
   </description>
   <genericInformation>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/email_validation_bis.png"/>
   </genericInformation>
   <taskFlow>
-    <task name="Email_Validation"
+    <task name="Email_Validation" 
     
-    onTaskError="pauseJob" >
+    onTaskError="pauseJob" fork="true">
       <description>
-        <![CDATA[ Task to pause the job and send a validation email ]]>
+        <![CDATA[ Task to pause the job and send a validation email.
+This task requires the following variables:
+MESSAGE: a validation message.
+EMAILS: one or more emails, separated by semicolon.
+SEVERITY: a severity status, one of [INFO,WARNING,ERROR,CRITICAL], defaults to WARNING.
+]]>
       </description>
       <variables>
-        <variable name="notification_message" value="Put your email validation message here" inherited="false" />
-        <variable name="email_to" value="user@domain.org" inherited="false" />
-        <variable name="user_to_login" value="user" inherited="false" />
+        <variable name="MESSAGE" value="Put your email validation message here" inherited="false" />
+        <variable name="EMAILS" value="user@domain.org" inherited="false" model="PA:NOT_EMPTY_STRING"/>
+        <variable name="SEVERITY" value="WARNING" inherited="false" model="PA:LIST(INFO,WARNING,ERROR,CRITICAL)"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/email_validation_bis.png"/>
       </genericInformation>
       <scriptExecutable>
         <script>
-          <code language="python">
+          <code language="groovy">
             <![CDATA[
-#Please setup the Task Variables!
+import org.ow2.proactive.notification.client.ApiClient
+import org.ow2.proactive.notification.client.api.ValidationRestApi
+import org.ow2.proactive.notification.client.model.ValidationRequest
+import org.ow2.proactive.notification.client.model.Validation
+import org.ow2.proactive.notification.client.ApiException
+import java.util.Arrays
 
-# Don't change code below unless you know what you are doing
-from org.ow2.proactive.addons.webhook import Webhook
 
-jobid = variables.get("PA_JOB_ID")
-schedulerURL =  variables.get("PA_SCHEDULER_REST_URL")
 
-print schedulerURL
-# get sessionid
+//Get notification-service URL
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def notifUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/notification-service")
+// Instantiate ValidationRestApi instance
+def apiClient = new ApiClient()
+apiClient.setBasePath(notifUrl)
+def validationRestApi = new ValidationRestApi(apiClient)
+//Get job id
+def jobId = new Long(variables.get("PA_JOB_ID"))
+println(jobId)
+println(variables.get("PA_JOB_ID"))
+//Get validation message
+def validationMessage = variables.get("MESSAGE")
+if (validationMessage == null || validationMessage.isEmpty()) {
+    validationMessage = "Validation request custom message."
+}
+
+5
+// Get event severity or set default
+def eventSeverity = variables.get("SEVERITY")
+if (eventSeverity == null || eventSeverity.isEmpty()) {
+    eventSeverity = ValidationRequest.EventSeverityEnum.WARNING
+} else {
+    eventSeverity = ValidationRequest.EventSeverityEnum.valueOf(eventSeverity)
+}
+
+
+//Get session id
 schedulerapi.connect()
-sessionid = schedulerapi.getSession()
+def sessionId = schedulerapi.getSession()
+// Pause job
+schedulerapi.pauseJob(variables.get("PA_JOB_ID"))
+def email = Arrays.asList(variables.get("EMAILS").split("\\s*;\\s*"))
+//Create validation request
+if (genericInformation.containsKey("bucketName")) {
+    validationRequest = new ValidationRequest()
+    .emails(email)
+    .bucketName(genericInformation.get("bucketName"))
+    .workflowName(variables.get("PA_JOB_NAME"))
+    .jobId(jobId)
+    .eventSeverity(eventSeverity)
+    .message(validationMessage)    
+} else {
+    validationRequest = new ValidationRequest()
+    .emails(email)
+    .workflowName(variables.get("PA_JOB_NAME"))
+    .jobId(jobId)
+    .eventSeverity(eventSeverity)
+    .message(validationMessage)
+}
 
-# pause job
-schedulerapi.pauseJob(jobid)
-
-
-# send web validation
-print "Sending email validation..."
-url = schedulerURL.replace("/rest", "") +'/notification-service/notifications'
-headers = '{\"Content-Type\" : \"application/json\"}'
-notification_content = '{\"description\": \"'+variables.get("notification_message")+'\", \"jobId\": \"'+jobid+'\" , \"validation\": \"true\", \"emailValidation\": \"'+variables.get("email_to")+'\" , \"userValidation\": \"'+variables.get("user_to_login")+'\", \"notificationServiceUrl\": \"'+url+'\", \"userName\" : \"'+variables.get("PA_USER")+'\", \"sessionId\": \"'+sessionid+'\" }'
-Webhook.execute ( 'POST', url, headers, notification_content);
-print "Email Validation sent"
+try {
+    Validation result = validationRestApi.createValidationUsingPOST(sessionId, validationRequest)
+    println("Validation request sent!")
+} catch (ApiException e) {
+    println("[WARNING] Something went wrong while creating the Web Validation")
+    e.printStackTrace();
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <metadata>
+        <positionTop>
+            447.5
+        </positionTop>
+        <positionLeft>
+            642.25
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
   <metadata>
     <visualization>
-      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1139px;
-            height:566px;
+            width:2830px;
+            height:3308px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-333.9875030517578px;left:-496px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_3701" style="top: 339px; left: 501px;"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/email_validation_bis.png" width="20px">&nbsp;<span class="name">Email_Validation</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 542px; top: 369px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-442.5px;left:-637.25px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_28" style="top: 447.5px; left: 642.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Task to pause the job and send a validation email"><img src="/automation-dashboard/styles/patterns/img/wf-icons/email_validation_bis.png" width="20px">&nbsp;<span class="name">Email_Validation</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 687.5px; top: 478px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 687.5px; top: 438px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
  ]]>
     </visualization>
   </metadata>
