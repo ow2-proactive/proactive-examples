@@ -1,7 +1,7 @@
 import bz2
 import json
-import pandas as pd
 import requests
+import pandas as pd
 
 
 def raiser(msg): raise Exception(msg)
