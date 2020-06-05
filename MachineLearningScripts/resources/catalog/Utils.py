@@ -6,11 +6,131 @@ for Proactive machine learning tasks and workflows.
 """
 import os
 
-global variables, result, resultMetadata
+global variables, result, results, resultMetadata
 global userspaceapi, globalspaceapi, gateway
 
 
-def raiser(msg): raise Exception(msg)
+def raiser(msg=None):
+    """
+    Raise an AssertionError with the given message.
+
+    :param msg: Default error message.
+    :return: None.
+    """
+    raise AssertionError(msg or "Assertion error")
+
+
+def assert_not_empty(s, msg=None):
+    """
+    Assert input string is not empty.
+
+    :param s: Input string.
+    :param msg: Default error message.
+    :return: None.
+    """
+    if not s.strip():
+        raiser(msg)
+
+
+def assert_not_none(expr, msg=None):
+    """
+    Fail if the expression is None.
+
+    :param expr: Tested expression.
+    :param msg: Default error message.
+    :return: None.
+    """
+    if expr is None:
+        raiser(msg)
+
+
+def assert_not_none_not_empty(s, msg=None):
+    """
+    Assert input string is not none and not empty.
+
+    :param s: Input string.
+    :param msg: Default error message.
+    :return: None.
+    """
+    assert_not_none(s, msg)
+    assert_not_empty(s, msg)
+
+
+def assert_valid_int(s, msg=None):
+    """
+    Assert input string is a valid int.
+
+    :param s: Input string.
+    :param msg: Default error message.
+    :return: Integer.
+    """
+    try:
+        i = int(s)
+    except ValueError:
+        i = None
+    assert_not_none(i, msg)
+    return i
+
+
+def assert_valid_float(s, msg=None):
+    """
+    Assert input string is a valid float.
+
+    :param s: Input string.
+    :param msg: Default error message.
+    :return: Float.
+    """
+    try:
+        f = float(s)
+    except ValueError:
+        f = None
+    assert_not_none(f, msg)
+    return f
+
+
+def assert_greater_equal(first, second, msg=None):
+    """
+    Assert `first` is greater than or equal to second.
+
+    :param first: First argument.
+    :param second: Second argument.
+    :param msg: Default error message.
+    :return: None.
+    """
+    if not first >= second:
+        if msg is None:
+            msg = "{0} is not greater than or equal to {1}".format(first, second)
+        raiser(msg)
+
+
+def assert_less_equal(first, second, msg=None):
+    """
+    Assert `first` is less than or equal to second.
+
+    :param first: First argument.
+    :param second: Second argument.
+    :param msg: Default error message.
+    :return: None.
+    """
+    if not first <= second:
+        if msg is None:
+            msg = "{0} is not less than or equal to {1}".format(first, second)
+        raiser(msg)
+
+
+def assert_between(val, minvalue, maxvalue, msg=None):
+    """
+    Assert `val` is greater than or equal to `minvalue` and
+    less than or equal to `maxvalue`.
+
+    :param val: Number (int, float, double).
+    :param minvalue: Number (int, float, double).
+    :param maxvalue: Number (int, float, double).
+    :param msg: Default error message.
+    :return: None.
+    """
+    assert_greater_equal(val, minvalue, msg)
+    assert_less_equal(val, maxvalue, msg)
 
 
 def check_task_is_enabled():
@@ -26,6 +146,26 @@ def check_task_is_enabled():
         print("END " + task_name)
         quit()
         # sys.exit()
+
+
+def get_input_variables(input_variables):
+    """
+    Get the propagated variables from Proactive `resultMetadata`.
+    The input dictionary is updated with the corresponding values.
+
+    :param input_variables: Python dictionary containing the variables name and its default value.
+    >>> input_variables = {
+    >>> 'task.dataframe_id': None,
+    >>> 'task.label_column': None
+    >>> }
+    :return: None.
+    """
+    for key in input_variables.keys():
+        for res in results:
+            value = res.getMetadata().get(key)
+            if value is not None:
+                input_variables[key] = value
+                break
 
 
 def preview_dataframe_in_task_result(dataframe):
@@ -116,3 +256,19 @@ def compress_and_transfer_dataframe_in_variables(dataframe):
     dataframe_id = str(uuid.uuid4())
     variables.put(dataframe_id, compressed_data)
     return dataframe_id
+
+
+def get_and_decompress_dataframe(dataframe_id):
+    """
+    Get a Pandas dataframe from Proactive variables by using its ID.
+
+    :param dataframe_id: Pandas dataframe id (uuid).
+    :return: Pandas dataframe.
+    """
+    import bz2
+    import pandas as pd
+    dataframe_json = variables.get(dataframe_id)
+    assert_not_none(dataframe_json, "Invalid dataframe!")
+    dataframe_json = bz2.decompress(dataframe_json).decode()
+    dataframe = pd.read_json(dataframe_json, orient='split')
+    return dataframe
