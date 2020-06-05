@@ -19,6 +19,7 @@ PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/r
 exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
 global compress_and_transfer_dataframe_in_variables
+global assert_not_none_not_empty
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -31,8 +32,8 @@ FILE_URL = variables.get("FILE_URL")
 FILE_DELIMITER = variables.get("FILE_DELIMITER")
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
 
-assert FILE_URL is not None and FILE_URL is not ""
-assert FILE_DELIMITER is not None and FILE_DELIMITER is not ""
+assert_not_none_not_empty(FILE_URL, "FILE_URL should be defined!")
+assert_not_none_not_empty(FILE_DELIMITER, "FILE_DELIMITER should be defined!")
 
 dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
 
@@ -40,6 +41,7 @@ dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
 # Transfer data to the next tasks
 #
 dataframe_id = compress_and_transfer_dataframe_in_variables(dataframe)
+print("dataframe id (out): ", dataframe_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
