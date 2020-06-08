@@ -1,4 +1,4 @@
-print("BEGIN Model_Explainability")
+__file__ = variables.get("PA_TASK_NAME")
 
 import matplotlib as mpl
 mpl.use('Agg')
@@ -59,7 +59,6 @@ NEW_PATH = DATASET_PATH + '/' + 'new_data'
 # Load trained model
 model=torch.load(MODEL_PATH,map_location={'cuda:0': 'cpu'})
 
-
 # http://pytorch.org/docs/master/cuda.html#torch.cuda.is_available
 # Returns a bool indicating if CUDA is currently available.
 use_gpu = torch.cuda.is_available()
@@ -69,9 +68,7 @@ if use_gpu:
 
 # new dataset with all images
 def new_dataset(DATASET_PATH):
-  
     images_list = []
-    
     os.makedirs(NEW_PATH, exist_ok=True)
     for root in listdir(DATASET_PATH + '/' + 'test'):
         if (not root.startswith('.')):
@@ -81,15 +78,13 @@ def new_dataset(DATASET_PATH):
 
 # load new dataset
 def load_new_dataset(DATASET_PATH):
-
     image_list = []
-    
     for filename in glob.glob(NEW_PATH + '/' + '*jpg'):
         print(filename)
         img = cv2.imread(filename)
         height, width, channels = img.shape 
         img_res = cv2.resize(img,(height, width))
-        image_list.append(cv2.resize(cv2.imread(filename),(224, 224))) ### resolucao pegar automaticamente
+        image_list.append(cv2.resize(cv2.imread(filename),(224, 224))) 
 
     X =  np.array(image_list).astype(np.float32)    
     return X
@@ -102,16 +97,25 @@ def normalize(image):
     # in addition, roll the axis so that they suit pytorch
     return torch.tensor(image.swapaxes(-1, 1).swapaxes(2, 3)).float()
 
-
 new_dataset(DATASET_PATH)
 X = load_new_dataset(DATASET_PATH) 
 X /= 255
 
 mean = [0.485, 0.456, 0.406]
 std = [0.229, 0.224, 0.225]
+ 
+# check list images to show
+base = "["
+exp = ''
+for i in range(len(IMG_LIST)):
+    if i == len(IMG_LIST)-1:
+        img_exp = 'int(IMG_LIST[{}])'.format(i)
+    else: 
+        img_exp = 'int(IMG_LIST[{}]),'.format(i)
+    exp += img_exp
     
-to_explain = X[[int(IMG_LIST[0]), int(IMG_LIST[1])]] # choose 2 images 
-
+# choose images 
+to_explain = X[[eval(exp)]] 
 
 # features_layer=model.features[7]
 exec("features_layer=model."+FEATURE_LAYER)
@@ -283,4 +287,4 @@ resultMetadata.put("file.extension", ".html")
 resultMetadata.put("file.name", "result.html")
 resultMetadata.put("content.type", "text/html")
 
-print("END Model_Explainability")
+print("END " + __file__)
