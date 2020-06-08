@@ -6,7 +6,7 @@ This module contains the Python script for the Import Data task.
 import urllib.request
 import pandas as pd
 
-global variables, result, resultMetadata
+global variables, resultMetadata
 
 __file__ = variables.get("PA_TASK_NAME")
 print("BEGIN " + __file__)

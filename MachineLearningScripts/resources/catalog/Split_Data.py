@@ -7,7 +7,7 @@ import urllib.request
 
 from sklearn.model_selection import train_test_split
 
-global variables, result, resultMetadata
+global variables, resultMetadata
 
 __file__ = variables.get("PA_TASK_NAME")
 print("BEGIN " + __file__)

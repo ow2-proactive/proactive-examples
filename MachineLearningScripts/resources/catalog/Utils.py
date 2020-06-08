@@ -168,6 +168,29 @@ def get_input_variables(input_variables):
                 break
 
 
+def get_input_variables_from_key(input_variables, key):
+    """
+    Get the propagated variables from Proactive `resultMetadata`.
+    The `input_variables` is updated with the corresponding values found via `key`.
+
+    :param input_variables: Python dictionary containing the variables to be filled.
+    >>> input_variables = {
+    >>> 'dataframe_id1': None,
+    >>> 'dataframe_id2': None
+    >>> }
+    :param key: Python string containing the key to be found.
+    >>> key = 'task.dataframe_id'
+    :return: None.
+    """
+    for res in results:
+        value = res.getMetadata().get(key)
+        if value is not None:
+            for k in input_variables.keys():
+                if input_variables[k] is None:
+                    input_variables[k] = value
+                    break
+
+
 def preview_dataframe_in_task_result(dataframe):
     """
     Preview a Pandas dataframe as a Proactive task result.
@@ -195,10 +218,10 @@ def preview_dataframe_in_task_result(dataframe):
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" 
     integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
     </head>
-    <body class="container">
+    <body>
     <h1 class="text-center my-4" style="color:#003050;">Data Preview</h1>
     <p align="center">{0}</p>
-    <div style="text-align:center">{1}</div>
+    {1}
     </body></html>""".format(info, result)
     result = result.encode('utf-8')
     resultMetadata.put("file.extension", ".html")
@@ -272,3 +295,53 @@ def get_and_decompress_dataframe(dataframe_id):
     dataframe_json = bz2.decompress(dataframe_json).decode()
     dataframe = pd.read_json(dataframe_json, orient='split')
     return dataframe
+
+
+def encode_columns(dataframe, columns, sep=","):
+    """
+    Apply an encoder to columns of a Pandas dataframe.
+
+    :param dataframe: Pandas dataframe.
+    :param columns: String containing the columns name separated by comma.
+    :param sep: Column separator.
+    :return: Pandas dataframe and the encode map dictionary.
+    """
+    from sklearn.preprocessing import LabelEncoder
+    if isinstance(columns, str):
+        columns2encode = [x.strip() for x in columns.split(sep)]
+    else:
+        columns2encode = columns
+    assert_not_none_not_empty(columns2encode, "The columns to be encoded should be defined!")
+    encode_map = {}
+    dataframe_aux = dataframe.copy()
+    for col in columns2encode:
+        unique_vector = dataframe[col].unique()
+        label_encoder = LabelEncoder()
+        label_encoder.fit(unique_vector)
+        enc_values = label_encoder.transform(unique_vector)
+        enc_map = dict(zip(unique_vector, enc_values))
+        dataframe_aux[col] = dataframe[col].map(enc_map)
+        encode_map[col] = enc_map
+    return dataframe_aux, encode_map
+
+
+def apply_encoder(dataframe, columns, encode_map, sep=","):
+    """
+    Apply an encode map to the specified columns of a Pandas dataframe.
+
+    :param dataframe: Pandas dataframe.
+    :param columns: String containing the columns name separated by comma.
+    :param encode_map: Encode map dictionary.
+    :param sep: Column separator.
+    :return: Pandas dataframe.
+    """
+    if isinstance(columns, str):
+        columns2encode = [x.strip() for x in columns.split(sep)]
+    else:
+        columns2encode = columns
+    assert_not_none_not_empty(columns2encode, "The columns to be encoded should be defined!")
+    dataframe_aux = dataframe.copy()
+    for col in columns2encode:
+        col_mapper = encode_map[col]
+        dataframe_aux[col] = dataframe[col].map(col_mapper)
+    return dataframe_aux
