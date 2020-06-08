@@ -1,4 +1,5 @@
 __file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
 
 import matplotlib as mpl
 mpl.use('Agg')
