@@ -191,22 +191,55 @@ def get_input_variables_from_key(input_variables, key):
                     break
 
 
-def preview_dataframe_in_task_result(dataframe):
+def preview_dataframe_in_task_result(dataframe, output_type=None):
     """
-    Preview a Pandas dataframe as a Proactive task result.
+    Preview a Pandas dataframe in the following outputs type: HTML, CSV, and JSON.
+    The DataFrame can be also exported to Tableau or S3.
+
+    :param dataframe: Pandas dataframe.
+    :param output_type: Python string: HTML, CSV, JSON, Tableau, S3 or None (default).
+    :return: None.
+    """
+    output_list = ["html", "csv", "json", "tableau", "s3"]
+    output_type = output_type.lower() if output_type is not None else output_type
+    if output_type not in output_list:
+        output_type = "html"
+
+    if output_type == "html":
+        export_dataframe_html(dataframe)
+
+    if output_type == "s3":
+        export_dataframe_s3(dataframe)
+
+    if output_type == "csv":
+        export_dataframe_csv(dataframe)
+
+    if output_type == "json":
+        export_dataframe_json(dataframe)
+
+    if output_type == "tableau":
+        export_dataframe_tableau(dataframe)
+
+
+def export_dataframe_html(dataframe):
+    """
+    Export a Pandas dataframe as a HTML in the Proactive task result.
 
     :param dataframe: Pandas dataframe.
     :return: None.
     """
-    import pandas as pd
     global variables, result, resultMetadata
+    import pandas as pd
+
     limit_output_view = variables.get("LIMIT_OUTPUT_VIEW")
     limit_output_view = 5 if limit_output_view is None else int(limit_output_view)
-    info = ''
     if limit_output_view > 0:
-        info = "Task preview limited to " + str(limit_output_view) + " rows"
-        print(info)
+        info = "The task preview is limited to " + str(limit_output_view) + " rows"
         dataframe = dataframe.head(limit_output_view).copy()
+    else:
+        nrows = len(dataframe.index)
+        info = "Total of " + str(nrows) + " rows"
+    print(info)
     with pd.option_context('display.max_colwidth', -1):
         result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
     result = """
@@ -229,6 +262,115 @@ def preview_dataframe_in_task_result(dataframe):
     resultMetadata.put("content.type", "text/html")
 
 
+def export_dataframe_s3(dataframe):
+    """
+    Export a Pandas dataframe to the Amazon S3.
+
+    :param dataframe: Pandas dataframe.
+    :return: None.
+    """
+    global result
+    import s3fs, uuid
+
+    user_access_key_id = variables.get('UserAccessKeyID')
+    user_secret_access_key = variables.get('UserSecretAccessKey')
+    user_bucket_path = variables.get('UserBucketPath')
+
+    assert_not_none_not_empty(user_access_key_id, "UserAccessKeyID should be defined!")
+    assert_not_none_not_empty(user_secret_access_key, "UserSecretAccessKey should be defined!")
+
+    dataframe_id = str(uuid.uuid4())
+    print("dataframe id (out): ", dataframe_id)
+    bytes_to_write = dataframe.to_csv(index=False).encode()
+
+    fs = s3fs.S3FileSystem(
+        key=str(user_access_key_id),
+        secret=str(user_secret_access_key),
+        s3_additional_kwargs={'ACL': 'public-read'}
+    )
+
+    bucket_path = str(user_bucket_path) if user_bucket_path is not None else 's3://activeeon-public/results/'
+    print("Using the following bucket path: ", bucket_path)
+    s3file_path = bucket_path + dataframe_id + '.csv'
+    with fs.open(s3file_path, 'wb') as f:
+        f.write(bytes_to_write)
+
+    dataframe_url = fs.url(s3file_path).split('?')[0]
+    dataframe_info = fs.info(s3file_path)
+    print("The dataframe was uploaded successfully to the following url:")
+    print(dataframe_url)
+    print("File info:")
+    print(dataframe_info)
+
+    result = """
+    <meta http-equiv="Refresh" content="0; url='{0}'" />
+    """.format(dataframe_url)
+    result = result.encode('utf-8')
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "output.html")
+    resultMetadata.put("content.type", "text/html")
+
+
+def export_dataframe_csv(dataframe, filename="dataframe.csv"):
+    """
+    Export a Pandas dataframe to a CSV file.
+
+    :param dataframe: Pandas dataframe.
+    :param filename: Python string.
+    :return: None.
+    """
+    global result
+    dataframe.to_csv(filename, encoding='utf-8', index=False)
+    with open(filename, "rb") as binary_file:
+        file_bin = binary_file.read()
+    assert file_bin is not None
+    result = file_bin
+    resultMetadata.put("file.extension", ".csv")
+    resultMetadata.put("file.name", filename)
+    resultMetadata.put("content.type", "text/csv")
+
+
+def export_dataframe_json(dataframe, filename="dataframe.json"):
+    """
+    Export a Pandas dataframe to a JSON file.
+
+    :param dataframe: Pandas dataframe.
+    :param filename: Python string.
+    :return: None.
+    """
+    global result
+    dataframe.to_json(filename, orient='split')
+    with open(filename, "rb") as binary_file:
+        file_bin = binary_file.read()
+    assert file_bin is not None
+    result = file_bin
+    resultMetadata.put("file.extension", ".json")
+    resultMetadata.put("file.name", filename)
+    resultMetadata.put("content.type", "application/json")
+
+
+def export_dataframe_tableau(dataframe, filename="dataframe.hyper"):
+    """
+    Export a Pandas dataframe to a Tableau file.
+
+    :param dataframe: Pandas dataframe.
+    :param filename: Python string.
+    :return: None.
+    """
+    global result
+    import pantab
+    # TODO: Fix ModuleNotFoundError: No module named 'tableauhyperapi'
+    result = dataframe.to_json(orient='split')
+    pantab.frame_to_hyper(dataframe, filename)
+    with open(filename, "rb") as binary_file:
+        file_bin = binary_file.read()
+    assert file_bin is not None
+    result = file_bin
+    resultMetadata.put("file.extension", ".hyper")
+    resultMetadata.put("file.name", filename)
+    resultMetadata.put("content.type", "application/octet-stream")
+
+
 def transfer_dataframe_in_dataspace(dataframe, dataspace="user"):
     """
     Transfer a Pandas dataframe to the user space.
@@ -239,7 +381,7 @@ def transfer_dataframe_in_dataspace(dataframe, dataspace="user"):
     """
     global variables, userspaceapi, globalspaceapi, gateway
 
-    if dataspace is None:
+    if dataspace is None or dataspace not in ["user", "global"]:
         dataspace = "user"
 
     job_id = variables.get("PA_JOB_ID")
@@ -303,7 +445,7 @@ def encode_columns(dataframe, columns, sep=","):
 
     :param dataframe: Pandas dataframe.
     :param columns: String containing the columns name separated by comma.
-    :param sep: Column separator.
+    :param sep: Column separator. Default is comma ','.
     :return: Pandas dataframe and the encode map dictionary.
     """
     from sklearn.preprocessing import LabelEncoder
@@ -332,7 +474,7 @@ def apply_encoder(dataframe, columns, encode_map, sep=","):
     :param dataframe: Pandas dataframe.
     :param columns: String containing the columns name separated by comma.
     :param encode_map: Encode map dictionary.
-    :param sep: Column separator.
+    :param sep: Column separator. Default is comma ','.
     :return: Pandas dataframe.
     """
     if isinstance(columns, str):
