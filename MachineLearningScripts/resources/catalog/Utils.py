@@ -4,10 +4,30 @@
 Provide a collection of common utility Python functions and classes
 for Proactive machine learning tasks and workflows.
 """
-import os
+import sys, os
 
-global variables, result, results, resultMetadata
+global variables, result, results, resultMetadata, resultMap
 global userspaceapi, globalspaceapi, gateway
+
+
+class obj(object):
+    def __init__(self, d):
+        for a, b in d.items():
+            if isinstance(b, (list, tuple)):
+                setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+            else:
+                setattr(self, a, obj(b) if isinstance(b, dict) else b)
+
+
+def install(package):
+    """
+    Install a Python package.
+
+    :param package: Package name.
+    :return: None.
+    """
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
 
 def raiser(msg=None):
@@ -54,6 +74,18 @@ def assert_not_none_not_empty(s, msg=None):
     """
     assert_not_none(s, msg)
     assert_not_empty(s, msg)
+
+
+def assert_valid_string(s, msg=None):
+    """
+    Assert input 's' is a valid string.
+
+    :param s: Input string.
+    :param msg:  Default error message.
+    :return: None.
+    """
+    if not type(s) == str:
+        raiser(msg)
 
 
 def assert_valid_int(s, msg=None):
@@ -133,12 +165,109 @@ def assert_between(val, minvalue, maxvalue, msg=None):
     assert_less_equal(val, maxvalue, msg)
 
 
+def is_not_empty(s):
+    """
+    Check input string is not empty.
+    Returns True if not empty, and False if it's empty.
+
+    :param s: Input string.
+    :return: Boolean.
+    """
+    return bool(s.strip())
+
+
+def is_not_none(expr):
+    """
+    Check if the expression is not None.
+
+    :param expr: Tested expression.
+    :return: Boolean.
+    """
+    return expr is not None
+
+
+def is_not_none_not_empty(s):
+    """
+    Check if the input string is not none and not empty.
+
+    :param s: Input string.
+    :return: Boolean.
+    """
+    return is_not_none(s) and is_not_empty(s)
+
+
+def str_to_bool(s, none_is_false=False):
+    """
+    Convert a string representation to True or False.
+
+    :param s: String.
+    :param none_is_false: Consider None as False (default=False).
+    :return: Boolean.
+    """
+    if none_is_false and s is None:
+        return False
+    else:
+        assert_valid_string(s, msg="The input should be a string type!")
+        s = s.lower()
+        if s in ('y', 'yes', 't', 'true', 'on', '1'):
+            return True
+        elif s in ('n', 'no', 'f', 'false', 'off', '0'):
+            return False
+        else:
+            raise ValueError("Invalid truth value %r" % (s,))
+
+
+def is_true(s, none_is_false=False):
+    """
+    Check if a string 's' is True or False.
+
+    :param s: String.
+    :param none_is_false: Consider None as False (default=False).
+    :return: Boolean.
+    """
+    return str_to_bool(s, none_is_false)
+
+
+def is_false(s, none_is_false=False):
+    """
+    Check if a string 's' is True or False.
+
+    :param s: String.
+    :param none_is_false: Consider None as False (default=False).
+    :return: Boolean.
+    """
+    return not is_true(s, none_is_false)
+
+
+def is_nvidia_rapids_enabled():
+    nvidia_rapids_enabled = False
+    if variables.get("USE_NVIDIA_RAPIDS") is not None:
+        nvidia_rapids_enabled = str_to_bool(variables.get("USE_NVIDIA_RAPIDS"))
+    if nvidia_rapids_enabled:
+        try:
+            import cudf
+        except ImportError:
+            print("NVIDIA RAPIDS is not available")
+            nvidia_rapids_enabled = False
+            pass
+    return nvidia_rapids_enabled
+
+
+def dict_to_obj(d):
+    """
+    Convert a Python dictionary to a Python object.
+
+    :param d: Python dictionary.
+    :return: Python object.
+    """
+    return obj(d)
+
+
 def check_task_is_enabled():
     """
     Check if the task/workflow variable TASK_ENABLED exists,
     and if it's `false` then terminate the Python script.
     """
-    # import sys
     global variables
     task_name = variables.get("PA_TASK_NAME")
     if str(variables.get("TASK_ENABLED")).lower() == 'false':
@@ -194,10 +323,33 @@ def get_input_variables_from_key(input_variables, key):
 def preview_dataframe_in_task_result(dataframe, output_type=None):
     """
     Preview a Pandas dataframe in the following outputs type: HTML, CSV, and JSON.
+
+    :param dataframe: Pandas dataframe.
+    :param output_type: Python string: HTML, CSV, JSON or None (default=HTML).
+    :return: None.
+    """
+    output_list = ["html", "csv", "json"]
+    output_type = output_type.lower() if output_type is not None else output_type
+    if output_type not in output_list:
+        output_type = "html"
+
+    if output_type == "html":
+        export_dataframe_html(dataframe)
+
+    if output_type == "csv":
+        export_dataframe_csv(dataframe)
+
+    if output_type == "json":
+        export_dataframe_json(dataframe)
+
+
+def export_dataframe_in_task_result(dataframe, output_type=None):
+    """
+    Export a Pandas dataframe in the following outputs type: HTML, CSV, and JSON.
     The DataFrame can be also exported to Tableau or S3.
 
     :param dataframe: Pandas dataframe.
-    :param output_type: Python string: HTML, CSV, JSON, Tableau, S3 or None (default).
+    :param output_type: Python string: HTML, CSV, JSON, Tableau, S3 or None (default=HTML).
     :return: None.
     """
     output_list = ["html", "csv", "json", "tableau", "s3"]
@@ -423,6 +575,20 @@ def compress_and_transfer_dataframe_in_variables(dataframe):
     return dataframe_id
 
 
+def get_and_decompress_json_dataframe(dataframe_id):
+    """
+    Get a Pandas dataframe in JSON format from Proactive variables by using its ID.
+
+    :param dataframe_id: Pandas dataframe id (uuid).
+    :return: JSON dataframe.
+    """
+    import bz2
+    dataframe_json = variables.get(dataframe_id)
+    assert_not_none(dataframe_json, "Invalid dataframe!")
+    dataframe_json = bz2.decompress(dataframe_json).decode()
+    return dataframe_json
+
+
 def get_and_decompress_dataframe(dataframe_id):
     """
     Get a Pandas dataframe from Proactive variables by using its ID.
@@ -430,11 +596,8 @@ def get_and_decompress_dataframe(dataframe_id):
     :param dataframe_id: Pandas dataframe id (uuid).
     :return: Pandas dataframe.
     """
-    import bz2
     import pandas as pd
-    dataframe_json = variables.get(dataframe_id)
-    assert_not_none(dataframe_json, "Invalid dataframe!")
-    dataframe_json = bz2.decompress(dataframe_json).decode()
+    dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
     dataframe = pd.read_json(dataframe_json, orient='split')
     return dataframe
 
@@ -487,3 +650,170 @@ def apply_encoder(dataframe, columns, encode_map, sep=","):
         col_mapper = encode_map[col]
         dataframe_aux[col] = dataframe[col].map(col_mapper)
     return dataframe_aux
+
+
+def scale_columns(dataframe, columns, scaler_name="RobustScaler"):
+    """
+    Apply a data normalization method to the specified columns of a Pandas dataframe.
+
+    :param dataframe: Pandas dataframe.
+    :param columns: String containing the columns name separated by comma.
+    :param scaler_name: String containing the name of the scaler method (default="RobustScaler").
+    :return: Pandas dataframe and the scaler object.
+    """
+    import pandas as pd
+    from sklearn import preprocessing
+
+    scaler = None
+    if scaler_name == "StandardScaler":
+        scaler = preprocessing.StandardScaler()
+    if scaler_name == "RobustScaler":
+        scaler = preprocessing.RobustScaler()
+    if scaler_name == "MinMaxScaler":
+        scaler = preprocessing.MinMaxScaler()
+    if scaler_name == "Normalizer":
+        scaler = preprocessing.Normalizer()
+    assert scaler is not None
+
+    data = dataframe.filter(columns, axis=1)
+    print(scaler.fit(data))
+
+    scaled_data = scaler.transform(data)
+    scaled_df = pd.DataFrame(scaled_data, columns=columns)
+
+    dataframe_scaled = dataframe.copy()
+    dataframe_scaled = dataframe_scaled.reset_index(drop=True)
+    for column in columns:
+        dataframe_scaled[column] = scaled_df[column]
+
+    return dataframe_scaled, scaler
+
+
+def apply_scaler(dataframe, columns, scaler):
+    """
+    Apply a scaler object to the specified columns of a Pandas dataframe.
+
+    :param dataframe: Pandas dataframe.
+    :param columns: String containing the columns name separated by comma.
+    :param scaler: Scaler object.
+    :return: Pandas dataframe.
+    """
+    import pandas as pd
+
+    data = dataframe.filter(columns, axis=1)
+    scaled_data = scaler.transform(data)
+    scaled_df = pd.DataFrame(scaled_data, columns=columns)
+
+    dataframe_scaled = dataframe.copy()
+    dataframe_scaled = dataframe_scaled.reset_index(drop=True)
+    for column in columns:
+        dataframe_scaled[column] = scaled_df[column]
+
+    return dataframe_scaled
+
+
+def compute_global_model(dataframe, columns, bins, model_type="KMeans"):
+    """
+    Compute a global model from a Pandas dataframe.
+
+    :param dataframe: Pandas dataframe.
+    :param columns: List of the columns name.
+    :param bins: Number of bins.
+    :param model_type: Type of the model (KMeans, PolynomialFeatures).
+    :return: Model.
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import PolynomialFeatures
+
+    models = {}
+    for j, column in enumerate(columns):
+        column_df = dataframe[column]
+        X = column_df.values
+
+        if model_type == "KMeans":
+            model = KMeans(n_clusters=bins[j], random_state=0).fit(X.reshape(-1, 1))
+
+        if model_type == "PolynomialFeatures":
+            model = PolynomialFeatures().fit(X.reshape(-1, 1))
+
+        models[column] = model
+    return models
+
+
+def compute_features(dataframe, columns, bins, model, model_type="KMeans"):
+    """
+    Compute the features of the specified columns from a Pandas dataframe using the given model.
+
+    :param dataframe: Pandas dataframe.
+    :param columns: List of the columns name.
+    :param bins: Number of bins.
+    :param model: Model.
+    :param model_type: Type of the model.
+    :return: Features.
+    """
+    import numpy as np
+    import scipy.stats.stats as st
+    row = []
+    for j, column in enumerate(columns):
+        column_df = dataframe[column]
+        X = column_df.values
+
+        if model is not None:
+            if model_type == "KMeans":
+                r = model[column].predict(X.reshape(-1, 1))
+
+            if model_type == "PolynomialFeatures":
+                r = model[column].transform(X.reshape(-1, 1)).tolist()
+        else:
+            r = X
+
+        # compute feature histogram
+        # counts, bin_edges = np.histogram(result, bins=bins[j], density=False)
+        # column_hist = counts
+
+        # compute normalized feature histogram
+        counts, bin_edges = np.histogram(r, bins=bins[j], density=True)
+        column_hist = counts * np.diff(bin_edges)
+
+        row.extend(column_hist)
+
+        # add extra features
+        kurtosis = st.kurtosis(X.reshape(-1, 1))[0]
+        skew = st.skew(X.reshape(-1, 1))[0]
+        min_value = column_df.min()
+        max_value = column_df.max()
+        mean_value = column_df.mean()
+        median_value = column_df.median()
+        row.extend([kurtosis, skew, min_value, max_value, mean_value, median_value])
+    return row
+
+
+def get_summary(dataframe, columns, bins, model, model_type, ref_column, label_column=None):
+    """
+    Get a summary of a Pandas dataframe using the given model.
+
+    :param dataframe: Pandas dataframe.
+    :param columns: List of the columns name.
+    :param bins: Number of bins.
+    :param model: Model.
+    :param model_type: Type of the model.
+    :param ref_column: Reference column.
+    :param label_column: Label column (optional).
+    :return: Pandas dataframe.
+    """
+    data = {}
+    IDs = dataframe[ref_column].unique()
+    for i, ID in enumerate(IDs):
+        sub_df = dataframe.loc[dataframe[ref_column] == ID]
+        row = [ID]
+
+        features = compute_features(sub_df, columns, bins, model, model_type)
+        row.extend(features)
+
+        if label_column is not None and label_column is not "":
+            assert sub_df[label_column].unique().shape[0] == 1
+            label = sub_df[label_column].unique()[0]
+            row.extend([label])
+
+        data[i] = row
+    return data
