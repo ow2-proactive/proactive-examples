@@ -6,8 +6,17 @@ for Proactive machine learning tasks and workflows.
 """
 import sys, os
 
-global variables, result, results, resultMetadata
+global variables, result, results, resultMetadata, resultMap
 global userspaceapi, globalspaceapi, gateway
+
+
+class obj(object):
+    def __init__(self, d):
+        for a, b in d.items():
+            if isinstance(b, (list, tuple)):
+                setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+            else:
+                setattr(self, a, obj(b) if isinstance(b, dict) else b)
 
 
 def install(package):
@@ -228,6 +237,30 @@ def is_false(s, none_is_false=False):
     :return: Boolean.
     """
     return not is_true(s, none_is_false)
+
+
+def is_nvidia_rapids_enabled():
+    nvidia_rapids_enabled = False
+    if variables.get("USE_NVIDIA_RAPIDS") is not None:
+        nvidia_rapids_enabled = str_to_bool(variables.get("USE_NVIDIA_RAPIDS"))
+    if nvidia_rapids_enabled:
+        try:
+            import cudf
+        except ImportError:
+            print("NVIDIA RAPIDS is not available")
+            nvidia_rapids_enabled = False
+            pass
+    return nvidia_rapids_enabled
+
+
+def dict_to_obj(d):
+    """
+    Convert a Python dictionary to a Python object.
+
+    :param d: Python dictionary.
+    :return: Python object.
+    """
+    return obj(d)
 
 
 def check_task_is_enabled():
@@ -542,6 +575,20 @@ def compress_and_transfer_dataframe_in_variables(dataframe):
     return dataframe_id
 
 
+def get_and_decompress_json_dataframe(dataframe_id):
+    """
+    Get a Pandas dataframe in JSON format from Proactive variables by using its ID.
+
+    :param dataframe_id: Pandas dataframe id (uuid).
+    :return: JSON dataframe.
+    """
+    import bz2
+    dataframe_json = variables.get(dataframe_id)
+    assert_not_none(dataframe_json, "Invalid dataframe!")
+    dataframe_json = bz2.decompress(dataframe_json).decode()
+    return dataframe_json
+
+
 def get_and_decompress_dataframe(dataframe_id):
     """
     Get a Pandas dataframe from Proactive variables by using its ID.
@@ -549,11 +596,8 @@ def get_and_decompress_dataframe(dataframe_id):
     :param dataframe_id: Pandas dataframe id (uuid).
     :return: Pandas dataframe.
     """
-    import bz2
     import pandas as pd
-    dataframe_json = variables.get(dataframe_id)
-    assert_not_none(dataframe_json, "Invalid dataframe!")
-    dataframe_json = bz2.decompress(dataframe_json).decode()
+    dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
     dataframe = pd.read_json(dataframe_json, orient='split')
     return dataframe
 
