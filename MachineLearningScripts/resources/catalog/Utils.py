@@ -4,10 +4,21 @@
 Provide a collection of common utility Python functions and classes
 for Proactive machine learning tasks and workflows.
 """
-import os
+import sys, os
 
 global variables, result, results, resultMetadata
 global userspaceapi, globalspaceapi, gateway
+
+
+def install(package):
+    """
+    Install a Python package.
+
+    :param package: Package name.
+    :return: None.
+    """
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
 
 def raiser(msg=None):
@@ -54,6 +65,18 @@ def assert_not_none_not_empty(s, msg=None):
     """
     assert_not_none(s, msg)
     assert_not_empty(s, msg)
+
+
+def assert_valid_string(s, msg=None):
+    """
+    Assert input 's' is a valid string.
+
+    :param s: Input string.
+    :param msg:  Default error message.
+    :return: None.
+    """
+    if not type(s) == str:
+        raiser(msg)
 
 
 def assert_valid_int(s, msg=None):
@@ -164,12 +187,54 @@ def is_not_none_not_empty(s):
     return is_not_none(s) and is_not_empty(s)
 
 
+def str_to_bool(s, none_is_false=False):
+    """
+    Convert a string representation to True or False.
+
+    :param s: String.
+    :param none_is_false: Consider None as False (default=False).
+    :return: Boolean.
+    """
+    if none_is_false and s is None:
+        return False
+    else:
+        assert_valid_string(s, msg="The input should be a string type!")
+        s = s.lower()
+        if s in ('y', 'yes', 't', 'true', 'on', '1'):
+            return True
+        elif s in ('n', 'no', 'f', 'false', 'off', '0'):
+            return False
+        else:
+            raise ValueError("Invalid truth value %r" % (s,))
+
+
+def is_true(s, none_is_false=False):
+    """
+    Check if a string 's' is True or False.
+
+    :param s: String.
+    :param none_is_false: Consider None as False (default=False).
+    :return: Boolean.
+    """
+    return str_to_bool(s, none_is_false)
+
+
+def is_false(s, none_is_false=False):
+    """
+    Check if a string 's' is True or False.
+
+    :param s: String.
+    :param none_is_false: Consider None as False (default=False).
+    :return: Boolean.
+    """
+    return not is_true(s, none_is_false)
+
+
 def check_task_is_enabled():
     """
     Check if the task/workflow variable TASK_ENABLED exists,
     and if it's `false` then terminate the Python script.
     """
-    # import sys
     global variables
     task_name = variables.get("PA_TASK_NAME")
     if str(variables.get("TASK_ENABLED")).lower() == 'false':
