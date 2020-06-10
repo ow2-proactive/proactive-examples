@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Proactive Drop Columns for Machine Learning
+"""Proactive Encode Data for Machine Learning
 
-This module contains the Python script for the Drop Columns task.
+This module contains the Python script for the Encode Data task.
 """
 import urllib.request
 import json

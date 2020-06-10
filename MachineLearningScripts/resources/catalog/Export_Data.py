@@ -18,7 +18,7 @@ PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/r
 exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, assert_not_none_not_empty
 global get_input_variables, get_and_decompress_dataframe
-global preview_dataframe_in_task_result
+global export_dataframe_in_task_result
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -44,7 +44,7 @@ dataframe = get_and_decompress_dataframe(dataframe_id)
 # -------------------------------------------------------------
 # Preview results
 #
-preview_dataframe_in_task_result(dataframe, output_type=OUTPUT_TYPE)
+export_dataframe_in_task_result(dataframe, output_type=OUTPUT_TYPE)
 
 # -------------------------------------------------------------
 print("END " + __file__)
