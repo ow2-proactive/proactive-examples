@@ -1,11 +1,9 @@
-__file__ = variables.get("PA_TASK_NAME")
+# -*- coding: utf-8 -*-
+"""Proactive Train Model for Machine Learning
 
-if str(variables.get("TASK_ENABLED")).lower() == 'false':
-    print("Task " + __file__ + " disabled")
-    quit()
-
-print("BEGIN " + __file__)
-
+This module contains the Python script for the Train Model task.
+"""
+import urllib.request
 import bz2
 import json
 import pickle
@@ -18,35 +16,37 @@ import pandas as pd
 
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import StratifiedKFold
-from distutils.util import strtobool
 
+global variables, resultMetadata, resultMap
 
-class obj(object):
-    def __init__(self, d):
-        for a, b in d.items():
-            if isinstance(b, (list, tuple)):
-                setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
-            else:
-                setattr(self, a, obj(b) if isinstance(b, dict) else b)
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
 
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, preview_dataframe_in_task_result
+global is_nvidia_rapids_enabled, is_not_none_not_empty
+global raiser, get_input_variables, dict_to_obj
+global get_and_decompress_json_dataframe
+
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
 
 # -------------------------------------------------------------
 # Check if NVIDIA RAPIDS is enabled
 # https://rapids.ai/
 #
-NVIDIA_RAPIDS_ENABLED = False
-if variables.get("USE_NVIDIA_RAPIDS") is not None:
-    NVIDIA_RAPIDS_ENABLED = bool(strtobool(variables.get("USE_NVIDIA_RAPIDS")))
-if NVIDIA_RAPIDS_ENABLED:
-    try:
-        import cudf
-    except ImportError:
-        print("NVIDIA RAPIDS is not available")
-        NVIDIA_RAPIDS_ENABLED = False
-        pass
+NVIDIA_RAPIDS_ENABLED = is_nvidia_rapids_enabled()
 print('NVIDIA_RAPIDS_ENABLED: ', NVIDIA_RAPIDS_ENABLED)
 
 if NVIDIA_RAPIDS_ENABLED:
+    import cudf
+
     def cross_val_score(clf, X, y, cv=3, scoring=None):
         kf = StratifiedKFold(cv)
         acc_scores = []
@@ -75,13 +75,7 @@ input_variables = {
     'task.algorithm_json': None,
     'task.label_column': None
 }
-
-for key in input_variables.keys():
-    for res in results:
-        value = res.getMetadata().get(key)
-        if value is not None:
-            input_variables[key] = value
-            break
+get_input_variables(input_variables)
 
 dataframe_id = None
 if input_variables['task.dataframe_id'] is not None:
@@ -90,9 +84,7 @@ if input_variables['task.dataframe_id_train'] is not None:
     dataframe_id = input_variables['task.dataframe_id_train']
 print("dataframe id (in): ", dataframe_id)
 
-dataframe_json = variables.get(dataframe_id)
-assert dataframe_json is not None
-dataframe_json = bz2.decompress(dataframe_json).decode()
+dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
 
 if NVIDIA_RAPIDS_ENABLED:
     dataframe = cudf.read_json(dataframe_json, orient='split')
@@ -101,18 +93,18 @@ else:
 
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
-if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+if is_not_none_not_empty(LABEL_COLUMN):
     is_labeled_data = True
 else:
     LABEL_COLUMN = input_variables['task.label_column']
-    if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+    if is_not_none_not_empty(LABEL_COLUMN):
         is_labeled_data = True
 
 algorithm_json = input_variables['task.algorithm_json']
 assert algorithm_json is not None
 algorithm = json.loads(algorithm_json)
 print("algorithm:\n", algorithm)
-alg = obj(algorithm)
+alg = dict_to_obj(algorithm)
 if not hasattr(alg, 'automl'):
     alg.automl = True
 if not hasattr(alg, 'sampling'):
@@ -338,7 +330,7 @@ if model is not None:
     print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")
     resultMetadata.put("task.model_id", model_id)
 else:
-    print("Algorithm not found!")
+    raiser("Algorithm not found!")
 
 # -----------------------------------------------------------------
 # Data drift measures
@@ -364,9 +356,7 @@ model_metadata_id = str(uuid.uuid4())
 variables.put(model_metadata_id, compressed_model_metadata)
 
 print("dataframe id (out): ", dataframe_id)
-print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
-print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
-print(dataframe.head())
+print("model metadata id (out): ", model_metadata_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
@@ -398,4 +388,10 @@ result_map = json.dumps(result_map)
 resultMap.put("RESULT_JSON", result_map)
 print('result_map: ', result_map)
 
+# -------------------------------------------------------------
+# Preview results
+#
+preview_dataframe_in_task_result(dataframe)
+
+# -------------------------------------------------------------
 print("END " + __file__)

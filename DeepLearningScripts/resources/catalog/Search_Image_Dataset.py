@@ -27,7 +27,7 @@ if 'variables' in locals():
     search_engine = variables.get("SEARCH_ENGINE")
     query_size = int(variables.get("QUERY_SIZE")) if variables.get("QUERY_SIZE") else raiser("QUERY_SIZE not defined!")
     search_term = variables.get('SEARCH_TERM') if variables.get("SEARCH_TERM") else raiser("SEARCH_TERM not defined!")
-    data_path = variables.get("DATA_PATH") if variables.get("DATA_PATH") else raiser("DATA_PATH not defined!")
+    data_path = variables.get("DATA_FOLDER") if variables.get("DATA_FOLDER") else raiser("DATA_FOLDER not defined!")
     img_size =  variables.get("IMG_SIZE") if variables.get("IMG_SIZE") else raiser("IMG_SIZE not defined!")
 
 # Get an unique ID
