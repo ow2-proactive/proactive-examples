@@ -466,6 +466,13 @@ def trace_preview_api(key) -> str:
             # .set_table_styles([{'selector': '', 'props': [('border', '4px solid #7a7')]}])
             config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center', index=False)
             trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
+    
+            css_style="""
+            div {
+            weight: 100%;
+            }
+                        """
+        
             result = """
             <!DOCTYPE html>
             <html>
@@ -474,13 +481,14 @@ def trace_preview_api(key) -> str:
                   <title>Audit & Traceability</title>
                   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
               </head>
-                <body class="container">
-                  <h1 class="text-center my-4" style="color:#003050;">Audit & Traceability</h1>
-                  <div style="test text-align:center">{0}</div>
+                <body>
+                  <h2 class="text-center my-4" style="color:#003050;">Audit & Traceability</h2>
+                  <div style="text-align:center;">{0}
                   <br/>
                   <br/>
                   <br/>
-                  <div style="text-align:center">{1}</div>
+                  {1}
+                  </div>
                 </body></html>""".format(config_result, trace_result)
             # Add link to log predictions if enabled
             if get_config('LOG_PREDICTIONS'):
