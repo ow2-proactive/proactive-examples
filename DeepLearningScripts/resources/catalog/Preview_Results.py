@@ -46,9 +46,9 @@ result = """
                   <title>Deep Learning Preview</title>
                   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
               </head>
-                <body class="container">
-                	<h1 class="text-center my-4" style="color:#003050;">Deep Learning Results</h1>
-                	 <div style="text-align:center">{0}</div>
+                <body class="table text-center">
+                	<h2 class="text-center my-3" style="color:#003050;">Deep Learning Results</h2>
+                     {0}
                 </body></html>
 """.format(result)
 
