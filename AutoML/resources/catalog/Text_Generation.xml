@@ -1,0 +1,368 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Text_Generation" onTaskError="continueJobExecution" priority="normal" projectName="2. Objective ML Examples" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable name="NS" value=""/>
+    <variable name="NS_BATCH" value=""/>
+    <variable name="NODE_ACCESS_TOKEN" value=""/>
+    <variable model="PA:Boolean" name="DOCKER_ENABLED" value="True"/>
+    <variable model="PA:Boolean" name="DOCKER_GPU_ENABLED" value="True"/>
+    <variable model="PA:JSON" name="INPUT_VARIABLES" value=""/>
+    <variable name="SEARCH_SPACE" value="{&quot;OPTIMIZER&quot;: choice([&quot;Adam&quot;, &quot;RMSprop&quot;]), &quot;EPOCHS&quot;: choice([2000, 2030]), &quot;MAXLEN&quot;: choice([40, 90, 100, 200, 400]), &quot;UNIT&quot;: choice([256, 600, 700]), &quot;DROPOUT&quot;: choice([0.004, 0.4])}"/>
+  </variables>
+  <description>
+    <![CDATA[ Train a simple Long Short-Term Memory to learn sequences of characters from 'The Alchemist' book. It's a novel by Brazilian author Paulo Coelho that was first published in 1988. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="auto-ml-optimization"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/keras.png"/>
+<info name="Documentation" value="MLOS/MLOSUserGuide.html#_objective_ml_examples"/>
+<info name="NS" value="$NS"/>
+<info name="NS_BATCH" value="$NS_BATCH"/>
+<info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Text_Generation">
+      <description>
+        <![CDATA[ Train a simple Long Short-Term Memory to learn sequences of characters from 'The Alchemist' book. It's a novel by Brazilian author Paulo Coelho that was first published in 1988. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" model="PA:Integer" name="MAXLEN" value="100"/>
+        <variable inherited="false" model="PA:Integer" name="UNIT" value="256"/>
+        <variable inherited="false" model="PA:DOUBLE" name="DROPOUT" value="0.5"/>
+        <variable inherited="true" name="TOKEN" value="{&quot;_token_id&quot;: 0}"/>
+        <variable inherited="false" name="OPTIMIZER" value="RMSprop"/>
+        <variable inherited="false" name="DATA_PATH" value="https://activeeon-public.s3.eu-west-2.amazonaws.com/datasets/alchemist.txt"/>
+        <variable inherited="false" name="EPOCHS" value="10"/>
+        <variable inherited="true" model="PA:Boolean" name="VISDOM_ENABLED" value="False"/>
+        <variable inherited="false" name="MOUNT_LOG_PATH" value="/tmp"/>
+        <variable inherited="false" name="DOCKER_LOG_PATH" value="/tmp"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/keras.png"/>
+        <info name="task.documentation" value="MLOS/MLOSUserGuide.html#_objective_ml_examples"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_docker_cuda_v4/raw"/>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+params_encoded = variables.get('params_encoded')
+token_encoded = variables.get('token_encoded')
+
+// If encoded variables are found
+if ((params_encoded != null && params_encoded.length() > 0) &&
+    (token_encoded != null && token_encoded.length() > 0))
+{
+    println "Found encoded variables:"
+    println "params_encoded: " + params_encoded
+    println "token_encoded: " + token_encoded
+    
+    byte[] params_decoded = params_encoded.decodeBase64()
+    byte[] token_decoded = token_encoded.decodeBase64()
+    
+    input_variables = new String(params_decoded)
+    token = new String(token_decoded)
+    
+    variables.put('INPUT_VARIABLES', input_variables)
+    variables.put('TOKEN', token)
+}
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import re
+import sys
+import json
+import wget
+import uuid
+import random
+import shutil
+import zipfile
+import numpy as np
+import unicodedata
+from os import remove, listdir, makedirs
+from os.path import basename, splitext, exists, join
+from sklearn.model_selection import train_test_split
+
+from random import randrange
+from keras.utils import np_utils
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, LSTM, GRU
+from hyperopt import STATUS_OK, Trials, fmin, hp, tpe, space_eval
+
+if sys.version_info[0] >= 3:
+    unicode = str
+
+######################## AUTOML SETTINGS ##########################
+# SEARCH_SPACE:
+#{"OPTIMIZER": choice(["Adam", "RMSprop"]), "EPOCHS": choice([2000, 2030]), "MAXLEN": choice([40, 90, 100, 200, 400]), "UNIT": choice([256, 600, 700]), "DROPOUT": choice([0.004, 0.4])}
+
+DATA_PATH = str(variables.get("DATA_PATH"))
+MAXLEN = int(variables.get("MAXLEN"))
+UNIT = int(variables.get("UNIT"))
+DROPOUT = float(variables.get("DROPOUT"))
+OPTIMIZER = (variables.get("OPTIMIZER"))
+EPOCHS = int(variables.get("EPOCHS"))
+
+input_variables = variables.get("INPUT_VARIABLES")
+if input_variables is not None and input_variables != '':
+    input_variables = json.loads(input_variables)
+    MAXLEN = input_variables["MAXLEN"]
+    UNIT = input_variables["UNIT"]
+    DROPOUT = input_variables["DROPOUT"]
+    OPTIMIZER = input_variables["OPTIMIZER"]
+    EPOCHS = input_variables["EPOCHS"]
+
+# Get current job ID
+PA_JOB_ID = variables.get("PA_JOB_ID")
+
+# Check parent job ID
+PARENT_JOB_ID = genericInformation.get('PARENT_JOB_ID')
+
+# Define the path to save the model
+OUTPUT_PATH = variables.get("DOCKER_LOG_PATH")
+MODEL_PATH = join(OUTPUT_PATH, 'model')
+os.makedirs(MODEL_PATH, exist_ok=True)
+
+### BEGIN VISDOM ###
+VISDOM_ENABLED = variables.get("VISDOM_ENABLED")
+if VISDOM_ENABLED is not None and VISDOM_ENABLED.lower() == "true":
+    from visdom import Visdom
+
+
+VISDOM_ENDPOINT = variables.get("VISDOM_ENDPOINT")
+if VISDOM_ENDPOINT is not None:
+    from visdom import Visdom
+
+    VISDOM_ENDPOINT = VISDOM_ENDPOINT.replace("http://", "")
+    print("VISDOM_ENDPOINT: ", VISDOM_ENDPOINT)
+    (VISDOM_HOST, VISDOM_PORT) = VISDOM_ENDPOINT.split(":")
+            
+    print("VISDOM_HOST: ", VISDOM_HOST)
+    print("VISDOM_PORT: ", VISDOM_PORT)
+            
+    print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
+    vis = Visdom(server="http://"+VISDOM_HOST, port=int(VISDOM_PORT))
+    assert vis.check_connection()
+
+env = 'main'
+if PARENT_JOB_ID is not None:
+    env = 'job_id_' + PARENT_JOB_ID
+###################################################################
+
+print("DATA_PATH: " + DATA_PATH)
+
+if DATA_PATH is not None and DATA_PATH.startswith("http"):
+    # Get an unique ID
+    ID = str(uuid.uuid4())
+
+    # Define localspace
+    LOCALSPACE = join('data', ID)
+    os.makedirs(LOCALSPACE, exist_ok=True)
+    print("LOCALSPACE:  " + LOCALSPACE)
+
+    DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
+    DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
+    os.makedirs(DATASET_PATH, exist_ok=True)
+
+    print("Dataset information: ")
+    print("DATASET_NAME: " + DATASET_NAME)
+    print("DATASET_PATH: " + DATASET_PATH)
+
+    print("Downloading...")
+    filename = wget.download(DATA_PATH, DATASET_PATH)
+    print("FILENAME: " + filename)
+    print("OK")
+
+
+def load_text(filename, MAXLEN):
+    # read text
+    raw_text = open(filename, 'r', encoding='utf-8').read()
+
+    dataX = []
+    dataY = []
+
+    # We cannot model the characters directly, instead we must convert the characters to integers
+    # We can do this easily by first creating a set of all of the distinct characters in the equations, then creating a map of each character to a unique integer.
+    # Also, when preparing the mapping of unique characters to integers
+
+    chars = sorted(list(set(raw_text)))
+    char_to_int = dict((c, i) for i, c in enumerate(chars))
+    int_to_char = dict((i, c) for i, c in enumerate(chars))
+
+    # Summary equation dataset
+    n_chars = len(raw_text)
+    n_vocab = len(chars)
+    #print("Total Characters: ", n_chars)
+    #print("Total Vocab: ", n_vocab)
+
+    # Each training pattern of the network is comprised of 'maxlen' time steps of one character (X) followed by one character output (y).
+    # When creating these sequences, we slide this window along the whole book one character at a time, allowing each character a chance to be learned from the 100 characters that preceded it (except the first 100 characters of course).
+    #  Now, we convert the characters to integers using our lookup table we prepared earlier.
+
+    for i in range(0, n_chars - MAXLEN, 1):
+        seq_in = raw_text[i:i + MAXLEN]
+        seq_out = raw_text[i + MAXLEN]
+        dataX.append([char_to_int[char] for char in seq_in])
+        dataY.append(char_to_int[seq_out])
+
+    n_patterns = len(dataX)
+    #print("Total Patterns: ", n_patterns)
+
+    # Now that we have prepared our training data we need to transform it so that
+    # it is suitable for use with Keras.
+    # First we must transform the list of input sequences into the form [samples, time steps, features] expected by an LSTM network.
+    # Next we need to rescale the integers to the range 0-to-1 to make the patterns easier to learn by the LSTM network that uses the sigmoid activation function by default.
+    # Finally, we need to convert the output patterns (single characters converted to integers) into a one hot encoding.
+
+    # reshape X to be [samples, time steps, features]
+    X = np.reshape(dataX, (n_patterns, MAXLEN, 1))
+    # normalize
+    X = X / float(n_vocab)
+    # one hot encode the output variable
+    y = np_utils.to_categorical(dataY)
+
+    return X, y, int_to_char, n_vocab, dataX, raw_text
+
+
+X, y, int_to_char, n_vocab, dataX, raw_text = load_text(filename, MAXLEN)
+
+
+# define the generator model
+def build_generator():
+    print('Building generator model...')
+    generator = Sequential()
+    generator.add(LSTM(UNIT, input_shape=(X.shape[1], X.shape[2]), return_sequences=True))
+    generator.add(Dropout(DROPOUT))
+    generator.add(LSTM(UNIT))
+    generator.add(Dropout(DROPOUT))
+    generator.add(Dense(y.shape[1], activation='softmax'))
+    generator.summary()
+    
+    return generator
+#%%
+generator = build_generator()
+generator.compile(loss='categorical_crossentropy', optimizer=OPTIMIZER)
+
+
+def train_text(epochs, batch_size, X, y):
+    for epoch in range(epochs):
+        # Select a random batch of images
+        idx = np.random.randint(0, X.shape[0], batch_size)
+        equation = X[idx]
+        label = y[idx]
+        # ---------------------
+        #  Train Generator
+        # ---------------------
+        #g_loss = generator.train_on_batch(X, y, sample_weight=weights)
+        loss = generator.train_on_batch(equation, label)
+        print("%d[G loss: %f]" % (epoch, loss))
+        
+        ### BEGIN VISDOM ###
+        if VISDOM_ENABLED is not None and VISDOM_ENABLED.lower() == "true":
+            # plot line
+            win_gloss = 'win_gloss_' + str(PA_JOB_ID)
+            update = 'append' if vis.win_exists(win_gloss, env=env) else None
+            vis.line(Y=np.array([loss]), X=np.array([epoch]), env=env, win=win_gloss, update=update)
+               
+    return loss, generator
+
+
+batch_size = 256
+loss, generator = train_text(EPOCHS, batch_size, X, y)
+
+#save model
+file_path = join(MODEL_PATH, 'weights-'+str(PA_JOB_ID)+'.hdf5')
+generator.save_weights(file_path)
+
+def generate_text(generator, dataX, n_vocab, int_to_char, max_character):
+    generated = ''
+
+    data = dataX.copy()
+    start = np.random.randint(0, len(data) - 1)
+    pattern = data[start]
+
+    for i in range(max_character):
+        x = np.reshape(pattern, (1, len(pattern), 1))
+        x = x / float(n_vocab)
+        prediction = generator.predict(x, verbose=0)
+        index = np.argmax(prediction)
+        result = int_to_char[index]
+        generated += result
+        pattern.append(index)
+        pattern = pattern[1:len(pattern)]
+
+    return generated
+
+
+generated = generate_text(generator, dataX, n_vocab, int_to_char, 400)
+print('***********Text Generation************')
+print(unicode(generated).encode('utf-8'))
+
+
+######################## AUTOML SETTINGS ##########################
+#"""
+token = variables.get("TOKEN")
+# Convert from JSON to dict
+token = json.loads(token)
+
+# Return the loss value
+result_map = {'token': token, 'loss': str(loss)}
+print('result_map: ', result_map)
+
+resultMap.put("RESULT_JSON", json.dumps(result_map))
+      
+# To appear in Job Analytics
+resultMap.put("LOSS", str(loss))
+      
+#"""
+###################################################################
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            148.515625
+        </positionTop>
+        <positionLeft>
+            421.546875
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2864px;
+            height:3500px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-143.515625px;left:-416.546875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1" style="top: 148.516px; left: 421.547px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Train a simple Long Short-Term Memory to learn sequences of characters from 'The Alchemist' book - (Part One, Part Two and Epilogue). It's a novel by Brazilian author Paulo Coelho that was first published in 1988."><img src="/automation-dashboard/styles/patterns/img/wf-icons/keras.png" width="20px">&nbsp;<span class="name">Text_Generation</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 466px; top: 179px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

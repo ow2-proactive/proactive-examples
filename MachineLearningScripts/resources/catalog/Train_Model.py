@@ -1,40 +1,52 @@
-__file__ = variables.get("PA_TASK_NAME")
+# -*- coding: utf-8 -*-
+"""Proactive Train Model for Machine Learning
 
-if str(variables.get("TASK_ENABLED")).lower() != 'true':
-    print("Task " + __file__ + " disabled")
-    quit()
-
-print("BEGIN " + __file__)
-
+This module contains the Python script for the Train Model task.
+"""
+import urllib.request
 import bz2
 import json
 import pickle
 import sys
 import uuid
+import shap
 
 import numpy as np
 import pandas as pd
-import shap
+
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import StratifiedKFold
 
-# -------------------------------------------------------------
-# Use nvidia rapids
-#
-USE_NVIDIA_RAPIDS = False
-if variables.get("USE_NVIDIA_RAPIDS") is not None:
-    if str(variables.get("USE_NVIDIA_RAPIDS")).lower() == 'true':
-        USE_NVIDIA_RAPIDS = True
-if USE_NVIDIA_RAPIDS:
-    try:
-        import cudf
-    except ImportError:
-        print("NVIDIA RAPIDS is not available")
-        USE_NVIDIA_RAPIDS = False
-        pass
-print('USE_NVIDIA_RAPIDS: ', USE_NVIDIA_RAPIDS)
+global variables, resultMetadata, resultMap
 
-if USE_NVIDIA_RAPIDS:
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, preview_dataframe_in_task_result
+global is_nvidia_rapids_enabled, is_not_none_not_empty
+global raiser, get_input_variables, dict_to_obj
+global get_and_decompress_json_dataframe
+
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
+
+# -------------------------------------------------------------
+# Check if NVIDIA RAPIDS is enabled
+# https://rapids.ai/
+#
+NVIDIA_RAPIDS_ENABLED = is_nvidia_rapids_enabled()
+print('NVIDIA_RAPIDS_ENABLED: ', NVIDIA_RAPIDS_ENABLED)
+
+if NVIDIA_RAPIDS_ENABLED:
+    import cudf
+
     def cross_val_score(clf, X, y, cv=3, scoring=None):
         kf = StratifiedKFold(cv)
         acc_scores = []
@@ -54,23 +66,16 @@ if USE_NVIDIA_RAPIDS:
 else:
     from sklearn.model_selection import cross_val_score
 
-is_labeled_data = False
-LABEL_COLUMN = variables.get("LABEL_COLUMN")
-if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
-    is_labeled_data = True
-
+# -------------------------------------------------------------
+# Get data from the propagated variables
+#
 input_variables = {
     'task.dataframe_id': None,
     'task.dataframe_id_train': None,
-    'task.algorithm_json': None
+    'task.algorithm_json': None,
+    'task.label_column': None
 }
-
-for key in input_variables.keys():
-    for res in results:
-        value = res.getMetadata().get(key)
-        if value is not None:
-            input_variables[key] = value
-            break
+get_input_variables(input_variables)
 
 dataframe_id = None
 if input_variables['task.dataframe_id'] is not None:
@@ -79,55 +84,33 @@ if input_variables['task.dataframe_id_train'] is not None:
     dataframe_id = input_variables['task.dataframe_id_train']
 print("dataframe id (in): ", dataframe_id)
 
-dataframe_json = variables.get(dataframe_id)
-assert dataframe_json is not None
-dataframe_json = bz2.decompress(dataframe_json).decode()
+dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
 
-# -------------------------------------------------------------
-# Use nvidia rapids
-#
-if USE_NVIDIA_RAPIDS == True:
+if NVIDIA_RAPIDS_ENABLED:
     dataframe = cudf.read_json(dataframe_json, orient='split')
 else:
     dataframe = pd.read_json(dataframe_json, orient='split')
 
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if is_not_none_not_empty(LABEL_COLUMN):
+    is_labeled_data = True
+else:
+    LABEL_COLUMN = input_variables['task.label_column']
+    if is_not_none_not_empty(LABEL_COLUMN):
+        is_labeled_data = True
+
 algorithm_json = input_variables['task.algorithm_json']
 assert algorithm_json is not None
 algorithm = json.loads(algorithm_json)
-
-
-# -------------------------------------------------------------
-class obj(object):
-    def __init__(self, d):
-        for a, b in d.items():
-            if isinstance(b, (list, tuple)):
-                setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
-            else:
-                setattr(self, a, obj(b) if isinstance(b, dict) else b)
-
-
-# -------------------------------------------------------------
-alg = obj(algorithm)
-loss = 0
-try:
-    vars = json.loads(alg.input_variables)
-except:
-    vars = None
-try:
-    automl = alg.automl
-except:
-    automl = True
-try:
-    if alg.sampling:
-        print(alg.sampling + "exists")
-except:
+print("algorithm:\n", algorithm)
+alg = dict_to_obj(algorithm)
+if not hasattr(alg, 'automl'):
+    alg.automl = True
+if not hasattr(alg, 'sampling'):
     alg.sampling = False
+
 model = None
-
-print("alg.is_supervised: ", alg.is_supervised)
-print("alg.name: ", alg.name)
-print("alg.type: ", alg.type)
-
 if alg.is_supervised:
     # -------------------------------------------------------------
     # Classification algorithms
@@ -142,13 +125,12 @@ if alg.is_supervised:
         )
     elif alg.name == 'AutoSklearn_Classifier':
         from autosklearn import classification
-        if alg.sampling.lower() == 'true':
+        if alg.sampling:
             model = classification.AutoSklearnClassifier(
                 time_left_for_this_task=alg.task_time,
                 per_run_time_limit=alg.run_time,
-                resampling_strategy="".join(alg.sampling_strategy),
-                resampling_strategy_arguments={'folds': int(alg.folds)}
-                # feat_type = {Numerical,Numerical,Numerical,Numerical,Categorical}
+                resampling_strategy=alg.sampling_strategy,
+                resampling_strategy_arguments={'folds': alg.folds}
             )
         else:
             model = classification.AutoSklearnClassifier(
@@ -157,38 +139,36 @@ if alg.is_supervised:
             )
     elif alg.name == 'SupportVectorMachines':
         from sklearn.svm import SVC
-        model = SVC(**vars)
+        model = SVC(**alg.input_variables.__dict__)
     elif alg.name == 'GaussianNaiveBayes':
         from sklearn.naive_bayes import GaussianNB
-        model = GaussianNB(**vars)
+        model = GaussianNB(**alg.input_variables.__dict__)
     elif alg.name == 'LogisticRegression':
         from sklearn.linear_model import LogisticRegression
-        model = LogisticRegression(**vars)
+        model = LogisticRegression(**alg.input_variables.__dict__)
     elif alg.name == 'AdaBoost' and alg.type == 'classification':
         from sklearn.ensemble import AdaBoostClassifier
-        model = AdaBoostClassifier(**vars)
+        model = AdaBoostClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'GradientBoosting' and alg.type == 'classification':
         from sklearn.ensemble import GradientBoostingClassifier
-        model = GradientBoostingClassifier(**vars)
+        model = GradientBoostingClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'RandomForest' and alg.type == 'classification':
-        # -------------------------------------------------------------
-        # Use nvidia rapids
-        #
-        if USE_NVIDIA_RAPIDS == True:
+        if NVIDIA_RAPIDS_ENABLED:
             from cuml.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(**vars)
+            model = RandomForestClassifier(**alg.input_variables.__dict__)
         else:
             from sklearn.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(**vars)
+            model = RandomForestClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'XGBoost' and alg.type == 'classification':
         from xgboost.sklearn import XGBClassifier
-        model = XGBClassifier(**vars)
+        model = XGBClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'CatBoost' and alg.type == 'classification':
         from catboost import CatBoostClassifier
-        model = CatBoostClassifier(**vars)
+        model = CatBoostClassifier(**alg.input_variables.__dict__)
 
     # -------------------------------------------------------------
-    # Regression algorithms   
+    # Regression algorithms
+    #
     elif alg.name == 'TPOT_Regressor':
         from tpot import TPOTRegressor
         model = TPOTRegressor(
@@ -199,14 +179,12 @@ if alg.is_supervised:
         )
     elif alg.name == 'AutoSklearn_Regressor':
         from autosklearn import regression
-        print("alg.sampling: ", alg.sampling_strategy)
-        if alg.sampling.lower() == 'true':
+        if alg.sampling:
             model = regression.AutoSklearnRegressor(
                 time_left_for_this_task=alg.task_time,
                 per_run_time_limit=alg.run_time,
-                resampling_strategy="".join(alg.sampling_strategy),
-                resampling_strategy_arguments={'folds': int(alg.folds)}
-                # feat_type = {Numerical,Numerical,Numerical,Numerical,Categorical}
+                resampling_strategy=alg.sampling_strategy,
+                resampling_strategy_arguments={'folds': alg.folds}
             )
         else:
             model = regression.AutoSklearnRegressor(
@@ -214,65 +192,60 @@ if alg.is_supervised:
                 per_run_time_limit=alg.run_time
             )
     elif alg.name == 'LinearRegression':
-        # -------------------------------------------------------------
-        # Use nvidia rapids
-        #
-        if USE_NVIDIA_RAPIDS == True:
+        if NVIDIA_RAPIDS_ENABLED:
             from cuml.linear_model import LinearRegression
-            model = LinearRegression(**vars)
+            model = LinearRegression(**alg.input_variables.__dict__)
         else:
             from sklearn.linear_model import LinearRegression
-            model = LinearRegression(**vars)
+            model = LinearRegression(**alg.input_variables.__dict__)
     elif alg.name == 'SupportVectorRegression':
         from sklearn.svm import SVR
-        model = SVR(**vars)
+        model = SVR(**alg.input_variables.__dict__)
     elif alg.name == 'BayesianRidgeRegression':
         from sklearn.linear_model import BayesianRidge
-        model = BayesianRidge(**vars)
+        model = BayesianRidge(**alg.input_variables.__dict__)
     elif alg.name == 'AdaBoost' and alg.type == 'regression':
         from sklearn.ensemble import AdaBoostRegressor
-        model = AdaBoostRegressor(**vars)
+        model = AdaBoostRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'GradientBoosting' and alg.type == 'regression':
         from sklearn.ensemble import GradientBoostingRegressor
-        model = GradientBoostingRegressor(**vars)
+        model = GradientBoostingRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'RandomForest' and alg.type == 'regression':
         from sklearn.ensemble import RandomForestRegressor
-        model = RandomForestRegressor(**vars)
+        model = RandomForestRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'XGBoost' and alg.type == 'regression':
         from xgboost.sklearn import XGBRegressor
-        model = XGBRegressor(**vars)
+        model = XGBRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'CatBoost' and alg.type == 'regression':
         from catboost import CatBoostRegressor
-        model = CatBoostRegressor(**vars)
+        model = CatBoostRegressor(**alg.input_variables.__dict__)
 else:
     # -------------------------------------------------------------
     # Anomaly detection algorithms
+    #
     if alg.name == 'OneClassSVM':
         from sklearn import svm
-        model = svm.OneClassSVM(**vars)
+        model = svm.OneClassSVM(**alg.input_variables.__dict__)
     elif alg.name == 'IsolationForest':
         from sklearn.ensemble import IsolationForest
-        model = IsolationForest(**vars)
+        model = IsolationForest(**alg.input_variables.__dict__)
     # -------------------------------------------------------------
     # Clustering algorithms
+    #
     elif alg.name == 'MeanShift':
         from sklearn.cluster import MeanShift
-        model = MeanShift(**vars)
+        model = MeanShift(**alg.input_variables.__dict__)
     elif alg.name == 'KMeans':
-        # -------------------------------------------------------------
-        # Use nvidia rapids
-        #
-        if USE_NVIDIA_RAPIDS == True:
+        if NVIDIA_RAPIDS_ENABLED:
             from cuml.cluster import KMeans
-            model = KMeans(**vars)
+            model = KMeans(**alg.input_variables.__dict__)
         else:
             from sklearn.cluster import KMeans
-            model = KMeans(**vars)
-
+            model = KMeans(**alg.input_variables.__dict__)
 # -------------------------------------------------------------
 dataframe_label = None
 model_explainer = None
-
+loss = 0
 if model is not None:
     if is_labeled_data:
         columns = [LABEL_COLUMN]
@@ -283,9 +256,9 @@ if model is not None:
 
     if alg.is_supervised:
         # -------------------------------------------------------------
-        # Use nvidia rapids
+        # Supervised algorithms
         #
-        if USE_NVIDIA_RAPIDS == True:
+        if NVIDIA_RAPIDS_ENABLED:
             for colname in dataframe_train.columns:
                 dataframe_train[colname] = dataframe_train[colname].astype('float32')
             model.fit(dataframe_train, dataframe_label.astype('float32'))
@@ -294,40 +267,45 @@ if model is not None:
         else:
             model.fit(dataframe_train.values, dataframe_label.values.ravel())
 
-        if (alg.type == 'classification') and automl:
-            scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
-                                     cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-            loss = 1 - np.mean(scores)
-            if (not alg.name.startswith("TPOT") and not alg.name.startswith("AutoSklearn")):
-                # Explainer shap
-                model_explainer = shap.KernelExplainer(model.predict_proba, dataframe_train)  # feature importance
-
-        if (alg.type == 'anomaly') and automl:
-            scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
-                                     cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-            loss = 1 - np.mean(scores)
-            # Explainer shap
-            model_explainer = shap.KernelExplainer(model.predict, dataframe_train)  # feature importance
-
-        if alg.type == 'regression' and automl:
-            scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
-                                     cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-            loss = np.abs(np.mean(scores))
-            if alg.name == 'BayesianRidgeRegression' or alg.name == 'LinearRegression':
-                # Explainer shap
-                model_explainer = shap.LinearExplainer(model, dataframe_train)
-            else:
+        # -------------------------------------------------------------
+        # Check if cv score should be calculated for the AutoML workflow
+        #
+        if alg.automl:
+            if alg.type == 'classification':
+                scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
+                                         cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+                loss = 1 - np.mean(scores)
                 if (not alg.name.startswith("TPOT") and not alg.name.startswith("AutoSklearn")):
-                    # Explainer shap
-                    model_explainer = shap.KernelExplainer(model.predict, dataframe_train)
-
+                    model_explainer = shap.KernelExplainer(model.predict_proba, dataframe_train)  # feature importance
+            if alg.type == 'anomaly':
+                scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
+                                         cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+                loss = 1 - np.mean(scores)
+                model_explainer = shap.KernelExplainer(model.predict, dataframe_train)  # feature importance
+            if alg.type == 'regression':
+                scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
+                                         cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+                loss = np.abs(np.mean(scores))
+                if alg.name == 'BayesianRidgeRegression' or alg.name == 'LinearRegression':
+                    model_explainer = shap.LinearExplainer(model, dataframe_train)
+                else:
+                    if (not alg.name.startswith("TPOT") and not alg.name.startswith("AutoSklearn")):
+                        model_explainer = shap.KernelExplainer(model.predict, dataframe_train)
+        # -------------------------------------------------------------
+        # Check if sampling is enabled for AutoSklearn
+        #
         if alg.sampling:
             model.refit(dataframe_train.values.copy(), dataframe_label.values.ravel().copy())
+        # -------------------------------------------------------------
+        # Get the fitted model from TPOT
+        #
+        if alg.name == 'TPOT_Regressor' or alg.name == 'TPOT_Classifier':
+            model = model.fitted_pipeline_
     else:
         # -------------------------------------------------------------
-        # Use nvidia rapids
+        # Non-supervised algorithms
         #
-        if USE_NVIDIA_RAPIDS == True:
+        if NVIDIA_RAPIDS_ENABLED:
             for colname in dataframe_train.columns:
                 dataframe_train[colname] = dataframe_train[colname].astype('float32')
             model.fit(dataframe_train)
@@ -335,25 +313,24 @@ if model is not None:
             dataframe_label = dataframe_label.to_pandas() if dataframe_label is not None else None
         else:
             model.fit(dataframe_train.values)
-            # Explainer shap
             model_explainer = shap.KernelExplainer(model.predict, dataframe_train)
-        if is_labeled_data and automl:
+        if is_labeled_data and alg.automl:
             scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
                                      cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
             loss = 1 - np.mean(scores)
-    if alg.name == 'TPOT_Regressor' or alg.name == 'TPOT_Classifier':
-        model = model.fitted_pipeline_
+    # -------------------------------------------------------------
+    # Dumps and compress the model
+    #
     model_bin = pickle.dumps(model)
     model_compressed = bz2.compress(model_bin)
     model_id = str(uuid.uuid4())
     variables.put(model_id, model_compressed)
-
     print("model id: ", model_id)
     print('model size (original):   ', sys.getsizeof(model_bin), " bytes")
     print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")
     resultMetadata.put("task.model_id", model_id)
 else:
-    print("Algorithm not found!")
+    raiser("Algorithm not found!")
 
 # -----------------------------------------------------------------
 # Data drift measures
@@ -362,11 +339,8 @@ mean_df_train = dataframe_train.mean(axis=0)  # mean
 std_df_train = dataframe_train.std(axis=0)  # standard deviation
 dataframe_model_metadata = pd.DataFrame({0: mean_df_train, 1: std_df_train}).T
 
-# -----------------------------------------------------------------
-# Use nvidia rapids
-#
-dataframe = dataframe.to_pandas() if USE_NVIDIA_RAPIDS else dataframe
-dataframe_model_metadata = dataframe_model_metadata.to_pandas() if USE_NVIDIA_RAPIDS else dataframe_model_metadata
+dataframe = dataframe.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe
+dataframe_model_metadata = dataframe_model_metadata.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe_model_metadata
 
 dataframe_json = dataframe.to_json(orient='split').encode()
 # dataframe_model_meta_json = dataframe_model_metadata.to_json(orient='split').encode()
@@ -382,9 +356,7 @@ model_metadata_id = str(uuid.uuid4())
 variables.put(model_metadata_id, compressed_model_metadata)
 
 print("dataframe id (out): ", dataframe_id)
-print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
-print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
-print(dataframe.head())
+print("model metadata id (out): ", model_metadata_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
@@ -416,4 +388,10 @@ result_map = json.dumps(result_map)
 resultMap.put("RESULT_JSON", result_map)
 print('result_map: ', result_map)
 
+# -------------------------------------------------------------
+# Preview results
+#
+preview_dataframe_in_task_result(dataframe)
+
+# -------------------------------------------------------------
 print("END " + __file__)

@@ -1,18 +1,26 @@
-import os, sys, bz2, uuid, requests, json, pickle, wget, time
+import bz2
+import os
+import requests
+import sys
+import wget
 import pandas as pd
 
+
 def raiser(msg): raise Exception(msg)
+
 
 MODEL_PATH = os.path.join(os.getcwd(), "model.pkl")
 
 # Get variables
 API_DEPLOY = variables.get("API_EXTENSION") if variables.get("API_EXTENSION") else raiser("API_EXTENSION is None")
-SERVICE_TOKEN = variables.get("SERVICE_TOKEN") if variables.get("SERVICE_TOKEN") else variables.get("SERVICE_TOKEN_PROPAGATED")
-API_ENDPOINT = variables.get("DEPLOY_MODEL_ENDPOINT") if variables.get("DEPLOY_MODEL_ENDPOINT") else variables.get("ENDPOINT_MODEL")
+SERVICE_TOKEN = variables.get("SERVICE_TOKEN") if variables.get("SERVICE_TOKEN") else variables.get(
+    "SERVICE_TOKEN_PROPAGATED")
+API_ENDPOINT = variables.get("DEPLOY_MODEL_ENDPOINT") if variables.get("DEPLOY_MODEL_ENDPOINT") else variables.get(
+    "ENDPOINT_MODEL")
 API_DEPLOY_ENDPOINT = API_ENDPOINT + API_DEPLOY
 print("API_DEPLOY_ENDPOINT: ", API_DEPLOY_ENDPOINT)
 
-# load the model
+# Get model
 input_variables = {
     'task.model_id': None,
     'task.model_metadata_id': None
@@ -45,7 +53,7 @@ if model_metadata_id is not None and variables.get(model_metadata_id) is not Non
     compressed_model_metadata_json = variables.get(model_metadata_id)
     assert compressed_model_metadata_json is not None
     model_metadata_json = bz2.decompress(compressed_model_metadata_json).decode()
-    #dataframe_model_metadata = pd.read_json(model_metadata_json, orient='split')
+    # dataframe_model_metadata = pd.read_json(model_metadata_json, orient='split')
     dataframe_model_metadata = pd.read_json(model_metadata_json, orient='values')
     print("model_metadata_id: ", model_metadata_id)
     print(dataframe_model_metadata.head())

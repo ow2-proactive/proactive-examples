@@ -14,6 +14,7 @@ from os.path import join, exists
 from PIL import Image
 from ast import literal_eval as make_tuple
 
+def raiser(msg): raise Exception(msg)
 
 # Keyword search
 search_term = "ants"
@@ -23,10 +24,10 @@ query_size = 2
 data_path = 'images'
 
 if 'variables' in locals():
-    host_site = variables.get("HOST_SITE")
+    search_engine = variables.get("SEARCH_ENGINE")
     query_size = int(variables.get("QUERY_SIZE")) if variables.get("QUERY_SIZE") else raiser("QUERY_SIZE not defined!")
     search_term = variables.get('SEARCH_TERM') if variables.get("SEARCH_TERM") else raiser("SEARCH_TERM not defined!")
-    data_path = variables.get("DATA_PATH") if variables.get("DATA_PATH") else raiser("DATA_PATH not defined!")
+    data_path = variables.get("DATA_FOLDER") if variables.get("DATA_FOLDER") else raiser("DATA_FOLDER not defined!")
     img_size =  variables.get("IMG_SIZE") if variables.get("IMG_SIZE") else raiser("IMG_SIZE not defined!")
 
 # Get an unique ID
@@ -178,7 +179,7 @@ def search_duckduckgo(query_size, search_term):
 
 # Check host site option
 thumbnail_urls = search_duckduckgo(query_size, search_term) \
-    if host_site == 'DuckDuckGo' else search_bing(query_size, search_term)
+    if search_engine == 'DuckDuckGo' else search_bing(query_size, search_term)
 
 # Create a image dataframe for preview
 images_df = pd.DataFrame(columns=['Images'])

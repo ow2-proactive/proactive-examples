@@ -70,6 +70,7 @@ if (DOCKER_ENABLED) {
     cmd.add("docker")
     cmd.add("run")
     cmd.add("--rm")
+    cmd.add("--shm-size=256M")
 
     if (DOCKER_GPU_ENABLED) {
         // Versions earlier than 19.03 require nvidia-docker2 and the --runtime=nvidia flag.

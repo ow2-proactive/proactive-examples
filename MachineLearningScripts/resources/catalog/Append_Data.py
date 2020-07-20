@@ -1,88 +1,72 @@
+# -*- coding: utf-8 -*-
+"""Proactive Append Data for Machine Learning
+
+This module contains the Python script for the Append Data task.
+"""
+import urllib.request
+
+global variables, resultMetadata
+
 __file__ = variables.get("PA_TASK_NAME")
-
-if str(variables.get("TASK_ENABLED")).lower() != 'true':
-  print("Task " + __file__ + " disabled")
-  quit()
-
 print("BEGIN " + __file__)
 
-import sys, bz2, uuid
-import pandas as pd
-import numpy as np
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, preview_dataframe_in_task_result
+global compress_and_transfer_dataframe_in_variables
+global get_input_variables, get_input_variables_from_key
+global get_and_decompress_dataframe
+global assert_not_none_not_empty
 
-input_variables = {'task.dataframe_id': None}
-dataframe_id1 = None
-dataframe_id2 = None
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
 
-for key in input_variables.keys():
-  for res in results:
-    value = res.getMetadata().get(key)
-    if value is not None and dataframe_id1 is None:
-      dataframe_id1 = value
-      continue
-    if value is not None and dataframe_id2 is None:
-      dataframe_id2 = value
-      continue
+# -------------------------------------------------------------
+# Get data from the propagated variables
+#
+input_variables = {
+    'task.label_column': None
+}
+get_input_variables(input_variables)
+
+input_dataframes = {
+    'dataframe_id1': None,
+    'dataframe_id2': None
+}
+get_input_variables_from_key(input_dataframes, key='task.dataframe_id')
+dataframe_id1 = input_dataframes['dataframe_id1']
+dataframe_id2 = input_dataframes['dataframe_id2']
+
+assert_not_none_not_empty(dataframe_id1, __file__ + " need two dataframes!")
+assert_not_none_not_empty(dataframe_id2, __file__ + " need two dataframes!")
 
 print("dataframe id1 (in): ", dataframe_id1)
 print("dataframe id2 (in): ", dataframe_id2)
 
-dataframe_json1 = variables.get(dataframe_id1)
-dataframe_json2 = variables.get(dataframe_id2)
-
-assert dataframe_json1 is not None
-assert dataframe_json2 is not None
-
-dataframe_json1 = bz2.decompress(dataframe_json1).decode()
-dataframe_json2 = bz2.decompress(dataframe_json2).decode()
-
-dataframe1 = pd.read_json(dataframe_json1, orient='split')
-dataframe2 = pd.read_json(dataframe_json2, orient='split')
+dataframe1 = get_and_decompress_dataframe(dataframe_id1)
+dataframe2 = get_and_decompress_dataframe(dataframe_id2)
 
 dataframe = dataframe1.append(dataframe2, ignore_index=True)
 
-dataframe_json = dataframe.to_json(orient='split').encode()
-compressed_data = bz2.compress(dataframe_json)
-
-dataframe_id = str(uuid.uuid4())
-variables.put(dataframe_id, compressed_data)
-
+# -------------------------------------------------------------
+# Transfer data to the next tasks
+#
+dataframe_id = compress_and_transfer_dataframe_in_variables(dataframe)
 print("dataframe id (out): ", dataframe_id)
-print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
-print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
-print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", input_variables['task.label_column'])
 
-#============================== Preview results ===============================
+# -------------------------------------------------------------
+# Preview results
+#
+preview_dataframe_in_task_result(dataframe)
 
-LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
-LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
-if LIMIT_OUTPUT_VIEW > 0:
-  print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
-  dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
-
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-  result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
-
-result = """
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <title>Machine Learning Preview</title>
-                  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
-              </head>
-                <body class="container">
-                  <h1 class="text-center my-4" style="color:#003050;">Data Preview</h1>
-                   <div style="text-align:center">{0}</div>
-                </body></html>""".format(result)
-  
-result = result.encode('utf-8')
-resultMetadata.put("file.extension", ".html")
-resultMetadata.put("file.name", "output.html")
-resultMetadata.put("content.type", "text/html")
-
+# -------------------------------------------------------------
 print("END " + __file__)

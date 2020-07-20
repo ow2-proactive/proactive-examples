@@ -1,27 +1,28 @@
-# you can use the following search space to optimize the hyperparameters
-# SEARCH_SPACE: {"contamination":choice([0,0.1,0.2,0.3])}
+# -------------------------------------------------------------
+# You can use the following search space to optimize the hyperparameters
+# SEARCH_SPACE: {"contamination": choice([0, 0.1, 0.2, 0.3])}
 
 __file__ = variables.get("PA_TASK_NAME")
 
-if str(variables.get("TASK_ENABLED")).lower() != 'true':
-  print("Task " + __file__ + " disabled")
-  quit()
+if str(variables.get("TASK_ENABLED")).lower() == 'false':
+    print("Task " + __file__ + " disabled")
+    quit()
 
 print("BEGIN " + __file__)
 
 import json
 
-input_variables = variables.get("INPUT_VARIABLES")
+input_variables = json.loads(variables.get("INPUT_VARIABLES"))
 scoring = variables.get("SCORING")
 
 algorithm = {
-  'name': 'IsolationForest',
-  'type': 'anomaly',
-  'is_supervised': False,
-  'input_variables': input_variables,
-  'scoring': scoring
+    'name': 'IsolationForest',
+    'type': 'anomaly',
+    'is_supervised': False,
+    'input_variables': input_variables,
+    'scoring': scoring
 }
-print("algorithm: ", algorithm)
+print("algorithm:\n", algorithm)
 
 algorithm_json = json.dumps(algorithm)
 resultMetadata.put("task.algorithm_json", algorithm_json)

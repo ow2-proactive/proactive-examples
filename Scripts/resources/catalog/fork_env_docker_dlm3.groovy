@@ -15,6 +15,7 @@ cmd = []
 cmd.add("docker")
 cmd.add("run")
 cmd.add("--rm")
+cmd.add("--shm-size=256M")
 cmd.add("--env")
 cmd.add("HOME=/tmp")
 
