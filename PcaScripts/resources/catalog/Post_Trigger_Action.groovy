@@ -13,7 +13,11 @@ def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-servic
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 
-def ALREADY_REMOVED_MESSAGE = "Error: No such container: " + instanceName    
+def ALREADY_REMOVED_MESSAGE = "Error: No such container: " + instanceName
+
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionId = schedulerapi.getSession()
 
 // Connect to Cloud Automation API
 def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
@@ -21,9 +25,9 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBaseP
 // Update service instance data : (status, endpoint)
 def status = new File(instanceName+"_status").text.trim()
 def currentStatus = (!status.equals(ALREADY_REMOVED_MESSAGE) && !status.equals(instanceName)) ? "ERROR" : action
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
 serviceInstanceData.setInstanceStatus(currentStatus)
-serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
 
 if(action.equals("FINISHED")){
     // Inform other jobs that the service is finished and deleted.

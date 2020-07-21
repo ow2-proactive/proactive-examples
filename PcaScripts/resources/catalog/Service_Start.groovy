@@ -42,7 +42,7 @@ if (!startingState) {
 
 // Check existing service instances
 boolean instance_exists = false
-List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET()
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId)
 for (ServiceInstanceData serviceInstanceData : service_instances) {
     if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == startingState)){
         if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
@@ -104,7 +104,7 @@ if (!instance_exists){
     synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}")
 
     // Acquire service endpoint
-    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(serviceInstanceId)
+    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
     def instanceId = serviceInstanceData.getInstanceId()
     endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
 

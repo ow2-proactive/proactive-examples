@@ -8,11 +8,15 @@ def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 def channel = "Service_Instance_" + instanceId
 
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionId = schedulerapi.getSession()
+
 // Connect to Cloud Automation API
 def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
 
 // If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
-def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId).getInstanceStatus()
+def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId).getInstanceStatus()
 if (currentStatus.equals("FINISHED")){
     variables.put("IS_FINISHED",true)
     synchronizationapi.deleteChannel(channel)
@@ -30,9 +34,9 @@ if (currentStatus.equals("FINISHED")){
         currentStatus = 'ERROR'
         println("[ERROR] An internal error occured in docker container: " + instanceName)
         // Update docker container is not running
-        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(instanceId)
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
         serviceInstanceData.setInstanceStatus(currentStatus)
-        serviceInstanceRestApi.updateServiceInstanceUsingPUT(instanceId, serviceInstanceData)
+        serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
         // Tell the CRON loop to stop
         variables.put("IS_FINISHED",true)
         // Exit with error
