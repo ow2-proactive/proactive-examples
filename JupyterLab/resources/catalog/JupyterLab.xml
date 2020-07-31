@@ -3,7 +3,7 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="JupyterLab" projectName="Cloud Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
-    <variable name="INSTANCE_NAME" value="jupyterlab-server" />
+    <variable name="INSTANCE_NAME" value="jupyterlab-server" model=""/>
     <variable name="JUPYTERLAB_TOKEN" value="" model="PA:HIDDEN"/>
     <variable name="HTTPS_ENABLED" value="False" model="PA:Boolean"/>
     <variable name="PROXYFIED" value="False" model="PA:Boolean"/>
@@ -41,6 +41,35 @@ ENV_VARS (Optional): List of the environment variables. Each environment variabl
         <files  includes="fullchain.pem" accessMode="transferFromGlobalSpace"/>
         <files  includes="privkey.pem" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+def endpointID = variables.get("ENDPOINT_ID")
+    
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")    
+
+proxified = variables.get("PROXYFIED").toLowerCase()
+https_enabled = variables.get("HTTPS_ENABLED").toLowerCase()
+variables.put("PROXYFIED", proxified)
+variables.put("HTTPS_ENABLED", https_enabled)
+
+if (proxified == "true") {
+    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
+	wsURL = proxyfiedURL.replace("https://", "wss://")
+	wsURL = wsURL.replace("http://", "ws://")
+	println "Proxyfied URL :" + proxyfiedURL
+	println "WebSocket URL :" + wsURL
+	variables.put("PROXYFIED_URL", proxyfiedURL)
+	variables.put("WS_PROXYFIED_URL", wsURL)
+}
+]]>
+          </code>
+        </script>
+      </pre>
       <scriptExecutable>
         <script>
           <code language="bash">
@@ -89,14 +118,19 @@ else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     F_PORT=$(GET_RANDOM_PORT)
+    if [ "$variables_PROXYFIED" == "true" ]; then
+    	ADDITIONAL_OPTIONS_STRING="-e ADDITIONAL_OPTIONS=\"--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'\""
+    else
+        ADDITIONAL_OPTIONS_STRING=
+    fi
     if [ "$variables_HTTPS_ENABLED" == "true" ]; then
         echo "Running $INSTANCE_NAME container in a secured HTTPS"
         CERTFILE="/opt/conda/etc/jupyter/fullchain.pem"
         KEYFILE="/opt/conda/etc/jupyter/privkey.pem"
         if [ -z "$JUPYTERLAB_TOKEN" ]; then
-            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
         else
-            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN  $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
         fi
         docker cp fullchain.pem $INSTANCE_NAME:$CERTFILE
         docker cp privkey.pem $INSTANCE_NAME:$KEYFILE
@@ -104,9 +138,9 @@ else
     else
         echo "Running $INSTANCE_NAME container in HTTP"
         if [ -z "$JUPYTERLAB_TOKEN" ]; then
-            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -d $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
         else
-            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN -d $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
         fi
     fi
     ################################################################################
@@ -148,6 +182,7 @@ import org.ow2.proactive.pca.service.client.model.Container
 import org.ow2.proactive.pca.service.client.model.Endpoint
 import org.ow2.proactive.pca.service.client.model.Deployment
 import org.ow2.proactive.pca.service.client.model.Node
+import org.codehaus.groovy.runtime.StackTraceUtils
 
 // Acquire variables
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
@@ -163,7 +198,7 @@ def containerID = new File(instanceName+"_containerID").text.trim()
 def containerUrl = hostname+":"+port
 if (httpsEnabled.toLowerCase()=="true"){
     containerUrl = "https://"+containerUrl
-}else{
+} else {
     containerUrl = "http://"+containerUrl
 }
 variables.put("HOSTNAME", hostname)
@@ -173,78 +208,84 @@ variables.put("PORT", port)
 def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
 def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
 
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
+try {
 
-// Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+    // Get schedulerapi access and acquire session id
+    schedulerapi.connect()
+    def sessionId = schedulerapi.getSession()
 
-// Implement service model
+    // Connect to Cloud Automation API
+    def apiClient = new ApiClient()
+    apiClient.setBasePath(pcaUrl)
+    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
-// Container
-def Container container = new Container()
-container.setId(containerID)
-container.setName(instanceName)
+    // Implement service model
 
-// Endpoint
-def Endpoint endpoint = new Endpoint();
-endpoint.setId(endpointID);
-endpoint.setUrl(containerUrl);
-// Set the endpoint parameters according to the Proxy settings
-if (proxyfied.toLowerCase()=="true"){
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
-    endpoint.setProxyfied(true);
-    endpoint.setProxyfiedUrl(proxyfiedURL)
-}else{
-    endpoint.setProxyfied(false)
+    // Container
+    def Container container = new Container()
+    container.setId(containerID)
+    container.setName(instanceName)
+
+    // Endpoint
+    def Endpoint endpoint = new Endpoint();
+    endpoint.setId(endpointID);
+    endpoint.setUrl(containerUrl);
+    // Set the endpoint parameters according to the Proxy settings
+    if (proxyfied.toLowerCase()=="true"){
+        proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
+        endpoint.setProxyfied(true);
+        endpoint.setProxyfiedUrl(proxyfiedURL)
+    }else{
+        endpoint.setProxyfied(false)
+    }
+
+    // Node
+    def Node node = new Node();
+    node.setName(variables.get("PA_NODE_NAME"))
+    node.setHost(variables.get("PA_NODE_HOST"))
+    node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
+    node.setUrl(variables.get("PA_NODE_URL"))
+
+    // Deployment
+    def Deployment deployment = new Deployment()
+    deployment.setNode(node)
+    deployment.setContainer(container)
+    deployment.setEndpoint(endpoint)
+
+    // Update service instance model (add Deployment, Groups)
+    def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+    serviceInstanceData.setInstanceStatus("RUNNING")
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
+    if (proxyfied.toLowerCase()=="true"){
+        serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
+        serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
+    }
+    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+    println(serviceInstanceData)
+
+    // Inform other platforms that service is running through Synchronization API
+    channel = "Service_Instance_" + instanceId
+    synchronizationapi.createChannelIfAbsent(channel, true)
+    synchronizationapi.put(channel, "RUNNING", true)
+    synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
+
+    // Add token to the current node
+    token = instanceName
+    nodeUrl = variables.get("PA_NODE_URL")
+    println("Current nodeUrl: " + nodeUrl)
+    println("Adding token:    " + token)
+    rmapi.connect()
+    rmapi.addNodeToken(nodeUrl, token)
+
+    // Log output
+    println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
+    println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
+
+    println("END " + variables.get("PA_TASK_NAME"))
+} catch (Exception e) {
+	StackTracUtils.printSanitizedStackTrace(e)
+    throw e
 }
-
-// Node
-def Node node = new Node();
-node.setName(variables.get("PA_NODE_NAME"))
-node.setHost(variables.get("PA_NODE_HOST"))
-node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
-node.setUrl(variables.get("PA_NODE_URL"))
-
-// Deployment
-def Deployment deployment = new Deployment()
-deployment.setNode(node)
-deployment.setContainer(container)
-deployment.setEndpoint(endpoint)
-
-// Update service instance model (add Deployment, Groups)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
-serviceInstanceData.setInstanceStatus("RUNNING")
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-if (proxyfied.toLowerCase()=="true"){
-    serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
-    serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
-}
-serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
-println(serviceInstanceData)
-
-// Inform other platforms that service is running through Synchronization API
-channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, true)
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
-// Add token to the current node
-token = instanceName
-nodeUrl = variables.get("PA_NODE_URL")
-println("Current nodeUrl: " + nodeUrl)
-println("Adding token:    " + token)
-rmapi.connect()
-rmapi.addNodeToken(nodeUrl, token)
-
-// Log output
-println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
-
-println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
         </script>
@@ -256,10 +297,10 @@ println("END " + variables.get("PA_TASK_NAME"))
       </cleaning>
       <metadata>
         <positionTop>
-            364.5
+            384
         </positionTop>
         <positionLeft>
-            513.25
+            603.25
         </positionLeft>
       </metadata>
     </task>
@@ -295,10 +336,10 @@ It will run every minute. ]]>
       </controlFlow>
       <metadata>
         <positionTop>
-            492.5
+            511
         </positionTop>
         <positionLeft>
-            513.25
+            603.25
         </positionLeft>
       </metadata>
     </task>
@@ -312,14 +353,14 @@ It will run every minute. ]]>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2504px;
-            height:3220px;
+            width:2830px;
+            height:3308px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-359.5px;left:-508.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_190" style="top: 364.5px; left: 513.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull JupyterLab image and start a container"><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">Start_JupyterLab</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_193" style="top: 492.5px; left: 513.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:558px;top:404.5px" width="46.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 25.5 88 C 35.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-fill:none; --darkreader-inline-stroke:#fff3cf;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M26.054347875,65.8307285 L25.580625687682105,44.64640440671719 L21.13518089595607,52.72341007736741 L12.47330726504951,49.565571385761125 L26.054347875,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill:#fff3cf; --darkreader-inline-stroke:#fff3cf;"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M26.054347875,65.8307285 L25.580625687682105,44.64640440671719 L21.13518089595607,52.72341007736741 L12.47330726504951,49.565571385761125 L26.054347875,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill:#fff3cf; --darkreader-inline-stroke:#fff3cf;"></path></svg><svg style="position:absolute;left:655.0266769263776px;top:442.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style="--darkreader-inline-fill:none; --darkreader-inline-stroke:#feffcb;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill:#feffcb; --darkreader-inline-stroke:#feffcb;"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill:#feffcb; --darkreader-inline-stroke:#feffcb;"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_204" style="position: absolute; transform: translate(-50%, -50%); left: 667px; top: 512.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 558.5px; top: 395px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill:#fff3cf; --darkreader-inline-stroke:none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 584px; top: 523px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill:#fff3cf; --darkreader-inline-stroke:none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 584px; top: 483px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill:#fff3cf; --darkreader-inline-stroke:none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 665px; top: 483px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style="--darkreader-inline-fill:#feffcb; --darkreader-inline-stroke:none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 665px; top: 523px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style="--darkreader-inline-fill:#feffcb; --darkreader-inline-stroke:none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-379px;left:-598.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_16" style="top: 384px; left: 603.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull JupyterLab image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Start_JupyterLab</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_19" style="top: 511px; left: 603.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:649px;top:423.5px" width="45.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 24.5 87 C 34.5 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.238288,65.388768 L25.070808262803794,44.19980977790638 L20.509084810289284,52.21171836093322 L11.893758623737014,48.9290129676171 L25.238288,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.238288,65.388768 L25.070808262803794,44.19980977790638 L20.509084810289284,52.21171836093322 L11.893758623737014,48.9290129676171 L25.238288,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:745.0266769263776px;top:460.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_30" style="position: absolute; transform: translate(-50%, -50%); left: 757px; top: 530.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 649.5px; top: 414px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 674px; top: 541px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 674px; top: 501px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 755px; top: 501px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 755px; top: 541px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
