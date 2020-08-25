@@ -26,10 +26,11 @@ def engine = variables.get("ENGINE") // Docker, Singularity
 def hostname = variables.get("PA_NODE_HOST")
 def port = new File(instanceName+"_port").text.trim()
 
+def containerID = ""
 if (engine != null && "singularity".equalsIgnoreCase(engine)) {
-    def containerID = "0"
+    containerID = "0"
 } else {
-    def containerID = new File(instanceName+"_containerID").text.trim()
+    containerID = new File(instanceName+"_containerID").text.trim()
 }
 
 def containerUrl = hostname+":"+port
