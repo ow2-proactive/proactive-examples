@@ -125,7 +125,7 @@ try {
     println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
     println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
 } catch (Exception e) {
-    StackTracUtils.printSanitizedStackTrace(e)
+    StackTraceUtils.printSanitizedStackTrace(e)
     throw e
 }
 
