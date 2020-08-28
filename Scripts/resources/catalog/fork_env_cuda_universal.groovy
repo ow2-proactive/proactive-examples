@@ -221,12 +221,9 @@ if (CONTAINER_ENABLED && (
     }
 
     // Prepare log directory
-    logPathVolume = ""
     if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
-        mountLogHost = HOST_LOG_PATH
-        logPathContainer = CONTAINER_LOG_PATH
         cmd.add("-v")
-        cmd.add(mountLogHost + ":" + logPathContainer)
+        cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
     }
 
     // Prepare container working directory
@@ -338,6 +335,12 @@ if (CONTAINER_ENABLED &&
 
         if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
             cmd.add("--nv") // enable experimental NVIDIA GPU support
+        }
+
+        // Prepare log directory
+        if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
+            cmd.add("-B")
+            cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
         }
 
         forkEnvironment.setDockerWindowsToLinux(isWindows)
