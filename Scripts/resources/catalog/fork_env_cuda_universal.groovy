@@ -326,9 +326,18 @@ if (CONTAINER_ENABLED &&
         cmd = []
         cmd.add("singularity")
         cmd.add("exec")
+        // cmd.add("--writable") // by default all singularity containers are available as read only. This option makes the file system accessible as read/write.
+        cmd.add("--writable-tmpfs") // makes the file system accessible as read-write with non persistent data (with overlay support only)
+
+        // run a singularity image in an isolated manner
+        // cmd.add("--disable-cache") // dont use cache, and dont create cache
+        // cmd.add("--cleanenv") // clean environment before running container
+        // cmd.add("--contain") // use minimal /dev and empty other directories (e.g. /tmp and $HOME) instead of sharing filesystems from your host
+        cmd.add("--containall") // contain not only file systems, but also PID, IPC, and environment
+        cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
 
         if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
-            cmd.add("--nv") // add gpu support
+            cmd.add("--nv") // enable experimental NVIDIA GPU support
         }
 
         forkEnvironment.setDockerWindowsToLinux(isWindows)
@@ -363,10 +372,14 @@ if (CONTAINER_ENABLED &&
         }
 
         // Prepare container working directory
-        cmd.add("--pwd")
+        cmd.add("--pwd") // initial working directory for payload process inside the container
         cmd.add(workspaceContainer)
+        cmd.add("--workdir") // working directory to be used for /tmp, /var/tmp and $HOME (if -c/--contain was also used)
+        cmd.add(workspaceContainer)
+
+        // Directory containing the singularity image
         cmd.add((new File(userHome, imageFile)).getAbsolutePath())
-        
+
         forkEnvironment.setPreJavaCommand(cmd)
 
         // Show the generated command
