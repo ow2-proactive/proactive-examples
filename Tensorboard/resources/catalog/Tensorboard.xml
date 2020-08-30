@@ -1,13 +1,18 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Tensorboard" projectName="Cloud Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Tensorboard" onTaskError="continueJobExecution" priority="normal" projectName="Cloud Automation - Deployment" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <variables>
-    <variable name="INSTANCE_NAME" value="tensorboard-server" />
-    <variable name="MOUNT_LOG_PATH" value="/shared/$INSTANCE_NAME" />
-    <variable name="PROXYFIED" value="False" model="PA:Boolean"/>
-    <variable name="ENDPOINT_ID" value="tensorboard-gui" />
-    <variable name="HTTP_ENABLED" value="True" model="PA:Boolean"/>
+    <variable name="ENDPOINT_ID" value="tensorboard-gui"/>
+    <variable name="INSTANCE_NAME" value="tensorboard-server"/>
+    <variable name="MOUNT_LOG_PATH" value="/shared"/>
+    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
+    <variable model="PA:Boolean" name="HTTP_ENABLED" value="True"/>
+    <variable model="PA:List(Docker,Singularity)" name="ENGINE" value="Docker"/>
+    <variable model="PA:Boolean" name="BUILD_SINGULARITY_IMAGE_IF_NOT_EXISTS" value="True"/>
+    <variable model="PA:Integer" name="TENSORBOARD_PORT" value="-1"/>
+    <variable name="NS" value=""/>
+    <variable name="NS_BATCH" value=""/>
+    <variable name="SIF_IMAGE_PATH" value="/tmp/pcaSingularityImages/tensorboard.sif"/>
+    <variable name="DOCKER_IMAGE" value="activeeon/tensorboard"/>
   </variables>
   <description>
     <![CDATA[ Deploy a Tensorboard server.
@@ -15,15 +20,259 @@ The service can be started using the following variable:
 $INSTANCE_NAME (Required): service instance name ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="cloud-automation"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png"/>
-    <info name="pca.states" value="(VOID,RUNNING)"/>
-    <info name="Documentation" value="PCA/PCAUserGuide.html"/>
-    <info name="pca.service.id" value="Tensorboard"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+<info name="bucketName" value="cloud-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png"/>
+<info name="pca.states" value="(VOID,RUNNING)"/>
+<info name="NS" value="$NS"/>
+<info name="Documentation" value="PCA/PCAUserGuide.html"/>
+<info name="PARENT_JOB_ID" value="22"/>
+<info name="pca.service.id" value="Tensorboard"/>
+<info name="NS_BATCH" value="$NS_BATCH"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Start_Tensorboard" fork="true">
+    <task fork="true" name="Start_Tensorboard_S">
+      <description>
+        <![CDATA[ Pull Tensorboard image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="DISABLE_PTK" value="true"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+################################################################################
+### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+# Check if the Linux machine supports AVX instructions
+
+INSTANCE_NAME=$variables_INSTANCE_NAME
+MOUNT_LOG_PATH=$variables_MOUNT_LOG_PATH
+SIF_IMAGE_PATH=$variables_SIF_IMAGE_PATH
+BUILD_SANDBOX=$variables_BUILD_SINGULARITY_IMAGE_IF_NOT_EXISTS
+DOCKER_IMAGE=$variables_DOCKER_IMAGE
+TENSORBOARD_HOST_PORT=$variables_TENSORBOARD_PORT
+
+imagedecode() { : "${*//+/ }"; echo -e "${_//%/\\x}"; }
+SHARED_PATH=$(imagedecode "$MOUNT_LOG_PATH")
+eval SHARED_PATH=$SHARED_PATH
+echo $SHARED_PATH
+################################################################################
+
+
+GET_RANDOM_PORT(){
+    read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+if [ "$TENSORBOARD_HOST_PORT" -eq "-1" ]; then
+	echo "[INFO] Picking a random port number"
+	TENSORBOARD_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $TENSORBOARD_HOST_PORT"
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    exit 1
+fi
+
+if [ -z "$SIF_IMAGE_PATH" ]; then
+    echo "[ERROR] The SINGULARITY_IMAGE_PATH is not provided by the user. Empty value is not allowed."
+    exit 1
+else
+	echo "Using $SIF_IMAGE_PATH to start the service"
+fi
+
+if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+    echo "[ERROR] $INSTANCE_NAME is already used by another service instance."
+    exit 128
+else
+    if [ "$BUILD_SANDBOX" = "true" ]; then
+        if [ -d "$SIF_IMAGE_PATH" ]; then
+        	echo "[INFO] Using existing sandbox on $SIF_IMAGE_PATH"
+        else
+        	echo "[INFO] Building the sandbox on $SIF_IMAGE_PATH"
+        	echo "[INFO] singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+        	singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+        fi
+    fi
+    ################################################################################
+    ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+    echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
+    echo "[INFO] singularity instance start -B $SHARED_PATH:/logs $SIF_IMAGE_PATH $INSTANCE_NAME"
+    singularity instance start -B $SHARED_PATH:/logs $SIF_IMAGE_PATH $INSTANCE_NAME
+    TENSORBOARD_EXEC_COMMAND="singularity exec instance://${INSTANCE_NAME} tensorboard --logdir '/logs' --port ${TENSORBOARD_HOST_PORT} &> /dev/null & &> /dev/null"
+	echo $TENSORBOARD_EXEC_COMMAND
+	eval $TENSORBOARD_EXEC_COMMAND
+    sleep 20
+    ################################################################################
+    if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+		echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+    fi
+fi
+
+echo "$TENSORBOARD_HOST_PORT" > $INSTANCE_NAME"_port"
+
+# Endpoint added to the job variables using a groovy post-script
+echo END "$variables_PA_TASK_NAME"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            254
+        </positionTop>
+        <positionLeft>
+            398.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Loop_Over_Instance_Status_S">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Tensorboard_S"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+def channel = "Service_Instance_" + instanceId
+
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionId = schedulerapi.getSession()
+
+// Connect to Cloud Automation API
+def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
+
+// If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
+def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId).getInstanceStatus()
+if (currentStatus.equals("FINISHED")){
+    variables.put("IS_FINISHED",true)
+    synchronizationapi.deleteChannel(channel)
+    // Remove token in the current node
+    token = instanceName
+    nodeUrl = variables.get("PA_NODE_URL")
+    println("Current nodeUrl: " + nodeUrl)
+    println("Removing token:  " + token)
+    rmapi.connect()
+    rmapi.removeNodeToken(nodeUrl, token)
+} else {
+    // Check if container has been stopped abnormally
+    def command = ["singularity", "instance", "list"].execute() | ["grep", "${instanceName}"].execute()
+    command.waitFor()
+	def isContainerRunning = command.text
+    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "FINISH_LAUNCHED")) && (!synchronizationapi.get(channel, "PAUSE_LAUNCHED"))){
+        currentStatus = 'ERROR'
+        println("[ERROR] An internal error occured in docker container: " + instanceName)
+        // Update docker container is not running
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+        serviceInstanceData.setInstanceStatus(currentStatus)
+        serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+        // Tell the CRON loop to stop
+        variables.put("IS_FINISHED",true)
+        // Exit with error
+        System.exit(1)
+    }
+    //} else {
+        // Fetch all logs or only new logs since last fetch time mark
+        //def lastTime=variables.get('LAST_TIME_MARKER')
+        //def fetchLogsCmd = lastTime ? ["docker", "logs", "--since", lastTime, instanceName] : ["docker", "logs", instanceName]
+        //fetchLogsCmd.execute().waitForProcessOutput(System.out, System.err)
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="Loop_Over_Instance_Status_S">
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw"/>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            396
+        </positionTop>
+        <positionLeft>
+            381.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Condition">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="Documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def engine = variables.get("ENGINE")
+
+println("[INFO] Starting a Tensorboard server in a " + engine + " container.")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <if else="Start_Tensorboard_D" target="Start_Tensorboard_S">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def engine = variables.get("ENGINE")
+if(engine.toLowerCase().equals("singularity")){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            116.515625
+        </positionTop>
+        <positionLeft>
+            738.125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Start_Tensorboard_D">
       <description>
         <![CDATA[ Pull Tensorboard image and start a container ]]>
       </description>
@@ -40,8 +289,14 @@ echo BEGIN "$variables_PA_TASK_NAME"
 ################################################################################
 ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
 # Check if the Linux machine supports AVX instructions
+TENSORBORD_INTERNAL_PORT=6006
+DOCKER_IMAGE=$variables_DOCKER_IMAGE
+INSTANCE_NAME=$variables_INSTANCE_NAME
+MOUNT_LOG_PATH=$variables_MOUNT_LOG_PATH
+TENSORBOARD_HOST_PORT=$variables_TENSORBOARD_PORT
+
 avx_info=$(grep avx /proc/cpuinfo)
-if [ -z "$avx_info" ]
+if [ -z "$avx_info" ] && [ "$DOCKER_IMAGE" -eq "activeeon/tensorboard" ]
 then
       echo "\$avx_info is empty, no AVX support"
       DOCKER_IMAGE=activeeon/tensorboard:no-avx
@@ -49,9 +304,7 @@ else
       echo "\$avx_info is NOT empty, with AVX support"
       DOCKER_IMAGE=activeeon/tensorboard
 fi
-PORT=6006
-INSTANCE_NAME=$variables_INSTANCE_NAME
-MOUNT_LOG_PATH=$variables_MOUNT_LOG_PATH
+
 
 imagedecode() { : "${*//+/ }"; echo -e "${_//%/\\x}"; }
 SHARED_PATH=$(imagedecode "$MOUNT_LOG_PATH")
@@ -73,10 +326,14 @@ GET_RANDOM_PORT(){
     echo $RND_PORT
 }
 
-INSTANCE_NAME=$variables_INSTANCE_NAME
+if [ "$TENSORBOARD_HOST_PORT" -eq "-1" ]; then
+	echo "Picking a random port number"
+	TENSORBOARD_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "[INFO] The service will be initialized on port $TENSORBOARD_HOST_PORT"
 
 if [ -z "$INSTANCE_NAME" ]; then
-    echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed."
     exit 1
 fi
 
@@ -93,13 +350,12 @@ else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running $INSTANCE_NAME container"
-    F_PORT=$(GET_RANDOM_PORT)
-    echo docker run -d --name $INSTANCE_NAME -p $F_PORT:$PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
-    docker run -d --name $INSTANCE_NAME -p $F_PORT:$PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
+    echo docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBORD_INTERNAL_PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
+    docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBORD_INTERNAL_PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
     ################################################################################
 fi
 
-port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$TENSORBORD_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
 echo "$port" > $INSTANCE_NAME"_port"
 
 containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
@@ -113,24 +369,19 @@ echo END "$variables_PA_TASK_NAME"
       </scriptExecutable>
       <post>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
         </script>
       </post>
       <metadata>
         <positionTop>
-            766.9175720214844
+            283.015625
         </positionTop>
         <positionLeft>
-            514.9573669433594
+            807.859375
         </positionLeft>
       </metadata>
     </task>
-    <task name="Loop_Over_Instance_Status" 
-    
-    
-    
-    
-    fork="true">
+    <task fork="true" name="Loop_Over_Instance_Status_D">
       <description>
         <![CDATA[ Loop over service instance status and fetch docker container logs.
 It will run every minute. ]]>
@@ -141,59 +392,50 @@ It will run every minute. ]]>
         <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="Start_Tensorboard"/>
+        <task ref="Start_Tensorboard_D"/>
       </depends>
       <scriptExecutable>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow >
-        <loop target="Loop_Over_Instance_Status">
+      <controlFlow>
+        <loop target="Loop_Over_Instance_Status_D">
           <script>
-            <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw" language="groovy"></file>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw"/>
           </script>
         </loop>
       </controlFlow>
       <metadata>
         <positionTop>
-            892.9402770996094
+            410.015625
         </positionTop>
         <positionLeft>
-            513.9488220214844
+            787.859375
         </positionLeft>
       </metadata>
     </task>
   </taskFlow>
   <metadata>
     <visualization>
-      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2487px;
-            height:2901px;
+            width:2144px;
+            height:2712px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-761.9175720214844px;left:-508.9488220214844px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_1780" style="top: 766.918px; left: 514.971px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Tensorboard image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png" width="20px">&nbsp;<span class="name">Start_Tensorboard</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1783" style="top: 892.943px; left: 513.957px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:562.5px;top:806.5px" width="42.457366943359375" height="86.94314575195312" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 21.457366943359375 85.94314575195312 C 31.457366943359375 35.943145751953125 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M22.455909604492188,64.42231283691406 L22.97239207151766,43.238988124743514 L18.15446031490292,51.099492789750926 L9.649572024354521,47.540437414332786 L22.455909604492188,64.42231283691406" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M22.455909604492188,64.42231283691406 L22.97239207151766,43.238988124743514 L18.15446031490292,51.099492789750926 L9.649572024354521,47.540437414332786 L22.455909604492188,64.42231283691406" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:654.984043869737px;top:842.4431457519531px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1794" style="position: absolute; transform: translate(-50%, -50%); left: 666.957px; top: 912.443px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 563px; top: 797px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 584.457px; top: 922.943px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 584.457px; top: 882.943px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 664.957px; top: 882.943px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 664.957px; top: 922.943px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div></body></html>
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-111.515625px;left:-376.5px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_44" style="top: 254px; left: 398.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Tensorboard image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png" width="20px">&nbsp;<span class="name">Start_Tensorboard_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_47" style="top: 396px; left: 381.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_50" style="top: 116.516px; left: 738.125px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_53" style="top: 283.016px; left: 807.859px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Tensorboard image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png" width="20px">&nbsp;<span class="name">Start_Tensorboard_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_56" style="top: 410.016px; left: 787.859px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/tensorboard.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:453px;top:293.5px" width="26" height="103" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 5 102 C 15 52 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.376416250000002,77.513772 L12.508678692931626,56.955078407826555 L6.08973810297964,63.57302383693572 L-1.4320694701326584,58.24175655484692 L7.376416250000002,77.513772" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.376416250000002,77.513772 L12.508678692931626,56.955078407826555 L6.08973810297964,63.57302383693572 L-1.4320694701326584,58.24175655484692 L7.376416250000002,77.513772" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:535.0266769263776px;top:345.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_67" style="position: absolute; transform: translate(-50%, -50%); left: 547px; top: 415.5px;">loop</div><svg style="position:absolute;left:388.5px;top:156.5px" width="360" height="98" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 97 C -10 47 349 50 339 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M60.118781250000005,65.56990625 L81.10450491281159,68.50238000915117 L73.84569673771506,62.818217460705554 L78.35281612351713,54.77546452143612 L60.118781250000005,65.56990625" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M60.118781250000005,65.56990625 L81.10450491281159,68.50238000915117 L73.84569673771506,62.818217460705554 L78.35281612351713,54.77546452143612 L60.118781250000005,65.56990625" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_73" style="position: absolute; transform: translate(-50%, -50%); left: 568px; top: 205px;">if</div><svg style="position:absolute;left:727.5px;top:156.5px" width="91" height="127" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 70 126 C 80 76 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M63.4634,94.724784 L57.59352476998819,74.36441649879576 L55.35898779616632,83.30907102049882 L46.17781179048701,82.46882870262944 L63.4634,94.724784" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M63.4634,94.724784 L57.59352476998819,74.36441649879576 L55.35898779616632,83.30907102049882 L46.17781179048701,82.46882870262944 L63.4634,94.724784" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_77" style="position: absolute; transform: translate(-50%, -50%); left: 772.5px; top: 219.5px;">else</div><svg style="position:absolute;left:862.5px;top:322.5px" width="23" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 2 87 C 12 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.652999999999999,65.86284375000001 L10.542150038492773,45.508043042940244 L3.882825259434565,51.88404441425608 L-3.4366492972511575,46.27821778350568 L4.652999999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.652999999999999,65.86284375000001 L10.542150038492773,45.508043042940244 L3.882825259434565,51.88404441425608 L-3.4366492972511575,46.27821778350568 L4.652999999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:942.0266769263776px;top:359.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_86" style="position: absolute; transform: translate(-50%, -50%); left: 954px; top: 429.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 453.5px; top: 284px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 389px; top: 244px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 458.5px; top: 426px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 458.5px; top: 386px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 545px; top: 386px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 545px; top: 426px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 778px; top: 147px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 728px; top: 147px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 863px; top: 313px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 798px; top: 273px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 865px; top: 440px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 865px; top: 400px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 952px; top: 400px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 952px; top: 440px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
  ]]>
     </visualization>
   </metadata>
