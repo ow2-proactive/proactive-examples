@@ -10,6 +10,7 @@ import connexion
 import subprocess
 import numbers
 import pandas as pd
+import argparse
 
 from cryptography.fernet import Fernet
 from datetime import datetime as dt
@@ -44,9 +45,12 @@ except ImportError:
 #     from json2html import *
 
 
+# Environment variables
+INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not None else None
+
 # General parameters
-APP_BASE_DIR = "/model_as_a_service"
-UPLOAD_MODELS_FOLDER = "/model_as_a_service"  # model folder
+APP_BASE_DIR = ""
+UPLOAD_MODELS_FOLDER = INSTANCE_PATH
 MODEL_FILE_EXT = '.model'
 META_FILE_EXT = '.meta'
 CURRENT_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + MODEL_FILE_EXT)  # default model path
@@ -60,7 +64,6 @@ TOKENS = {
 }  # user tokens
 
 
-# Environment variables
 DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
 TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
 DRIFT_ENABLED = True if (os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
@@ -565,9 +568,12 @@ def test_web_notification_api() -> str:
 
 
 if __name__ == '__main__':
-    app = connexion.FlaskApp(__name__, port=9090, specification_dir=APP_BASE_DIR)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=9090, help="set the port that will be used to deploy the service")
+    args = parser.parse_args()
+    app = connexion.FlaskApp(__name__, port=args.port, specification_dir=APP_BASE_DIR)
     CORS(app.app)
-    app.add_api('ml_service_swagger.yaml', arguments={'title': 'Machine Learning Model Service'})
+    app.add_api('ml_service-api.yaml', arguments={'title': 'Machine Learning Model Service'})
     
     if HTTPS_ENABLED:
         # from OpenSSL import SSL
