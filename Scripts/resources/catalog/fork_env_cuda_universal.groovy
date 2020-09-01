@@ -46,6 +46,11 @@ if ("true".equalsIgnoreCase(variables.get("USE_NVIDIA_RAPIDS"))) {
     USE_NVIDIA_RAPIDS = true
 }
 
+def CONTAINER_ISOLATION_ENABLED = true
+if ("false".equalsIgnoreCase(variables.get("CONTAINER_ISOLATION_ENABLED"))) {
+    CONTAINER_ISOLATION_ENABLED = false
+}
+
 def DEFAULT_CONTAINER_IMAGE = "docker://activeeon/dlm3"
 
 // activate CUDA support if CONTAINER_GPU_ENABLED is True
@@ -302,7 +307,10 @@ if (CONTAINER_ENABLED &&
         // pull the container inside the synchronization lock
         if (majorVersion >= 3) {
             pullCmd = "singularity pull --dir " + userHome + " " + imageFile + " " + imageUrl
-            process = pullCmd.execute()
+            println pullCmd
+            def env = System.getenv().collect { k, v -> "$k=$v" }
+            env.push('XDG_RUNTIME_DIR=/run/user/$UID')
+            process = pullCmd.execute(env, new File(userHome))
         } else {
             pullCmd = "singularity pull --name " + imageFile + " " + imageUrl
             def env = System.getenv().collect { k, v -> "$k=$v" }
@@ -325,13 +333,14 @@ if (CONTAINER_ENABLED &&
         cmd.add("exec")
         // cmd.add("--writable") // by default all singularity containers are available as read only. This option makes the file system accessible as read/write.
         cmd.add("--writable-tmpfs") // makes the file system accessible as read-write with non persistent data (with overlay support only)
+        cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
 
         // run a singularity image in an isolated manner
         // cmd.add("--disable-cache") // dont use cache, and dont create cache
         // cmd.add("--cleanenv") // clean environment before running container
         // cmd.add("--contain") // use minimal /dev and empty other directories (e.g. /tmp and $HOME) instead of sharing filesystems from your host
-        cmd.add("--containall") // contain not only file systems, but also PID, IPC, and environment
-        cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
+        if (CONTAINER_ISOLATION_ENABLED)
+            cmd.add("--containall") // contain not only file systems, but also PID, IPC, and environment
 
         if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
             cmd.add("--nv") // enable experimental NVIDIA GPU support
@@ -384,6 +393,7 @@ if (CONTAINER_ENABLED &&
         cmd.add((new File(userHome, imageFile)).getAbsolutePath())
 
         forkEnvironment.setPreJavaCommand(cmd)
+        forkEnvironment.addSystemEnvironmentVariable("XDG_RUNTIME_DIR",'/run/user/$UID')
 
         // Show the generated command
         println "SINGULARITY COMMAND : " + forkEnvironment.getPreJavaCommand()
