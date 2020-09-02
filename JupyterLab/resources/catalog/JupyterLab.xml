@@ -5,12 +5,13 @@
   <variables>
     <variable name="NATIVE_SCHEDULER" value=""/>
     <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
+    <variable name="INSTANCE_NAME" value="jupyterlab-server-$PA_JOB_ID"/>
+    <variable name="ENDPOINT_ID" value="jupyterlab-endpoint-$PA_JOB_ID"/>
     <variable name="PROXYFIED" value="false" model="PA:Boolean"/>
     <variable name="HTTPS_ENABLED" value="false" model="PA:Boolean"/>
-    <variable name="INSTANCE_NAME" value="jupyterlab-server-$PA_JOB_ID" />
+    <variable name="SERVICE_PORT" value="-1" model="PA:Integer"/>
     <variable name="JUPYTERLAB_TOKEN" value="" model="PA:HIDDEN"/>
-    <variable name="ENDPOINT_ID" value="jupyterlab-endpoint-$PA_JOB_ID" />
-    <variable name="SIF_IMAGE_PATH" value="" />
+    <variable name="SIF_IMAGE_PATH" value=""/>
     <variable name="ENGINE" value="docker" model="PA:List(docker,singularity)"/>
   </variables>
   <description>
@@ -61,26 +62,39 @@ export XDG_RUNTIME_DIR=/run/user/$UID
 if [ "$variables_HTTPS_ENABLED" == "true" ]; then
     DOCKER_IMAGE=activeeon/jupyterlab:secured
 else
-	echo "Warning: Your jupyterlab server is NOT secured!"
-	DOCKER_IMAGE=activeeon/jupyterlab:latest
+    echo "Warning: Your jupyterlab server is NOT secured!"
+    DOCKER_IMAGE=activeeon/jupyterlab:latest
 fi
 
 #ENV_VARS=$variables_ENV_VARS
 JUPYTERLAB_TOKEN=$variables_JUPYTERLAB_TOKEN
 SIF_IMAGE_PATH=$variables_SIF_IMAGE_PATH
 INSTANCE_NAME=$variables_INSTANCE_NAME
+JUPYTER_HOST_PORT=$variables_SERVICE_PORT
 ################################################################################
 
 # Manually find a free random port to preserve it in case if docker (re)start (Pause/Resume)
 GET_RANDOM_PORT(){
-    read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    PATH=$PATH:/usr/sbin
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
     while :
     do
         RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
-        /usr/sbin/ss -lpn | grep -q ":$RND_PORT " || break
+        ss -lpn | grep -q ":$RND_PORT " || break
     done
     echo $RND_PORT
 }
+
+if [ "$JUPYTER_HOST_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    JUPYTER_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $JUPYTER_HOST_PORT"
 
 if [ -z "$SIF_IMAGE_PATH" ]; then
     echo "Pulling "$variables_PA_JOB_NAME" image"
@@ -100,9 +114,8 @@ if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
 else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-    F_PORT=$(GET_RANDOM_PORT)
     if [ "$variables_PROXYFIED" == "true" ]; then
-    	ADDITIONAL_OPTIONS="--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'"
+        ADDITIONAL_OPTIONS="--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'"
     else
         ADDITIONAL_OPTIONS=
     fi
@@ -125,10 +138,10 @@ else
         	openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 -subj "/CN=$HOSTNAME" -keyout $KEYFILE -out $CERTFILE
             echo "Auto-signed certificate created."
         fi
-    	singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$F_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token=$JUPYTERLAB_TOKEN --NotebookApp.password='' --NotebookApp.notebook_dir=$HOME --NotebookApp.certfile=$CERTFILE --NotebookApp.keyfile=$KEYFILE $ADDITIONAL_OPTIONS &> $HOME/jupyterOut.txt &" &> $HOME/output-jupyterlab.txt
+        singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token=$JUPYTERLAB_TOKEN --NotebookApp.password='' --NotebookApp.notebook_dir=$HOME --NotebookApp.certfile=$CERTFILE --NotebookApp.keyfile=$KEYFILE $ADDITIONAL_OPTIONS &> $HOME/jupyterOut.txt &" &> $HOME/output-jupyterlab.txt
     else
         echo "Running $INSTANCE_NAME container in HTTP"
-    	singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$F_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token=$JUPYTERLAB_TOKEN --NotebookApp.password='' --NotebookApp.notebook_dir=$HOME $ADDITIONAL_OPTIONS &> $HOME/jupyterOut.txt &" &> $HOME/output-jupyterlab.txt
+        singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token=$JUPYTERLAB_TOKEN --NotebookApp.password='' --NotebookApp.notebook_dir=$HOME $ADDITIONAL_OPTIONS &> $HOME/jupyterOut.txt &" &> $HOME/output-jupyterlab.txt
     fi
 
     if [[ -d $HOME/proactive-jupyter-notebooks ]]; then
@@ -142,13 +155,13 @@ else
 
     ################################################################################
     if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
-		echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
     else
         echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
     fi
 fi
 
-echo "$F_PORT" > $INSTANCE_NAME"_port"
+echo "$JUPYTER_HOST_PORT" > $INSTANCE_NAME"_port"
 
 # Endpoint added to the job variables using a groovy post-script
 echo END "$variables_PA_TASK_NAME"
@@ -279,19 +292,26 @@ echo BEGIN "$variables_PA_TASK_NAME"
 ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
 if [ "$variables_HTTPS_ENABLED" == "true" ]; then
     DOCKER_IMAGE=activeeon/jupyterlab:secured
-	PORT=9999
+    JUPYTER_INTERNAL_PORT=9999
 else
-	echo "Warning: Your jupyterlab server is NOT secured!"
+    echo "Warning: Your jupyterlab server is NOT secured!"
     DOCKER_IMAGE=activeeon/jupyterlab:latest
-	PORT=8888
+    JUPYTER_INTERNAL_PORT=8888
 fi
 #ENV_VARS=$variables_ENV_VARS
 JUPYTERLAB_TOKEN=$variables_JUPYTERLAB_TOKEN
+JUPYTER_HOST_PORT=$variables_SERVICE_PORT
 ################################################################################
 
 # Manually find a free random port to preserve it in case if docker (re)start (Pause/Resume)
 GET_RANDOM_PORT(){
-    read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    PATH=$PATH:/usr/sbin
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
     while :
     do
         RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
@@ -299,6 +319,12 @@ GET_RANDOM_PORT(){
     done
     echo $RND_PORT
 }
+
+if [ "$JUPYTER_HOST_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    JUPYTER_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $JUPYTER_HOST_PORT"
 
 echo "Pulling "$variables_PA_JOB_NAME" image"
 docker pull $DOCKER_IMAGE
@@ -316,9 +342,8 @@ if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
 else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-    F_PORT=$(GET_RANDOM_PORT)
     if [ "$variables_PROXYFIED" == "true" ]; then
-    	ADDITIONAL_OPTIONS_STRING="-e ADDITIONAL_OPTIONS=\"--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'\""
+        ADDITIONAL_OPTIONS_STRING="-e ADDITIONAL_OPTIONS=\"--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'\""
     else
         ADDITIONAL_OPTIONS_STRING=
     fi
@@ -327,15 +352,15 @@ else
         CERTFILE="/opt/conda/etc/jupyter/fullchain.pem"
         KEYFILE="/opt/conda/etc/jupyter/privkey.pem"
         if [ -z "$JUPYTERLAB_TOKEN" ]; then
-            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
         else
-            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN  $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN  $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
         fi
         if [[ -f fullchain.pem && -f privkey.pem ]]; then
             docker cp fullchain.pem $INSTANCE_NAME:$CERTFILE
             docker cp privkey.pem $INSTANCE_NAME:$KEYFILE
         else
-        	openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 -subj "/CN=$HOSTNAME" -keyout key.pem -out cert.pem
+            openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 -subj "/CN=$HOSTNAME" -keyout key.pem -out cert.pem
             echo "Auto-signed certificate created."
             docker cp cert.pem $INSTANCE_NAME:$CERTFILE
             docker cp key.pem $INSTANCE_NAME:$KEYFILE
@@ -344,9 +369,9 @@ else
     else
         echo "Running $INSTANCE_NAME container in HTTP"
         if [ -z "$JUPYTERLAB_TOKEN" ]; then
-            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
         else
-            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
         fi
     fi
     ################################################################################
@@ -360,8 +385,8 @@ else
     fi
 fi
 
-port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
-echo "$port" > $INSTANCE_NAME"_port"
+JUPYTER_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$JUPYTER_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$JUPYTER_PORT" > $INSTANCE_NAME"_port"
 
 containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
 echo "$containerID" > $INSTANCE_NAME"_containerID"
