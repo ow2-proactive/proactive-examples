@@ -46,11 +46,6 @@ if ("true".equalsIgnoreCase(variables.get("USE_NVIDIA_RAPIDS"))) {
     USE_NVIDIA_RAPIDS = true
 }
 
-def CONTAINER_ISOLATION_ENABLED = true
-if ("false".equalsIgnoreCase(variables.get("CONTAINER_ISOLATION_ENABLED"))) {
-    CONTAINER_ISOLATION_ENABLED = false
-}
-
 def DEFAULT_CONTAINER_IMAGE = "docker://activeeon/dlm3"
 
 // activate CUDA support if CONTAINER_GPU_ENABLED is True
@@ -112,16 +107,22 @@ if ("false".equalsIgnoreCase(variables.get("CONTAINER_ROOTLESS_ENABLED"))) {
     CONTAINER_ROOTLESS_ENABLED = false
 }
 
+def CONTAINER_ISOLATION_ENABLED = false
+if ("true".equalsIgnoreCase(variables.get("CONTAINER_ISOLATION_ENABLED"))) {
+    CONTAINER_ISOLATION_ENABLED = true
+}
+
 println "Fork environment info..."
-println "CONTAINER_PLATFORM:         " + CONTAINER_PLATFORM
-println "CONTAINER_ENABLED:          " + CONTAINER_ENABLED
-println "CONTAINER_IMAGE:            " + CONTAINER_IMAGE
-println "CONTAINER_GPU_ENABLED:      " + CONTAINER_GPU_ENABLED
-println "CUDA_ENABLED:               " + CUDA_ENABLED
-println "USE_NVIDIA_RAPIDS:          " + USE_NVIDIA_RAPIDS
-println "HOST_LOG_PATH:              " + HOST_LOG_PATH
-println "CONTAINER_LOG_PATH:         " + CONTAINER_LOG_PATH
-println "CONTAINER_ROOTLESS_ENABLED: " + CONTAINER_ROOTLESS_ENABLED
+println "CONTAINER_PLATFORM:          " + CONTAINER_PLATFORM
+println "CONTAINER_ENABLED:           " + CONTAINER_ENABLED
+println "CONTAINER_IMAGE:             " + CONTAINER_IMAGE
+println "CONTAINER_GPU_ENABLED:       " + CONTAINER_GPU_ENABLED
+println "CUDA_ENABLED:                " + CUDA_ENABLED
+println "USE_NVIDIA_RAPIDS:           " + USE_NVIDIA_RAPIDS
+println "HOST_LOG_PATH:               " + HOST_LOG_PATH
+println "CONTAINER_LOG_PATH:          " + CONTAINER_LOG_PATH
+println "CONTAINER_ROOTLESS_ENABLED:  " + CONTAINER_ROOTLESS_ENABLED
+println "CONTAINER_ISOLATION_ENABLED: " + CONTAINER_ISOLATION_ENABLED
 
 String osName = System.getProperty("os.name")
 println "Operating system : " + osName
@@ -144,8 +145,11 @@ if (CONTAINER_ENABLED && (
     cmd.add("run")
     cmd.add("--rm")
     cmd.add("--shm-size=256M")
-    cmd.add("--env")
-    cmd.add("HOME=/tmp")
+    
+    if (CONTAINER_ROOTLESS_ENABLED) {
+    	cmd.add("--env")
+        cmd.add("HOME=/tmp")
+    }
 
     if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
         if ("docker".equalsIgnoreCase(CONTAINER_PLATFORM)) {
@@ -336,11 +340,12 @@ if (CONTAINER_ENABLED &&
         cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
 
         // run a singularity image in an isolated manner
-        // cmd.add("--disable-cache") // dont use cache, and dont create cache
-        // cmd.add("--cleanenv") // clean environment before running container
-        // cmd.add("--contain") // use minimal /dev and empty other directories (e.g. /tmp and $HOME) instead of sharing filesystems from your host
-        if (CONTAINER_ISOLATION_ENABLED)
+        if (CONTAINER_ISOLATION_ENABLED) {
+            // cmd.add("--disable-cache") // dont use cache, and dont create cache
+            // cmd.add("--cleanenv") // clean environment before running container
+            // cmd.add("--contain") // use minimal /dev and empty other directories (e.g. /tmp and $HOME) instead of sharing filesystems from your host
             cmd.add("--containall") // contain not only file systems, but also PID, IPC, and environment
+        }
 
         if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
             cmd.add("--nv") // enable experimental NVIDIA GPU support
