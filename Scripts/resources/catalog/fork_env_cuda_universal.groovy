@@ -102,7 +102,7 @@ if (variables.get("CONTAINER_LOG_PATH") != null && !variables.get("CONTAINER_LOG
     CONTAINER_LOG_PATH = variables.get("DOCKER_LOG_PATH") // backwards compatibility
 }
 
-CONTAINER_ROOTLESS_ENABLED = true
+def CONTAINER_ROOTLESS_ENABLED = true
 if ("false".equalsIgnoreCase(variables.get("CONTAINER_ROOTLESS_ENABLED"))) {
     CONTAINER_ROOTLESS_ENABLED = false
 }
@@ -110,6 +110,11 @@ if ("false".equalsIgnoreCase(variables.get("CONTAINER_ROOTLESS_ENABLED"))) {
 def CONTAINER_ISOLATION_ENABLED = false
 if ("true".equalsIgnoreCase(variables.get("CONTAINER_ISOLATION_ENABLED"))) {
     CONTAINER_ISOLATION_ENABLED = true
+}
+
+def CONTAINER_NO_HOME_ENABLED = true
+if ("false".equalsIgnoreCase(variables.get("CONTAINER_NO_HOME_ENABLED"))) {
+    CONTAINER_NO_HOME_ENABLED = false
 }
 
 println "Fork environment info..."
@@ -121,6 +126,7 @@ println "CUDA_ENABLED:                " + CUDA_ENABLED
 println "USE_NVIDIA_RAPIDS:           " + USE_NVIDIA_RAPIDS
 println "HOST_LOG_PATH:               " + HOST_LOG_PATH
 println "CONTAINER_LOG_PATH:          " + CONTAINER_LOG_PATH
+println "CONTAINER_NO_HOME_ENABLED:   " + CONTAINER_NO_HOME_ENABLED
 println "CONTAINER_ROOTLESS_ENABLED:  " + CONTAINER_ROOTLESS_ENABLED
 println "CONTAINER_ISOLATION_ENABLED: " + CONTAINER_ISOLATION_ENABLED
 
@@ -337,7 +343,10 @@ if (CONTAINER_ENABLED &&
         cmd.add("exec")
         // cmd.add("--writable") // by default all singularity containers are available as read only. This option makes the file system accessible as read/write.
         cmd.add("--writable-tmpfs") // makes the file system accessible as read-write with non persistent data (with overlay support only)
-        cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
+        
+        if (CONTAINER_NO_HOME_ENABLED) {
+            cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
+        }
 
         // run a singularity image in an isolated manner
         if (CONTAINER_ISOLATION_ENABLED) {
