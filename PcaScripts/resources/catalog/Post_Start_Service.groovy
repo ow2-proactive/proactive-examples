@@ -18,9 +18,9 @@ def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")
 def endpointID = variables.get("ENDPOINT_ID")
-def httpEnabled = variables.get("HTTP_ENABLED") // MongoDB, Cassandra, etc
-def httpsEnabled = variables.get("HTTPS_ENABLED") // Visdom, Tensorboard, MaaS, JupyterLab, etc
-def engine = variables.get("ENGINE") // Docker, Singularity
+def httpEnabled = variables.get("HTTP_ENABLED") // e.g. MongoDB, Visdom, Tensorboard
+def httpsEnabled = variables.get("HTTPS_ENABLED") // e.g. MaaS, JupyterLab
+def engine = variables.get("ENGINE") // docker, singularity
 
 // Handle service parameters
 def hostname = variables.get("PA_NODE_HOST")
