@@ -11,7 +11,8 @@
     <variable name="HTTPS_ENABLED" value="false" model="PA:Boolean"/>
     <variable name="SERVICE_PORT" value="-1" model="PA:Integer"/>
     <variable name="JUPYTERLAB_TOKEN" value="" model="PA:HIDDEN"/>
-    <variable name="SIF_IMAGE_PATH" value=""/>
+    <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/jupyterlab.sif"/>
+    <variable name="BUILD_IMAGE_IF_NOT_EXISTS" value="True" model="PA:Boolean"/>
     <variable name="ENGINE" value="docker" model="PA:List(docker,singularity)"/>
   </variables>
   <description>
@@ -68,9 +69,10 @@ fi
 
 #ENV_VARS=$variables_ENV_VARS
 JUPYTERLAB_TOKEN=$variables_JUPYTERLAB_TOKEN
-SIF_IMAGE_PATH=$variables_SIF_IMAGE_PATH
+SIF_IMAGE_PATH=$variables_SINGULARITY_IMAGE_PATH
 INSTANCE_NAME=$variables_INSTANCE_NAME
 JUPYTER_HOST_PORT=$variables_SERVICE_PORT
+BUILD_IMAGE=$variables_BUILD_IMAGE_IF_NOT_EXISTS
 ################################################################################
 
 PATH=$PATH:/usr/sbin
@@ -98,10 +100,10 @@ fi
 echo "The service will be initialized on port $JUPYTER_HOST_PORT"
 
 if [ -z "$SIF_IMAGE_PATH" ]; then
-    echo "Pulling "$variables_PA_JOB_NAME" image"
-    singularity pull docker://$DOCKER_IMAGE
+    echo "[ERROR] The singularity image path is not provided by the user. Empty value is not allowed."
+    exit 1
 else
-	echo "Using "$SIF_IMAGE_PATH" to start the jupyterlab container"
+    echo "Using $SIF_IMAGE_PATH to start the service"
 fi
 
 if [ -z "$INSTANCE_NAME" ]; then
@@ -113,6 +115,15 @@ if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
     echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
     exit 128
 else
+    if [ "${BUILD_IMAGE,,}" = "true" ]; then
+        if [ -f "$SIF_IMAGE_PATH" ]; then
+            echo "[INFO] Using existing image on $SIF_IMAGE_PATH"
+        else
+            echo "[INFO] Building the image on $SIF_IMAGE_PATH"
+            echo "[INFO] singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+            singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+        fi
+    fi
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     if [ "$variables_PROXYFIED" == "true" ]; then
@@ -121,7 +132,7 @@ else
         ADDITIONAL_OPTIONS=
     fi
 
-    echo "Starting the singularity instance $INSTANCE_NAME"
+    echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
     if [ -z "$SIF_IMAGE_PATH" ]; then
         singularity instance start --no-home docker://$DOCKER_IMAGE $INSTANCE_NAME
     else
@@ -129,7 +140,7 @@ else
     fi
 
     if [ "$variables_HTTPS_ENABLED" == "true" ]; then
-        echo "Running $INSTANCE_NAME container in a secured HTTPS"
+        echo "[INFO] Running $INSTANCE_NAME container in a secured HTTPS"
         CERTFILE="$HOME/.cert.pem"
         KEYFILE="$HOME/.key.pem"
         if [[ -f fullchain.pem && -f privkey.pem ]]; then
@@ -137,11 +148,11 @@ else
             cp privkey.pem $KEYFILE
         else
         	openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 -subj "/CN=$HOSTNAME" -keyout $KEYFILE -out $CERTFILE
-            echo "Auto-signed certificate created."
+            echo "[INFO] Auto-signed certificate created."
         fi
         singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token=$JUPYTERLAB_TOKEN --NotebookApp.password='' --NotebookApp.notebook_dir=$HOME --NotebookApp.certfile=$CERTFILE --NotebookApp.keyfile=$KEYFILE $ADDITIONAL_OPTIONS &> $HOME/jupyterOut.txt &" &> $HOME/output-jupyterlab.txt
     else
-        echo "Running $INSTANCE_NAME container in HTTP"
+        echo "[INFO] Running $INSTANCE_NAME container in HTTP"
         singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token=$JUPYTERLAB_TOKEN --NotebookApp.password='' --NotebookApp.notebook_dir=$HOME $ADDITIONAL_OPTIONS &> $HOME/jupyterOut.txt &" &> $HOME/output-jupyterlab.txt
     fi
 
@@ -150,9 +161,9 @@ else
     else
         git clone https://github.com/ow2-proactive/proactive-jupyter-notebooks.git $HOME/proactive-jupyter-notebooks
     fi
-    echo "Examples git repository proactive-jupyter-notebooks pulled"
+    echo "[INFO] Examples git repository proactive-jupyter-notebooks pulled"
 
-    sleep 10
+    sleep 3
 
     ################################################################################
     if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
