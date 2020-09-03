@@ -112,9 +112,9 @@ if ("true".equalsIgnoreCase(variables.get("CONTAINER_ISOLATION_ENABLED"))) {
     CONTAINER_ISOLATION_ENABLED = true
 }
 
-def CONTAINER_NO_HOME_ENABLED = true
-if ("false".equalsIgnoreCase(variables.get("CONTAINER_NO_HOME_ENABLED"))) {
-    CONTAINER_NO_HOME_ENABLED = false
+def CONTAINER_NO_HOME_ENABLED = false
+if ("true".equalsIgnoreCase(variables.get("CONTAINER_NO_HOME_ENABLED"))) {
+    CONTAINER_NO_HOME_ENABLED = true
 }
 
 println "Fork environment info..."
