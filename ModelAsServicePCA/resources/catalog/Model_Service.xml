@@ -51,127 +51,16 @@ $INSTANCE_NAME (Required): service instance name ]]>
       </inputFiles>
       <selection>
         <script type="static">
-          <code language="groovy">
-            <![CDATA[
-/**
- * Script which verifies that the current node name matches the given regular expression
- *
- * Arguments:
- * node name (regexp)
- */
-
-import com.google.common.base.Strings;
-import java.util.regex.Pattern;
-
-if (args.length != 1) {
-    println "Incorrect number of arguments, expected 1, received " + args.length;
-    selected = false;
-    return;
-}
-
-providedNodeName = variables.get("NODE_NAME")
-
-if (Strings.isNullOrEmpty(providedNodeName)) {
-    println "Given node name was empty";
-    selected = true;
-    return;
-}
-
-providedNodeName = providedNodeName.trim()
-
-println "Node name " + nodename + " (expected :  " + providedNodeName + ")";
-
-regex = Pattern.compile(providedNodeName, Pattern.CASE_INSENSITIVE);
-regexMatcher = regex.matcher(nodename);
-
-selected = regexMatcher.find()
-]]>
-          </code>
-          <arguments>
-            <argument value="$NODE_NAME"/>
-          </arguments>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_name/raw">
+            <arguments>
+              <argument value="$NODE_NAME"/>
+            </arguments>
+          </file>
         </script>
       </selection>
       <pre>
         <script>
-          <code language="cpython">
-            <![CDATA[
-import ssl
-import subprocess
-import sys
-import json
-import cryptography
-
-def install(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-# Install required Python libraries if they are not already installed
-try:
-    if sys.version_info[0] < 3:
-        from urllib import urlopen
-    else:
-        from urllib.request import urlopen
-except ImportError:
-    install('request')
-    if sys.version_info[0] < 3:
-        from urllib import urlopen
-    else:
-        from urllib.request import urlopen
-
-# Get user credentials and convert to json
-schedulerapi.connect()
-sessionId = str(schedulerapi.getSession())
-connectionInfo = schedulerapi.getConnectionInfo()
-ciLogin = str(connectionInfo.getLogin())
-ciPasswd = str(connectionInfo.getPassword())
-ciUrl = str(connectionInfo.getUrl())
-user_credentials = {
-  'sessionId': sessionId,
-  'ciLogin': ciLogin,
-  'ciPasswd': ciPasswd,
-  'ciUrl': ciUrl
-}
-user_credentials_json = json.dumps(user_credentials)
-
-# Encrypt user data into a binary file
-from cryptography.fernet import Fernet
-key = Fernet.generate_key()
-f = Fernet(key)
-message = user_credentials_json.encode()
-encrypted = f.encrypt(message)
-user_data_file = 'user_data.enc'
-with open(user_data_file, 'wb') as f:
-    f.write(encrypted)
-variables.put("USER_KEY", key.decode())
-variables.put("USER_DATA_FILE", user_data_file)
-
-# Get workflows variables
-PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PYTHON_ENTRYPOINT = variables.get("PYTHON_ENTRYPOINT")
-YAML_FILE = variables.get("YAML_FILE")
-
-PA_MAAS_RESOURCES_URL = "/buckets/model-as-a-service-resources/resources/"
-python_file_url = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + PYTHON_ENTRYPOINT + "/raw"
-yaml_file_url   = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + YAML_FILE + "/raw"
-print("python_file_url: ", python_file_url)
-print("yaml_file_url:   ", yaml_file_url)
-
-# Download the two configuration file "ml_service" for the service definition
-context = ssl._create_unverified_context()
-python_file = urlopen(python_file_url, context=context).read()
-python_content = python_file.decode('utf-8')
-python_file_name = PYTHON_ENTRYPOINT + ".py"
-with open(python_file_name, 'w') as f:
-    f.write(python_content)
-
-# Download the configuration file "ml_service-api" for the swagger specification
-yaml_file = urlopen(yaml_file_url, context=context).read()
-yaml_file_content = yaml_file.decode('utf-8')
-yaml_file_name = YAML_FILE + ".yaml"
-with open(yaml_file_name, 'w') as f:
-    f.write(yaml_file_content)
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/model-as-a-service-scripts/resources/Pre_Start_Model_Service/raw"/>
         </script>
       </pre>
       <scriptExecutable>
@@ -284,140 +173,10 @@ echo END "$variables_PA_TASK_NAME"
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow block="none"/>
       <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*********************************************************************************
-* THIS POSTSCRIPT PROPAGATES USEFUL INFORMATION SUCH AS:                         *
-* 1) SERVICE ENDPOINT (PROTOCOL://HOSTNAME:PORT)                                 *
-* 2) CREDENTIALS (IF THERE ARE ANY) BY ADDING THEM TO 3RD PARTY CREDENTIALS      *
-*********************************************************************************/
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.Container
-import org.ow2.proactive.pca.service.client.model.Endpoint
-import org.ow2.proactive.pca.service.client.model.Deployment
-import org.ow2.proactive.pca.service.client.model.Node
-import java.net.URLEncoder;
-
-// Acquire variables
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def proxyfied = variables.get("PROXYFIED")
-def hostname = variables.get("PA_NODE_HOST")
-def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
-def httpsEnabled = variables.get("HTTPS_ENABLED")
-def userKey = variables.get("USER_KEY")
-def traceEnabled = variables.get("TRACE_ENABLED")
-def engine = variables.get("ENGINE")
-
-// Handle service parameters
-def port = new File(instanceName+"_port").text.trim()
-def containerUrl = hostname+":"+port
-def containerID = ""
-if (engine != null && "singularity".equalsIgnoreCase(engine)) {
-    containerID = "0"
-} else {
-    containerID = new File(instanceName+"_containerID").text.trim()
-}
-
-// Determine Cloud Automation URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL') 
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-// Implement service model
-
-// Container
-def Container container = new Container()
-container.setId(containerID)
-container.setName(instanceName)
-
-// Endpoint
-def Endpoint endpoint = new Endpoint();
-endpoint.setId(endpointID);
-// Set the endpoint parameters according to the Proxy settings
-if (proxyfied.toLowerCase()=="true"){
-    if (httpsEnabled.toLowerCase()=="true"){
-        containerUrl = "https://"+containerUrl
-    } else{
-        containerUrl = "http://"+containerUrl
-    }
-    containerUrl = URLDecoder.decode(containerUrl, "UTF-8");
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/api/trace_preview?key="+userKey
-    endpoint.setProxyfied(true);
-    endpoint.setProxyfiedUrl(proxyfiedURL)
-}else{
-    endpoint.setProxyfied(false)
-    ENDPOINT_PATH = "/api/ui"
-    if (traceEnabled.toLowerCase()=="true"){
-        ENDPOINT_PATH = "/api/trace_preview?key="+userKey
-    }
-    if (httpsEnabled.toLowerCase()=="true"){
-        containerUrl = "https://"+containerUrl+ENDPOINT_PATH
-    } else{
-        containerUrl = "http://"+containerUrl+ENDPOINT_PATH
-    }
-    containerUrl = URLDecoder.decode(containerUrl, "UTF-8");
-}
-endpoint.setUrl(containerUrl);
-
-// Node
-def Node node = new Node();
-node.setName(variables.get("PA_NODE_NAME"))
-node.setHost(variables.get("PA_NODE_HOST"))
-node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
-node.setUrl(variables.get("PA_NODE_URL"))
-
-// Deployment
-def Deployment deployment = new Deployment()
-deployment.setNode(node)
-deployment.setContainer(container)
-deployment.setEndpoint(endpoint)
-
-// Update service instance model (add Deployment, Groups)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
-serviceInstanceData.setInstanceStatus("RUNNING")
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-if (proxyfied.toLowerCase()=="true"){
-    serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
-    serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
-}
-serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
-println(serviceInstanceData)
-
-// Inform other platforms that service is running through Synchronization API
-channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, false)
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
-// Add token to the current node
-token = instanceName
-nodeUrl = variables.get("PA_NODE_URL")
-println("Current nodeUrl: " + nodeUrl)
-println("Adding token:    " + token)
-rmapi.connect()
-rmapi.addNodeToken(nodeUrl, token)
-
-// Log output
-println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
-
-println("END " + variables.get("PA_TASK_NAME"))
-]]>
-          </code>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/model-as-a-service-scripts/resources/Post_Start_Model_Service/raw"/>
         </script>
       </post>
       <cleaning>
@@ -587,127 +346,16 @@ if(engine.toLowerCase().equals("singularity")){
       </inputFiles>
       <selection>
         <script type="static">
-          <code language="groovy">
-            <![CDATA[
-/**
- * Script which verifies that the current node name matches the given regular expression
- *
- * Arguments:
- * node name (regexp)
- */
-
-import com.google.common.base.Strings;
-import java.util.regex.Pattern;
-
-if (args.length != 1) {
-    println "Incorrect number of arguments, expected 1, received " + args.length;
-    selected = false;
-    return;
-}
-
-providedNodeName = variables.get("NODE_NAME")
-
-if (Strings.isNullOrEmpty(providedNodeName)) {
-    println "Given node name was empty";
-    selected = true;
-    return;
-}
-
-providedNodeName = providedNodeName.trim()
-
-println "Node name " + nodename + " (expected :  " + providedNodeName + ")";
-
-regex = Pattern.compile(providedNodeName, Pattern.CASE_INSENSITIVE);
-regexMatcher = regex.matcher(nodename);
-
-selected = regexMatcher.find()
-]]>
-          </code>
-          <arguments>
-            <argument value="$NODE_NAME"/>
-          </arguments>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_name/raw">
+            <arguments>
+              <argument value="$NODE_NAME"/>
+            </arguments>
+          </file>
         </script>
       </selection>
       <pre>
         <script>
-          <code language="cpython">
-            <![CDATA[
-import ssl
-import subprocess
-import sys
-import json
-import cryptography
-
-def install(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-# Install required Python libraries if they are not already installed
-try:
-    if sys.version_info[0] < 3:
-        from urllib import urlopen
-    else:
-        from urllib.request import urlopen
-except ImportError:
-    install('request')
-    if sys.version_info[0] < 3:
-        from urllib import urlopen
-    else:
-        from urllib.request import urlopen
-
-# Get user credentials and convert to json
-schedulerapi.connect()
-sessionId = str(schedulerapi.getSession())
-connectionInfo = schedulerapi.getConnectionInfo()
-ciLogin = str(connectionInfo.getLogin())
-ciPasswd = str(connectionInfo.getPassword())
-ciUrl = str(connectionInfo.getUrl())
-user_credentials = {
-  'sessionId': sessionId,
-  'ciLogin': ciLogin,
-  'ciPasswd': ciPasswd,
-  'ciUrl': ciUrl
-}
-user_credentials_json = json.dumps(user_credentials)
-
-# Encrypt user data into a binary file
-from cryptography.fernet import Fernet
-key = Fernet.generate_key()
-f = Fernet(key)
-message = user_credentials_json.encode()
-encrypted = f.encrypt(message)
-user_data_file = 'user_data.enc'
-with open(user_data_file, 'wb') as f:
-    f.write(encrypted)
-variables.put("USER_KEY", key.decode())
-variables.put("USER_DATA_FILE", user_data_file)
-
-# Get workflows variables
-PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PYTHON_ENTRYPOINT = variables.get("PYTHON_ENTRYPOINT")
-YAML_FILE = variables.get("YAML_FILE")
-
-PA_MAAS_RESOURCES_URL = "/buckets/model-as-a-service-resources/resources/"
-python_file_url = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + PYTHON_ENTRYPOINT + "/raw"
-yaml_file_url   = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + YAML_FILE + "/raw"
-print("python_file_url: ", python_file_url)
-print("yaml_file_url:   ", yaml_file_url)
-
-# Download the two configuration file "ml_service" for the service definition
-context = ssl._create_unverified_context()
-python_file = urlopen(python_file_url, context=context).read()
-python_content = python_file.decode('utf-8')
-python_file_name = PYTHON_ENTRYPOINT + ".py"
-with open(python_file_name, 'w') as f:
-    f.write(python_content)
-
-# Download the configuration file "ml_service-api" for the swagger specification
-yaml_file = urlopen(yaml_file_url, context=context).read()
-yaml_file_content = yaml_file.decode('utf-8')
-yaml_file_name = YAML_FILE + ".yaml"
-with open(yaml_file_name, 'w') as f:
-    f.write(yaml_file_content)
-]]>
-          </code>
+          <file language="cpython" url="${PA_CATALOG_REST_URL}/buckets/model-as-a-service-scripts/resources/Pre_Start_Model_Service/raw"/>
         </script>
       </pre>
       <scriptExecutable>
@@ -814,134 +462,10 @@ echo END "$variables_PA_TASK_NAME"
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow block="none"/>
       <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*********************************************************************************
-* THIS POSTSCRIPT PROPAGATES USEFUL INFORMATION SUCH AS:                         *
-* 1) SERVICE ENDPOINT (PROTOCOL://HOSTNAME:PORT)                                 *
-* 2) CREDENTIALS (IF THERE ARE ANY) BY ADDING THEM TO 3RD PARTY CREDENTIALS      *
-*********************************************************************************/
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.Container
-import org.ow2.proactive.pca.service.client.model.Endpoint
-import org.ow2.proactive.pca.service.client.model.Deployment
-import org.ow2.proactive.pca.service.client.model.Node
-import java.net.URLEncoder;
-
-// Acquire variables
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def proxyfied = variables.get("PROXYFIED")
-def hostname = variables.get("PA_NODE_HOST")
-def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
-def httpsEnabled = variables.get("HTTPS_ENABLED")
-def userKey = variables.get("USER_KEY")
-def traceEnabled = variables.get("TRACE_ENABLED")
-
-// Handle service parameters
-def port = new File(instanceName+"_port").text.trim()
-def containerID = new File(instanceName+"_containerID").text.trim()
-def containerUrl = hostname+":"+port
-
-// Determine Cloud Automation URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL') 
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-// Implement service model
-
-// Container
-def Container container = new Container()
-container.setId(containerID)
-container.setName(instanceName)
-
-// Endpoint
-def Endpoint endpoint = new Endpoint();
-endpoint.setId(endpointID);
-// Set the endpoint parameters according to the Proxy settings
-if (proxyfied.toLowerCase()=="true"){
-    if (httpsEnabled.toLowerCase()=="true"){
-        containerUrl = "https://"+containerUrl
-    } else{
-        containerUrl = "http://"+containerUrl
-    }
-    containerUrl = URLDecoder.decode(containerUrl, "UTF-8");
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/api/trace_preview?key="+userKey
-    endpoint.setProxyfied(true);
-    endpoint.setProxyfiedUrl(proxyfiedURL)
-}else{
-    endpoint.setProxyfied(false)
-    ENDPOINT_PATH = "/api/ui"
-    if (traceEnabled.toLowerCase()=="true"){
-        ENDPOINT_PATH = "/api/trace_preview?key="+userKey
-    }
-    if (httpsEnabled.toLowerCase()=="true"){
-        containerUrl = "https://"+containerUrl+ENDPOINT_PATH
-    } else{
-        containerUrl = "http://"+containerUrl+ENDPOINT_PATH
-    }
-    containerUrl = URLDecoder.decode(containerUrl, "UTF-8");
-}
-endpoint.setUrl(containerUrl);
-
-// Node
-def Node node = new Node();
-node.setName(variables.get("PA_NODE_NAME"))
-node.setHost(variables.get("PA_NODE_HOST"))
-node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
-node.setUrl(variables.get("PA_NODE_URL"))
-
-// Deployment
-def Deployment deployment = new Deployment()
-deployment.setNode(node)
-deployment.setContainer(container)
-deployment.setEndpoint(endpoint)
-
-// Update service instance model (add Deployment, Groups)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
-serviceInstanceData.setInstanceStatus("RUNNING")
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-if (proxyfied.toLowerCase()=="true"){
-    serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
-    serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
-}
-serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
-println(serviceInstanceData)
-
-// Inform other platforms that service is running through Synchronization API
-channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, false)
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
-// Add token to the current node
-token = instanceName
-nodeUrl = variables.get("PA_NODE_URL")
-println("Current nodeUrl: " + nodeUrl)
-println("Adding token:    " + token)
-rmapi.connect()
-rmapi.addNodeToken(nodeUrl, token)
-
-// Log output
-println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
-
-println("END " + variables.get("PA_TASK_NAME"))
-]]>
-          </code>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/model-as-a-service-scripts/resources/Post_Start_Model_Service/raw"/>
         </script>
       </post>
       <cleaning>
@@ -1011,15 +535,15 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2144px;
-            height:2712px;
+            width:2489px;
+            height:3478px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-416.515625px;left:-699.859375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_369" style="top: 549.516px; left: 704.859px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Model_Service image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_372" style="top: 677.516px; left: 704.859px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_375" style="top: 421.516px; left: 768.859px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_378" style="top: 549.516px; left: 832.859px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Elasticsearch image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_381" style="top: 677.516px; left: 832.859px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:764.5px;top:589.5px" width="38" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 17 88 C 27 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,66.303232 L20.2120063325601,45.19297266312391 L14.914797127178112,52.7388042696744 L6.6475786022345025,48.6579835359458 L18.379808,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,66.303232 L20.2120063325601,45.19297266312391 L14.914797127178112,52.7388042696744 L6.6475786022345025,48.6579835359458 L18.379808,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:859.0266769263776px;top:627.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_392" style="position: absolute; transform: translate(-50%, -50%); left: 871px; top: 697.5px;">loop</div><svg style="position:absolute;left:694.5px;top:461.5px" width="85" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 74 50 64 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.998374500000004 L22.929075029560156,54.31512137928547 L13.721469712576434,53.84607519109808 L12.776775720658232,44.675058166709036 L4.081406499999998,63.998374500000004" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.998374500000004 L22.929075029560156,54.31512137928547 L13.721469712576434,53.84607519109808 L12.776775720658232,44.675058166709036 L4.081406499999998,63.998374500000004" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_398" style="position: absolute; transform: translate(-50%, -50%); left: 736.5px; top: 505.5px;">if</div><svg style="position:absolute;left:758.5px;top:461.5px" width="85" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 64 88 C 74 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M59.9185935,63.998374500000004 L51.22322427934177,44.675058166709036 L50.278530287423564,53.84607519109808 L41.07092497043984,54.31512137928547 L59.9185935,63.998374500000004" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M59.9185935,63.998374500000004 L51.22322427934177,44.675058166709036 L50.278530287423564,53.84607519109808 L41.07092497043984,54.31512137928547 L59.9185935,63.998374500000004" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_402" style="position: absolute; transform: translate(-50%, -50%); left: 800.5px; top: 505.5px;">else</div><svg style="position:absolute;left:892.5px;top:589.5px" width="38" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 17 88 C 27 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,66.303232 L20.2120063325601,45.19297266312391 L14.914797127178112,52.7388042696744 L6.6475786022345025,48.6579835359458 L18.379808,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,66.303232 L20.2120063325601,45.19297266312391 L14.914797127178112,52.7388042696744 L6.6475786022345025,48.6579835359458 L18.379808,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:987.0266769263776px;top:627.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_411" style="position: absolute; transform: translate(-50%, -50%); left: 999px; top: 697.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 765px; top: 580px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 695px; top: 540px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 782px; top: 708px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 782px; top: 668px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 869px; top: 668px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 869px; top: 708px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 809px; top: 452px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 759px; top: 452px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 893px; top: 580px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 823px; top: 540px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 910px; top: 708px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 910px; top: 668px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 997px; top: 668px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 997px; top: 708px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-312.26100158691406px;left:-401.8382263183594px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_169" style="top: 444.88968344405293px; left: 406.8382263183594px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Model_Service image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service_S</span></a></div><div class="task ui-draggable" id="jsPlumb_1_172" style="top: 572.5183455534279px; left: 406.8382263183594px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><div class="task ui-draggable" id="jsPlumb_1_175" style="top: 317.26102133467793px; left: 511.1580505371094px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_178" style="top: 444.88968344405293px; left: 615.4963073730469px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Elasticsearch image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_Model_Service_D</span></a></div><div class="task ui-draggable" id="jsPlumb_1_181" style="top: 572.5183455534279px; left: 615.4963073730469px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:463.5px;top:484.5px" width="39.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 18.5 88 C 28.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.751504,66.303232 L21.19401443018702,45.162769288441346 L16.036888353495808,52.805023578185406 L7.695806008372434,48.87738493494553 L19.751504,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.751504,66.303232 L21.19401443018702,45.162769288441346 L16.036888353495808,52.805023578185406 L7.695806008372434,48.87738493494553 L19.751504,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:558.0266769263776px;top:522.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294157,28.915376004420658 L-10.777784470220794,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294157,28.915376004420658 L-10.777784470220794,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_192" style="position: absolute; transform: translate(-50%, -50%); left: 570px; top: 592.5px;">loop</div><svg style="position:absolute;left:672px;top:484.5px" width="39" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 18 88 C 28 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.294272,66.303232 L20.866314289298487,45.1720066914511 L15.662449640903752,52.782512109699454 L7.3455943989979495,48.80382905054735 L19.294272,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.294272,66.303232 L20.866314289298487,45.1720066914511 L15.662449640903752,52.782512109699454 L7.3455943989979495,48.80382905054735 L19.294272,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:766.0266769263776px;top:522.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294157,28.915376004420658 L-10.777784470220794,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294157,28.915376004420658 L-10.777784470220794,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_211" style="position: absolute; transform: translate(-50%, -50%); left: 778px; top: 592.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 464px; top: 475px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 482.5px; top: 603px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 482.5px; top: 563px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 568px; top: 563px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 568px; top: 603px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 551px; top: 348px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected endpointDrag connected" style="position: absolute; height: 20px; width: 20px; left: 501px; top: 348px; visibility: visible;" dragid="jsPlumb_1_224" elid="jsPlumb_1_175"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 672.5px; top: 475px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 690.5px; top: 603px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 690.5px; top: 563px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 776px; top: 563px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 776px; top: 603px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:396.5px;top:357.5px" width="125" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 87 C -10 37 114 50 104 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.105043999999996,60.965058 L31.837070979612474,56.58521127704036 L23.077744613455337,53.70872007921888 L24.580733058831353,44.61251066358501 L11.105043999999996,60.965058" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full connected" style="position: absolute; height: 20px; width: 20px; left: 397px; top: 435px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_222" style="position: absolute; transform: translate(-50%, -50%); left: 458.5px; top: 401px;">if</div><svg style="position:absolute;left:500.5px;top:357.5px" width="125" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 104 87 C 114 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M92.894956,60.965058 L79.41926694116866,44.612510663585006 L80.92225538654466,53.708720079218864 L72.16292902038752,56.58521127704034 L92.894956,60.965058" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full connected" style="position: absolute; height: 20px; width: 20px; left: 605px; top: 435px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_233" style="position: absolute; transform: translate(-50%, -50%); left: 562.5px; top: 401px;">else</div></div></div>
     </body>
 </html>
  ]]>
