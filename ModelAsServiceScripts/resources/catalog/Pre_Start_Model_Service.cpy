@@ -64,15 +64,22 @@ print("python_file_url: ", python_file_url)
 print("yaml_file_url:   ", yaml_file_url)
 
 # Download the two configuration file "ml_service" for the service definition
-context = ssl._create_unverified_context()
-python_file = urlopen(python_file_url, context=context).read()
+if python_file_url.startswith('https'):
+    context = ssl._create_unverified_context()
+    python_file = urlopen(python_file_url, context=context).read()
+else:
+    python_file = urlopen(python_file_url).read()
 python_content = python_file.decode('utf-8')
 python_file_name = PYTHON_ENTRYPOINT + ".py"
 with open(python_file_name, 'w') as f:
     f.write(python_content)
 
 # Download the configuration file "ml_service-api" for the swagger specification
-yaml_file = urlopen(yaml_file_url, context=context).read()
+if yaml_file_url.startswith('https'):
+    context = ssl._create_unverified_context()
+    yaml_file = urlopen(yaml_file_url, context=context).read()
+else:
+    yaml_file = urlopen(yaml_file_url).read()
 yaml_file_content = yaml_file.decode('utf-8')
 yaml_file_name = YAML_FILE + ".yaml"
 with open(yaml_file_name, 'w') as f:
