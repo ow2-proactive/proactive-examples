@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MongoDB" onTaskError="continueJobExecution" priority="normal" projectName="Cloud Automation - Deployment" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <variables>
-    <variable model="PA:Boolean" name="PROXYFIED" value="false"/>
-    <variable name="DOCKER_IMAGE" value="activeeon/mongo"/>
+    <variable name="NATIVE_SCHEDULER" value=""/>
+    <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
     <variable name="INSTANCE_NAME" value="mongodb-server-$PA_JOB_ID"/>
-    <variable model="PA:Boolean" name="BUILD_SANDBOX_IF_NOT_EXISTS" value="true"/>
-    <variable model="PA:HIDDEN" name="PASSWORD" value=""/>
     <variable name="ENDPOINT_ID" value="mongodb-endpoint-$PA_JOB_ID"/>
-    <variable model="PA:NOT_EMPTY_STRING" name="MOUNT_DB_PATH" value="/tmp/mongodb-server-$PA_JOB_ID"/>
-    <variable name="SIF_IMAGE_PATH" value="/tmp/mongo_test_hpe.sif"/>
-    <variable model="PA:List(docker,singularity)" name="ENGINE" value="singularity"/>
-    <variable name="USER" value=""/>
+    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
+    <variable model="PA:Boolean" name="HTTP_ENABLED" value="True"/>
     <variable model="PA:Integer" name="SERVICE_PORT" value="-1"/>
-    <variable model="PA:Boolean" name="HTTP_ENABLED" value="true"/>
+    <variable name="USER" value=""/>
+    <variable model="PA:HIDDEN" name="PASSWORD" value=""/>
+    <variable name="DOCKER_IMAGE" value="activeeon/mongo"/>
+    <variable model="PA:List(docker,singularity)" name="ENGINE" value="docker"/>
+    <variable model="PA:NOT_EMPTY_STRING" name="MOUNT_DB_PATH" value="/tmp/$INSTANCE_NAME"/>
+    <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/mongodb.sif"/>
+    <variable model="PA:Boolean" name="BUILD_IMAGE_IF_NOT_EXISTS" value="True"/>
   </variables>
   <description>
     <![CDATA[ Deploy a MongoDB Database server.
@@ -25,8 +27,10 @@ PASSWORD (Optional): Password for the root user. ]]>
 <info name="bucketName" value="cloud-automation"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
 <info name="pca.states" value="(VOID,RUNNING)"/>
-<info name="Documentation" value="PCA/PCAUserGuide.html"/>
 <info name="pca.service.id" value="MongoDB"/>
+<info name="Documentation" value="PCA/PCAUserGuide.html"/>
+<info name="NS" value="$NATIVE_SCHEDULER"/>
+<info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
@@ -37,6 +41,7 @@ PASSWORD (Optional): Password for the root user. ]]>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
         <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="DISABLE_PTK" value="True"/>
       </genericInformation>
       <scriptExecutable>
         <script>
@@ -44,22 +49,15 @@ PASSWORD (Optional): Password for the root user. ]]>
             <![CDATA[
 echo BEGIN "$variables_PA_TASK_NAME"
 
-################################################################################
-### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-DOCKER_IMAGE=activeeon/mongo
-PORT=27017
-USER=$variables_USER
-PASSWORD=$variables_PASSWORD
-MONGO_HOST_PORT=$variables_SERVICE_PORT
-# Check whether USER and PASSWORD have been well entered
-if [ \( ! -z "$USER" -a -z "$PASSWORD" \) -o \( -z "$USER" -a ! -z "$PASSWORD" \) ]; then
-    echo [ERROR] "$variables_PA_JOB_NAME"_USER and "$variables_PA_JOB_NAME"_PASSWORD are used in junction. They should be either both entered or both blank.
-    exit 1
-fi
-################################################################################
+PATH=$PATH:/usr/sbin
 
 GET_RANDOM_PORT(){
-    read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
     while :
     do
         RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
@@ -68,39 +66,48 @@ GET_RANDOM_PORT(){
     echo $RND_PORT
 }
 
-echo "Pulling "$variables_PA_JOB_NAME" image"
-docker pull $DOCKER_IMAGE
-
+DOCKER_IMAGE=$variables_DOCKER_IMAGE
 INSTANCE_NAME=$variables_INSTANCE_NAME
+MONGODB_INTERNAL_PORT=27017
+MONGODB_USER=$variables_USER
+MONGODB_PASSWORD=$variables_PASSWORD
+MONGODB_HOST_PORT=$variables_SERVICE_PORT
 
-if [ -z "$INSTANCE_NAME" ]; then
+# Check whether USER and PASSWORD have been well entered
+if [ \( ! -z "$MONGODB_USER" -a -z "$MONGODB_PASSWORD" \) -o \( -z "$MONGODB_USER" -a ! -z "$MONGODB_PASSWORD" \) ]; then
+    echo [ERROR] "$variables_PA_JOB_NAME"_USER and "$variables_PA_JOB_NAME"_PASSWORD are used in junction. They should be either both entered or both blank.
+    exit 1
+fi
+
+if [[ -z $INSTANCE_NAME ]]; then
     echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
     exit 1
 fi
 
-if [ "$MONGO_HOST_PORT" -eq "-1" ]; then
+if [ "$MONGODB_HOST_PORT" -eq "-1" ]; then
     echo "[INFO] Picking a random port number"
-    MONGO_HOST_PORT=$(GET_RANDOM_PORT)
+    MONGODB_HOST_PORT=$(GET_RANDOM_PORT)
 fi
-echo "The service will be initialized on port $MONGO_HOST_PORT"
+echo "The service will be initialized on port $MONGODB_HOST_PORT"
+
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
 
 if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
     echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
     exit 128
 else
-    ################################################################################
-    ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running $INSTANCE_NAME container"
-    F_PORT=$(GET_RANDOM_PORT)
-    if [ "$USER" == null ]; then
-        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $F_PORT:$MONGO_HOST_PORT -d $DOCKER_IMAGE)
+    
+    if [[ -z $MONGODB_USER ]]; then
+        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $MONGODB_HOST_PORT:$MONGODB_INTERNAL_PORT -d $DOCKER_IMAGE)
     else
-        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $F_PORT:$MONGO_HOST_PORT -e MONGO_INITDB_ROOT_USERNAME=$USER -e MONGO_INITDB_ROOT_PASSWORD=$PASSWORD -d $DOCKER_IMAGE)
+        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $MONGODB_HOST_PORT:$MONGODB_INTERNAL_PORT -e MONGO_INITDB_ROOT_USERNAME=$MONGODB_USER -e MONGO_INITDB_ROOT_PASSWORD=$MONGODB_PASSWORD -d $DOCKER_IMAGE)
     fi
-    ################################################################################
+    
     if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
-        if [ "$RUNNING" == "true" ]; then
+        if [ "${RUNNING,,}" = "true" ]; then
             echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
         fi
     else
@@ -108,14 +115,12 @@ else
     fi
 fi
 
-
-port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$MONGO_HOST_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
-echo "$port" > $INSTANCE_NAME"_port"
+MONGODB_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$MONGODB_HOST_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$MONGODB_PORT" > $INSTANCE_NAME"_port"
 
 containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
 echo "$containerID" > $INSTANCE_NAME"_containerID"
 
-# Endpoint added to the job variables using a groovy post-script
 ]]>
           </code>
         </script>
@@ -255,7 +260,7 @@ echo BEGIN "$variables_PA_TASK_NAME"
 
 PATH=$PATH:/usr/sbin
 
-GET_RANDOM_PORT(){    
+GET_RANDOM_PORT(){
     PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
     if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
         read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
@@ -272,41 +277,37 @@ GET_RANDOM_PORT(){
 
 export XDG_RUNTIME_DIR=/run/user/$UID
 
-################################################################################
-### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-SIF_IMAGE_PATH=$variables_SIF_IMAGE_PATH
-INSTANCE_NAME=$variables_INSTANCE_NAME
-BUILD_SANDBOX=$variables_BUILD_SANDBOX_IF_NOT_EXISTS
 DOCKER_IMAGE=$variables_DOCKER_IMAGE
-USER=$variables_USER
-PASSWORD=$variables_PASSWORD
-MONGO_HOST_PORT=$variables_SERVICE_PORT
+INSTANCE_NAME=$variables_INSTANCE_NAME
+SIF_IMAGE_PATH=$variables_SINGULARITY_IMAGE_PATH
+BUILD_IMAGE=$variables_BUILD_IMAGE_IF_NOT_EXISTS
+MONGODB_USER=$variables_USER
+MONGODB_PASSWORD=$variables_PASSWORD
+MONGODB_HOST_PORT=$variables_SERVICE_PORT
 
-if [ "$MONGO_HOST_PORT" -eq "-1" ]; then
+if [ "$MONGODB_HOST_PORT" -eq "-1" ]; then
     echo "[INFO] Picking a random port number"
-    MONGO_HOST_PORT=$(GET_RANDOM_PORT)
+    MONGODB_HOST_PORT=$(GET_RANDOM_PORT)
 fi
-echo "The service will be initialized on port $MONGO_HOST_PORT"
+echo "The service will be initialized on port $MONGODB_HOST_PORT"
 
-if [ -z "$INSTANCE_NAME" ]; then
+if [[ -z $INSTANCE_NAME ]]; then
     echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed."
     exit 1
 fi
 
-
-if [ -z "$SIF_IMAGE_PATH" ]; then
-    echo "[ERROR] The SINGULARITY_IMAGE_PATH is not provided by the user. Empty value is not allowed."
+if [[ -z $SIF_IMAGE_PATH ]]; then
+    echo "[ERROR] The singularity image path is not provided by the user. Empty value is not allowed."
     exit 1
 else
     echo "Using $SIF_IMAGE_PATH to start the service"
 fi
 
 # Check whether USER and PASSWORD have been well entered
-if [ \( ! -z "$USER" -a -z "$PASSWORD" \) -o \( -z "$USER" -a ! -z "$PASSWORD" \) ]; then
+if [ \( ! -z "$MONGODB_USER" -a -z "$MONGODB_PASSWORD" \) -o \( -z "$MONGODB_USER" -a ! -z "$MONGODB_PASSWORD" \) ]; then
     echo [ERROR] "$variables_PA_JOB_NAME"_USER and "$variables_PA_JOB_NAME"_PASSWORD are used in junction. They should be either both entered or both blank.
     exit 1
 fi
-################################################################################
 
 if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
     echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
@@ -314,31 +315,30 @@ if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
 else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-    if [ "$BUILD_SANDBOX" = "true" ]; then
-
-        if [ -d "$SIF_IMAGE_PATH" ]; then
-        	echo "[INFO] Using existing sandbox on $SIF_IMAGE_PATH"
+    if [ "${BUILD_IMAGE,,}" = "true" ]; then
+        if [ -e "$SIF_IMAGE_PATH" ]; then
+            echo "[INFO] Using existing sandbox on $SIF_IMAGE_PATH"
         else
-        	echo "[INFO] Building the sandbox on $SIF_IMAGE_PATH"
-        	echo "[INFO] singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
-        	singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+            echo "[INFO] Building the sandbox on $SIF_IMAGE_PATH"
+            echo "[INFO] singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+            singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
         fi
-
     fi
+
     echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
-    export SINGULARITYENV_MONGO_INITDB_ROOT_USERNAME=$USER
-    export SINGULARITYENV_MONGO_INITDB_ROOT_PASSWORD=$PASSWORD
+    export SINGULARITYENV_MONGO_INITDB_ROOT_USERNAME=$MONGODB_USER
+    export SINGULARITYENV_MONGO_INITDB_ROOT_PASSWORD=$MONGODB_PASSWORD
     singularity instance start --writable $SIF_IMAGE_PATH $INSTANCE_NAME
-    bash -c "nohup singularity exec instance://$INSTANCE_NAME mongod --port $MONGO_HOST_PORT > /tmp/$INSTANCE_NAME.log 2>&1 < /dev/null &"
-    sleep 5
+    bash -c "nohup singularity exec instance://$INSTANCE_NAME mongod --port $MONGODB_HOST_PORT > /tmp/$INSTANCE_NAME.log 2>&1 < /dev/null &"
+    sleep 3
     cat /tmp/$INSTANCE_NAME.log
-    ################################################################################
+
     if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
         echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
     fi
 fi
 
-echo "$MONGO_HOST_PORT" > $INSTANCE_NAME"_port"
+echo "$MONGODB_HOST_PORT" > $INSTANCE_NAME"_port"
 
 # Endpoint added to the job variables using a groovy post-script
 echo END "$variables_PA_TASK_NAME"
@@ -348,143 +348,7 @@ echo END "$variables_PA_TASK_NAME"
       </scriptExecutable>
       <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*********************************************************************************
-* THIS POSTSCRIPT PROPAGATES USEFUL INFORMATION SUCH AS:                         *
-* 1) SERVICE ENDPOINT (PROTOCOL://HOSTNAME:PORT)                                 *
-* 2) CREDENTIALS (IF THERE ARE ANY) BY ADDING THEM TO 3RD PARTY CREDENTIALS      *
-*********************************************************************************/
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.Container
-import org.ow2.proactive.pca.service.client.model.Endpoint
-import org.ow2.proactive.pca.service.client.model.Deployment
-import org.ow2.proactive.pca.service.client.model.Node
-import org.codehaus.groovy.runtime.StackTraceUtils
-
-// Acquire variables
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def proxyfied = variables.get("PROXYFIED")
-def endpointID = variables.get("ENDPOINT_ID")
-def httpEnabled = variables.get("HTTP_ENABLED") // MongoDB, Cassandra, etc
-def httpsEnabled = variables.get("HTTPS_ENABLED") // Visdom, Tensorboard, MaaS, JupyterLab, etc
-def engine = variables.get("ENGINE") // Docker, Singularity
-
-// Handle service parameters
-def hostname = variables.get("PA_NODE_HOST")
-def port = new File(instanceName+"_port").text.trim()
-
-def containerID = ""
-if (engine != null && "singularity".equalsIgnoreCase(engine)) {
-    containerID = "0"
-} else {
-    containerID = new File(instanceName+"_containerID").text.trim()
-}
-
-def containerUrl = hostname+":"+port
-if (httpsEnabled != null){
-    if ("true".equalsIgnoreCase(httpsEnabled)){
-        containerUrl = "https://"+containerUrl
-    }else{
-        containerUrl = "http://"+containerUrl
-    }
-}else{
-    if (httpEnabled != null && "true".equalsIgnoreCase(httpEnabled)){
-        containerUrl = "http://"+containerUrl
-    }
-}
-println "containerUrl: " + containerUrl
-
-variables.put("HOSTNAME", hostname)
-variables.put("PORT", port)
-
-// Determine Cloud Automation URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL') 
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-
-try {
-    // Get schedulerapi access and acquire session id
-    schedulerapi.connect()
-    def sessionId = schedulerapi.getSession()
-
-    // Connect to Cloud Automation API
-    def apiClient = new ApiClient()
-    apiClient.setBasePath(pcaUrl)
-    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-    // Implement service model
-
-    // Container
-    def Container container = new Container()
-    container.setId(containerID)
-    container.setName(instanceName)
-
-    // Endpoint
-    def Endpoint endpoint = new Endpoint();
-    endpoint.setId(endpointID);
-    endpoint.setUrl(containerUrl);
-    // Set the endpoint parameters according to the Proxy settings
-    if (proxyfied.toLowerCase()=="true"){
-        proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
-        endpoint.setProxyfied(true);
-        endpoint.setProxyfiedUrl(proxyfiedURL)
-    }else{
-        endpoint.setProxyfied(false)
-    }
-
-    // Node
-    def Node node = new Node();
-    node.setName(variables.get("PA_NODE_NAME"))
-    node.setHost(variables.get("PA_NODE_HOST"))
-    node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
-    node.setUrl(variables.get("PA_NODE_URL"))
-
-    // Deployment
-    def Deployment deployment = new Deployment()
-    deployment.setNode(node)
-    deployment.setContainer(container)
-    deployment.setEndpoint(endpoint)
-
-    // Update service instance model (add Deployment, Groups)
-    def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
-    serviceInstanceData.setInstanceStatus("RUNNING")
-    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-    if (proxyfied.toLowerCase()=="true"){
-        serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
-        serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
-    }
-    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
-    println(serviceInstanceData)
-
-    // Inform other platforms that service is running through Synchronization API
-    channel = "Service_Instance_" + instanceId
-    synchronizationapi.createChannelIfAbsent(channel, true)
-    synchronizationapi.put(channel, "RUNNING", true)
-    synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
-    // Add token to the current node
-    token = instanceName
-    nodeUrl = variables.get("PA_NODE_URL")
-    println("Current nodeUrl: " + nodeUrl)
-    println("Adding token:    " + token)
-    rmapi.connect()
-    rmapi.addNodeToken(nodeUrl, token)
-
-    // Log output
-    println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-    println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
-} catch (Exception e) {
-    StackTraceUtils.printSanitizedStackTrace(e)
-    throw e
-}
-
-println("END " + variables.get("PA_TASK_NAME"))
-]]>
-          </code>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
         </script>
       </post>
       <cleaning>
