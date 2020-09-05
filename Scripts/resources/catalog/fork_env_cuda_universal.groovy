@@ -117,18 +117,23 @@ if ("true".equalsIgnoreCase(variables.get("CONTAINER_NO_HOME_ENABLED"))) {
     CONTAINER_NO_HOME_ENABLED = true
 }
 
+def CONTAINER_HOST_NETWORK_ENABLED = true
+if ("false".equalsIgnoreCase(variables.get("CONTAINER_HOST_NETWORK_ENABLED"))) {
+    CONTAINER_HOST_NETWORK_ENABLED = false
+}
+
 println "Fork environment info..."
-println "CONTAINER_PLATFORM:          " + CONTAINER_PLATFORM
-println "CONTAINER_ENABLED:           " + CONTAINER_ENABLED
-println "CONTAINER_IMAGE:             " + CONTAINER_IMAGE
-println "CONTAINER_GPU_ENABLED:       " + CONTAINER_GPU_ENABLED
-println "CUDA_ENABLED:                " + CUDA_ENABLED
-println "USE_NVIDIA_RAPIDS:           " + USE_NVIDIA_RAPIDS
-println "HOST_LOG_PATH:               " + HOST_LOG_PATH
-println "CONTAINER_LOG_PATH:          " + CONTAINER_LOG_PATH
-println "CONTAINER_NO_HOME_ENABLED:   " + CONTAINER_NO_HOME_ENABLED
-println "CONTAINER_ROOTLESS_ENABLED:  " + CONTAINER_ROOTLESS_ENABLED
-println "CONTAINER_ISOLATION_ENABLED: " + CONTAINER_ISOLATION_ENABLED
+println "CONTAINER_PLATFORM:             " + CONTAINER_PLATFORM
+println "CONTAINER_ENABLED:              " + CONTAINER_ENABLED
+println "CONTAINER_IMAGE:                " + CONTAINER_IMAGE
+println "CONTAINER_GPU_ENABLED:          " + CONTAINER_GPU_ENABLED
+println "CUDA_ENABLED:                   " + CUDA_ENABLED
+println "USE_NVIDIA_RAPIDS:              " + USE_NVIDIA_RAPIDS
+println "HOST_LOG_PATH:                  " + HOST_LOG_PATH
+println "CONTAINER_LOG_PATH:             " + CONTAINER_LOG_PATH
+println "CONTAINER_NO_HOME_ENABLED:      " + CONTAINER_NO_HOME_ENABLED
+println "CONTAINER_ROOTLESS_ENABLED:     " + CONTAINER_ROOTLESS_ENABLED
+println "CONTAINER_HOST_NETWORK_ENABLED: " + CONTAINER_HOST_NETWORK_ENABLED
 
 String osName = System.getProperty("os.name")
 println "Operating system : " + osName
@@ -152,8 +157,12 @@ if (CONTAINER_ENABLED && (
     cmd.add("--rm")
     cmd.add("--shm-size=256M")
     
+    if (CONTAINER_HOST_NETWORK_ENABLED) {
+        cmd.add("--network=host")
+    }
+    
     if (CONTAINER_ROOTLESS_ENABLED) {
-    	cmd.add("--env")
+        cmd.add("--env")
         cmd.add("HOME=/tmp")
     }
 
