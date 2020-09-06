@@ -237,11 +237,11 @@ if (CONTAINER_ENABLED && (
         cmd.add(currentJavaHome + ":" + currentJavaHome)
 
         // when not on windows, mount a shared folder if it exists
-        sharedDirectory = new File("/shared")
-        if (sharedDirectory.isDirectory() && sharedDirectory.canWrite()) {
-            cmd.add("-v")
-            cmd.add("/shared:/shared")
-        }
+        // sharedDirectory = new File("/shared")
+        // if (sharedDirectory.isDirectory() && sharedDirectory.canWrite()) {
+        //     cmd.add("-v")
+        //     cmd.add("/shared:/shared")
+        // }
     }
 
     // Prepare log directory
