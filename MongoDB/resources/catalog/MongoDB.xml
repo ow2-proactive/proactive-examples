@@ -1,14 +1,20 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="MongoDB" projectName="Cloud Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MongoDB" onTaskError="continueJobExecution" priority="normal" projectName="Cloud Automation - Deployment" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <variables>
-    <variable name="INSTANCE_NAME" value="mongodb-server" />
-    <variable name="PASSWORD" value="" model="PA:HIDDEN"/>
-    <variable name="USER" value="" />
-    <variable name="HTTP_ENABLED" value="True" model="PA:Boolean"/>
-    <variable name="PROXYFIED" value="False" model="PA:Boolean"/>
-    <variable name="ENDPOINT_ID" value="mongodb-endpoint" />
+    <variable name="NATIVE_SCHEDULER" value=""/>
+    <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
+    <variable name="INSTANCE_NAME" value="mongodb-server-$PA_JOB_ID"/>
+    <variable name="ENDPOINT_ID" value="mongodb-endpoint-$PA_JOB_ID"/>
+    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
+    <variable model="PA:Boolean" name="HTTP_ENABLED" value="True"/>
+    <variable model="PA:Integer" name="SERVICE_PORT" value="-1"/>
+    <variable name="USER" value="activeeon"/>
+    <variable model="PA:HIDDEN" name="PASSWORD" value="ENC(KvnQVqWfueBasc1Blj8RZZDKXPrmuHC4)"/>
+    <variable name="DOCKER_IMAGE" value="activeeon/mongo"/>
+    <variable model="PA:List(docker,singularity)" name="ENGINE" value="docker"/>
+    <variable model="PA:NOT_EMPTY_STRING" name="MOUNT_DB_PATH" value="/tmp/$INSTANCE_NAME"/>
+    <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/mongodb.sif"/>
+    <variable model="PA:Boolean" name="BUILD_IMAGE_IF_NOT_EXISTS" value="True"/>
   </variables>
   <description>
     <![CDATA[ Deploy a MongoDB Database server.
@@ -18,26 +24,24 @@ USER (Optional): Username for the root user.
 PASSWORD (Optional): Password for the root user. ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="cloud-automation"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
-    <info name="pca.states" value="(VOID,RUNNING)"/>
-    <info name="Documentation" value="PCA/PCAUserGuide.html"/>
-    <info name="pca.service.id" value="MongoDB"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+<info name="bucketName" value="cloud-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+<info name="pca.states" value="(VOID,RUNNING)"/>
+<info name="pca.service.id" value="MongoDB"/>
+<info name="Documentation" value="PCA/PCAUserGuide.html"/>
+<info name="NS" value="$NATIVE_SCHEDULER"/>
+<info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Start_MongoDB"
-
-
-    onTaskError="cancelJob"
-    
-    fork="true">
+    <task fork="true" name="Start_MongoDB_D" onTaskError="cancelJob">
       <description>
         <![CDATA[ Pull MongoDB image and start a container ]]>
       </description>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
         <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="DISABLE_PTK" value="True"/>
       </genericInformation>
       <scriptExecutable>
         <script>
@@ -45,21 +49,15 @@ PASSWORD (Optional): Password for the root user. ]]>
             <![CDATA[
 echo BEGIN "$variables_PA_TASK_NAME"
 
-################################################################################
-### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-DOCKER_IMAGE=activeeon/mongo
-PORT=27017
-USER=$variables_USER
-PASSWORD=$variables_PASSWORD
-# Check whether USER and PASSWORD have been well entered
-if [ \( ! -z "$USER" -a -z "$PASSWORD" \) -o \( -z "$USER" -a ! -z "$PASSWORD" \) ]; then
-    echo [ERROR] "$variables_PA_JOB_NAME"_USER and "$variables_PA_JOB_NAME"_PASSWORD are used in junction. They should be either both entered or both blank.
-    exit 1
-fi
-################################################################################
+PATH=$PATH:/usr/sbin
 
 GET_RANDOM_PORT(){
-    read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
     while :
     do
         RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
@@ -68,33 +66,48 @@ GET_RANDOM_PORT(){
     echo $RND_PORT
 }
 
-echo "Pulling "$variables_PA_JOB_NAME" image"
-docker pull $DOCKER_IMAGE
-
+DOCKER_IMAGE=$variables_DOCKER_IMAGE
 INSTANCE_NAME=$variables_INSTANCE_NAME
+MONGODB_INTERNAL_PORT=27017
+MONGODB_USER=$variables_USER
+MONGODB_PASSWORD=$variables_PASSWORD
+MONGODB_HOST_PORT=$variables_SERVICE_PORT
 
-if [ -z "$INSTANCE_NAME" ]; then
+# Check whether USER and PASSWORD have been well entered
+if [ \( ! -z "$MONGODB_USER" -a -z "$MONGODB_PASSWORD" \) -o \( -z "$MONGODB_USER" -a ! -z "$MONGODB_PASSWORD" \) ]; then
+    echo [ERROR] "$variables_PA_JOB_NAME"_USER and "$variables_PA_JOB_NAME"_PASSWORD are used in junction. They should be either both entered or both blank.
+    exit 1
+fi
+
+if [[ -z $INSTANCE_NAME ]]; then
     echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
     exit 1
 fi
+
+if [ "$MONGODB_HOST_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    MONGODB_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $MONGODB_HOST_PORT"
+
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
 
 if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
     echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
     exit 128
 else
-    ################################################################################
-    ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running $INSTANCE_NAME container"
-    F_PORT=$(GET_RANDOM_PORT)
-    if [ "$USER" == null ]; then
-        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -d $DOCKER_IMAGE)
+    
+    if [[ -z $MONGODB_USER ]]; then
+        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $MONGODB_HOST_PORT:$MONGODB_INTERNAL_PORT -d $DOCKER_IMAGE)
     else
-        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -e MONGO_INITDB_ROOT_USERNAME=$USER -e MONGO_INITDB_ROOT_PASSWORD=$PASSWORD -d $DOCKER_IMAGE)
+        INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $MONGODB_HOST_PORT:$MONGODB_INTERNAL_PORT -e MONGO_INITDB_ROOT_USERNAME=$MONGODB_USER -e MONGO_INITDB_ROOT_PASSWORD=$MONGODB_PASSWORD -d $DOCKER_IMAGE)
     fi
-    ################################################################################
+    
     if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
-        if [ "$RUNNING" == "true" ]; then
+        if [ "${RUNNING,,}" = "true" ]; then
             echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
         fi
     else
@@ -102,43 +115,38 @@ else
     fi
 fi
 
-
-port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
-echo "$port" > $INSTANCE_NAME"_port"
+MONGODB_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$MONGODB_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$MONGODB_PORT" > $INSTANCE_NAME"_port"
 
 containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
 echo "$containerID" > $INSTANCE_NAME"_containerID"
 
-# Endpoint added to the job variables using a groovy post-script
+echo END "$variables_PA_TASK_NAME"
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow block="none"/>
       <post>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
         </script>
       </post>
       <cleaning>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw"/>
         </script>
       </cleaning>
       <metadata>
         <positionTop>
-            359
+            353.4548797607422
         </positionTop>
         <positionLeft>
-            525.5
+            480.46875
         </positionLeft>
       </metadata>
     </task>
-    <task name="Loop_Over_Instance_Status" 
-    
-    
-    
-    
-    fork="true">
+    <task fork="true" name="Loop_Over_Instance_Status_D">
       <description>
         <![CDATA[ Loop over service instance status and fetch docker container logs.
 It will run every minute. ]]>
@@ -149,7 +157,7 @@ It will run every minute. ]]>
         <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="Start_MongoDB"/>
+        <task ref="Start_MongoDB_D"/>
       </depends>
       <pre>
         <script>
@@ -176,55 +184,272 @@ if (!username.isEmpty()){
       </pre>
       <scriptExecutable>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow >
-        <loop target="Loop_Over_Instance_Status">
+      <controlFlow>
+        <loop target="Loop_Over_Instance_Status_D">
           <script>
-            <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw" language="groovy"></file>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw"/>
           </script>
         </loop>
       </controlFlow>
       <metadata>
         <positionTop>
-            488
+            481.4409637451172
         </positionTop>
         <positionLeft>
-            525.5
+            480.46875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Condition">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="Documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def engine = variables.get("ENGINE")
+
+println("[INFO] Starting a Mongo server in a " + engine + " container.")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <if else="Start_MongoDB_S" target="Start_MongoDB_D">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def engine = variables.get("ENGINE")
+if(engine.toLowerCase().equals("docker")){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            225.45140075683594
+        </positionTop>
+        <positionLeft>
+            544.4618530273438
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Start_MongoDB_S" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ Pull MongoDB image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="DISABLE_PTK" value="True"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+PATH=$PATH:/usr/sbin
+
+GET_RANDOM_PORT(){
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+export XDG_RUNTIME_DIR=/run/user/$UID
+
+DOCKER_IMAGE=$variables_DOCKER_IMAGE
+INSTANCE_NAME=$variables_INSTANCE_NAME
+SIF_IMAGE_PATH=$variables_SINGULARITY_IMAGE_PATH
+BUILD_IMAGE=$variables_BUILD_IMAGE_IF_NOT_EXISTS
+MONGODB_USER=$variables_USER
+MONGODB_PASSWORD=$variables_PASSWORD
+MONGODB_HOST_PORT=$variables_SERVICE_PORT
+
+if [ "$MONGODB_HOST_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    MONGODB_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $MONGODB_HOST_PORT"
+
+if [[ -z $INSTANCE_NAME ]]; then
+    echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed."
+    exit 1
+fi
+
+if [[ -z $SIF_IMAGE_PATH ]]; then
+    echo "[ERROR] The singularity image path is not provided by the user. Empty value is not allowed."
+    exit 1
+else
+    echo "Using $SIF_IMAGE_PATH to start the service"
+fi
+
+# Check whether USER and PASSWORD have been well entered
+if [ \( ! -z "$MONGODB_USER" -a -z "$MONGODB_PASSWORD" \) -o \( -z "$MONGODB_USER" -a ! -z "$MONGODB_PASSWORD" \) ]; then
+    echo [ERROR] "$variables_PA_JOB_NAME"_USER and "$variables_PA_JOB_NAME"_PASSWORD are used in junction. They should be either both entered or both blank.
+    exit 1
+fi
+
+if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+    echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
+    exit 128
+else
+    if [ "${BUILD_IMAGE,,}" = "true" ]; then
+        if [ -e "$SIF_IMAGE_PATH" ]; then
+            echo "[INFO] Using existing sandbox on $SIF_IMAGE_PATH"
+        else
+            echo "[INFO] Building the sandbox on $SIF_IMAGE_PATH"
+            echo "[INFO] singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+            singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+        fi
+    fi
+    
+    echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
+    echo "[INFO] singularity instance start --writable --no-home $SIF_IMAGE_PATH $INSTANCE_NAME"
+    singularity instance start --writable --no-home $SIF_IMAGE_PATH $INSTANCE_NAME
+    
+    echo "[INFO] Cleaning the MongoDB data folder"
+    echo "[INFO] rm -rf $SIF_IMAGE_PATH/data && mkdir -p $SIF_IMAGE_PATH/data/db"
+    rm -rf $SIF_IMAGE_PATH/data && mkdir -p $SIF_IMAGE_PATH/data/db
+    
+    echo "[INFO] Running MongoDB"
+    export SINGULARITYENV_MONGO_INITDB_ROOT_USERNAME=$MONGODB_USER
+    export SINGULARITYENV_MONGO_INITDB_ROOT_PASSWORD=$MONGODB_PASSWORD
+    echo "bash -c nohup singularity run instance://$INSTANCE_NAME mongod --port $MONGODB_HOST_PORT > /tmp/$INSTANCE_NAME.log 2>&1 < /dev/null &"
+    bash -c "nohup singularity run instance://$INSTANCE_NAME mongod --port $MONGODB_HOST_PORT > /tmp/$INSTANCE_NAME.log 2>&1 < /dev/null &"
+    sleep 5
+    cat /tmp/$INSTANCE_NAME.log
+    
+    if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+    fi
+fi
+
+echo "$MONGODB_HOST_PORT" > $INSTANCE_NAME"_port"
+
+# Endpoint added to the job variables using a groovy post-script
+echo END "$variables_PA_TASK_NAME"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
+        </script>
+      </post>
+      <cleaning>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw"/>
+        </script>
+      </cleaning>
+      <metadata>
+        <positionTop>
+            352.4479217529297
+        </positionTop>
+        <positionLeft>
+            609.4444580078125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Loop_Over_Instance_Status_S">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_MongoDB_S"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE       *
+/********************************************************************************/
+def username = variables.get("USER")
+def password = variables.get("PASSWORD")
+def hostname = variables.get("HOSTNAME")
+def port = variables.get("PORT")
+def PASSWORD_KEY
+// Add any credentials to 3rd party credentials if they apply:
+if (!username.isEmpty()){
+    PASSWORD_KEY = variables.get("PA_JOB_NAME").toLowerCase() + "://" + username + "@" + hostname+ ":" + port
+    schedulerapi.connect()
+    schedulerapi.putThirdPartyCredential(PASSWORD_KEY, password)
+}
+/********************************************************************************/
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status_Singularity/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="Loop_Over_Instance_Status_S">
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw"/>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            481.4409637451172
+        </positionTop>
+        <positionLeft>
+            608.4722290039062
         </positionLeft>
       </metadata>
     </task>
   </taskFlow>
   <metadata>
     <visualization>
-      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2080px;
-            height:2712px;
+            width:2383px;
+            height:3280px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-354px;left:-520.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_235" style="top: 359px; left: 525.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull MongoDB image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Start_MongoDB</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_238" style="top: 488px; left: 525.5px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:568px;top:398.5px" width="48.5" height="90" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 27.5 89 C 37.5 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,66.74071675 L27.006140359896637,45.56888979728006 L22.71189549839533,53.72728798990767 L13.992711599804306,50.73131867388472 L27.874324375,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,66.74071675 L27.006140359896637,45.56888979728006 L22.71189549839533,53.72728798990767 L13.992711599804306,50.73131867388472 L27.874324375,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:666.5266769263776px;top:437.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_249" style="position: absolute; transform: translate(-50%, -50%); left: 678.5px; top: 507.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 568.5px; top: 389px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 596px; top: 518px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 596px; top: 478px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 676.5px; top: 478px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 676.5px; top: 518px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div></body></html>
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-220.45140075683594px;left:-475.46875px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_291" style="top: 353.472px; left: 480.486px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull MongoDB image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Start_MongoDB_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_294" style="top: 481.458px; left: 480.486px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_297" style="top: 225.469px; left: 544.479px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_300" style="top: 352.455px; left: 609.444px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull MongoDB image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Start_MongoDB_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_303" style="top: 481.458px; left: 608.489px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><svg style="position:absolute;left:529px;top:392.5px" width="49.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 28.5 88 C 38.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.784312625,65.8307285 L27.577408535907168,44.675507335480575 L23.41427962039221,52.90158523644913 L14.64826527235629,50.045540340088365 L28.784312625,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.784312625,65.8307285 L27.577408535907168,44.675507335480575 L23.41427962039221,52.90158523644913 L14.64826527235629,50.045540340088365 L28.784312625,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:636.0266769263776px;top:430.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_314" style="position: absolute; transform: translate(-50%, -50%); left: 648px; top: 500.5px;">loop</div><svg style="position:absolute;left:469.5px;top:265.5px" width="85" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 87 C -10 37 74 50 64 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.10721925000001 L22.997223792007773,53.55777653456474 L13.793173661802937,53.02349084256429 L12.913495384572059,43.8460093727618 L4.081406499999998,63.10721925000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.10721925000001 L22.997223792007773,53.55777653456474 L13.793173661802937,53.02349084256429 L12.913495384572059,43.8460093727618 L4.081406499999998,63.10721925000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_320" style="position: absolute; transform: translate(-50%, -50%); left: 511.5px; top: 309px;">if</div><svg style="position:absolute;left:533.5px;top:265.5px" width="86.4444580078125" height="87.45487976074219" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 65.4444580078125 86.45487976074219 C 75.4444580078125 36.45487976074219 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M61.20582983706666,62.62143248690415 L52.09525152757312,43.490374939905195 L51.348801849841514,52.679651999533675 L42.15347104020265,53.34740292713033 L61.20582983706666,62.62143248690415" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M61.20582983706666,62.62143248690415 L52.09525152757312,43.490374939905195 L51.348801849841514,52.679651999533675 L42.15347104020265,53.34740292713033 L61.20582983706666,62.62143248690415" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_324" style="position: absolute; transform: translate(-50%, -50%); left: 576.222px; top: 308.727px;">else</div><svg style="position:absolute;left:657.9444580078125px;top:391.9548797607422px" width="48.0555419921875" height="89.54512023925781" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 27.0555419921875 88.54512023925781 C 37.0555419921875 38.54512023925781 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.469872810272218,66.3267815125618 L26.665767751450932,45.15242402397721 L22.346851762719325,53.2977886371961 L13.636774876085237,50.27544507153011 L27.469872810272218,66.3267815125618" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.469872810272218,66.3267815125618 L26.665767751450932,45.15242402397721 L22.346851762719325,53.2977886371961 L13.636774876085237,50.27544507153011 L27.469872810272218,66.3267815125618" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:762.0266769263776px;top:430.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_333" style="position: absolute; transform: translate(-50%, -50%); left: 774px; top: 500.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 529.5px; top: 383px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 470px; top: 343px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 558px; top: 511px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 558px; top: 471px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 646px; top: 471px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 646px; top: 511px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 584px; top: 256px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 534px; top: 256px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 658.444px; top: 382.455px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 599.444px; top: 342.455px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 685.5px; top: 511px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 685.5px; top: 471px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 772px; top: 471px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 772px; top: 511px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
  ]]>
     </visualization>
   </metadata>

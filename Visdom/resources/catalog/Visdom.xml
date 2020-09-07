@@ -1,15 +1,20 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<job
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Visdom" projectName="Cloud Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Visdom" onTaskError="continueJobExecution" priority="normal" projectName="Cloud Automation - Deployment" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <variables>
-    <variable name="INSTANCE_NAME" value="visdom-server" />
-    <variable name="PROXYFIED" value="True" model="PA:Boolean"/>
-    <variable name="VISDOM_ENABLE_LOGIN" value="True" model="PA:Boolean"/>
-    <variable name="VISDOM_USERNAME" value="admin" />
-    <variable name="VISDOM_PASSWORD" value="ENC(GbFgoYJUk3y3zWajMqzWEA==)" model="PA:HIDDEN"/>
-    <variable name="ENDPOINT_ID" value="visdom-gui" />
-    <variable name="HTTP_ENABLED" value="True" model="PA:Boolean"/>
+    <variable name="NATIVE_SCHEDULER" value=""/>
+    <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
+    <variable name="INSTANCE_NAME" value="visdom-server-$PA_JOB_ID"/>
+    <variable name="ENDPOINT_ID" value="visdom-gui-$PA_JOB_ID"/>
+    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
+    <variable model="PA:Boolean" name="HTTP_ENABLED" value="True"/>
+    <variable model="PA:INTEGER" name="SERVICE_PORT" value="-1"/>
+    <variable model="PA:Boolean" name="VISDOM_ENABLE_LOGIN" value="False"/>
+    <variable name="VISDOM_USERNAME" value="admin"/>
+    <variable model="PA:HIDDEN" name="VISDOM_PASSWORD" value="ENC(GbFgoYJUk3y3zWajMqzWEA==)"/>
+    <variable model="PA:List(docker,singularity)" name="ENGINE" value="docker"/>
+    <variable name="DOCKER_IMAGE" value="activeeon/visdom_server"/>
+    <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/visdom_server.sif"/>
+    <variable model="PA:Boolean" name="BUILD_IMAGE_IF_NOT_EXISTS" value="True"/>
   </variables>
   <description>
     <![CDATA[ Deployment of the Visdom server.
@@ -17,44 +22,45 @@ The service can be started using the following variables:
 INSTANCE_NAME (Required): service instance name ]]>
   </description>
   <genericInformation>
-    <info name="bucketName" value="cloud-automation"/>
-    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
-    <info name="pca.states" value="(VOID,RUNNING)"/>
-    <info name="Documentation" value="https://research.fb.com/downloads/visdom/"/>
-    <info name="pca.service.id" value="Visdom"/>
-    <info name="group" value="public-objects"/>
-  </genericInformation>
+<info name="bucketName" value="cloud-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+<info name="pca.states" value="(VOID,RUNNING)"/>
+<info name="pca.service.id" value="Visdom"/>
+<info name="Documentation" value="https://research.fb.com/downloads/visdom/"/>
+<info name="NS" value="$NATIVE_SCHEDULER"/>
+<info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
   <taskFlow>
-    <task name="Start_Visdom" 
-    
-    
-    
-    
-    fork="true">
+    <task fork="true" name="Start_Visdom_S">
       <description>
         <![CDATA[ Pull Visdom image and start a container ]]>
       </description>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
         <info name="task.documentation" value="https://research.fb.com/downloads/visdom/"/>
+        <info name="DISABLE_PTK" value="true"/>
       </genericInformation>
+      <pre>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Pre_Start_Service/raw"/>
+        </script>
+      </pre>
       <scriptExecutable>
         <script>
           <code language="bash">
             <![CDATA[
 echo BEGIN "$variables_PA_TASK_NAME"
 
-################################################################################
-### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-DOCKER_IMAGE=hypnosapos/visdom:latest
-PORT=8097
-################################################################################
-
-echo "Pulling "$variables_PA_JOB_NAME" image"
-docker pull $DOCKER_IMAGE
+PATH=$PATH:/usr/sbin
 
 GET_RANDOM_PORT(){
-    read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
     while :
     do
         RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
@@ -63,42 +69,76 @@ GET_RANDOM_PORT(){
     echo $RND_PORT
 }
 
+export XDG_RUNTIME_DIR=/run/user/$UID
+
+DOCKER_IMAGE=$variables_DOCKER_IMAGE
 INSTANCE_NAME=$variables_INSTANCE_NAME
+SIF_IMAGE_PATH=$variables_SINGULARITY_IMAGE_PATH
+BUILD_IMAGE=$variables_BUILD_IMAGE_IF_NOT_EXISTS
 VISDOM_ENABLE_LOGIN=$variables_VISDOM_ENABLE_LOGIN
 VISDOM_USERNAME=$variables_VISDOM_USERNAME
 VISDOM_PASSWORD=$variables_VISDOM_PASSWORD
+VISDOM_HOST_PORT=$variables_SERVICE_PORT
+
+if [ "$VISDOM_HOST_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    VISDOM_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $VISDOM_HOST_PORT"
 
 if [ -z "$INSTANCE_NAME" ]; then
-    echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed."
     exit 1
 fi
 
-if [ "$(docker ps --format '{{.Names}}' | grep ^$INSTANCE_NAME$)" ]; then
-    RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
-    STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
-    if [ "$RUNNING" == "true" ]; then
-        echo "$INSTANCE_NAME container is running"
-    elif [ "$STOPPED" == "exited" ]; then
-        echo "Starting $INSTANCE_NAME container"
-        docker start $INSTANCE_NAME
-    fi
+if [ -z "$SIF_IMAGE_PATH" ]; then
+    echo "[ERROR] The singularity image path is not provided by the user. Empty value is not allowed."
+    exit 1
 else
-    ################################################################################
-    ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-    echo "Running $INSTANCE_NAME container"
-    F_PORT=$(GET_RANDOM_PORT)
-    
-    echo docker run -d --name $INSTANCE_NAME -p $F_PORT:$PORT  -e VISDOM_ENABLE_LOGIN=$VISDOM_ENABLE_LOGIN -e VISDOM_USERNAME=$VISDOM_USERNAME -e VISDOM_PASSWORD=$VISDOM_PASSWORD $DOCKER_IMAGE
-    docker run -d --name $INSTANCE_NAME -p $F_PORT:$PORT  -e VISDOM_ENABLE_LOGIN=$VISDOM_ENABLE_LOGIN -e VISDOM_USERNAME=$VISDOM_USERNAME -e VISDOM_PASSWORD=$VISDOM_PASSWORD $DOCKER_IMAGE
-    ################################################################################
-    
+    echo "Using $SIF_IMAGE_PATH to start the service"
 fi
 
-port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
-echo "$port" > $INSTANCE_NAME"_port"
+if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+    echo "[ERROR] $INSTANCE_NAME is already used by another service instance."
+    exit 128
+else
+    if [ "${BUILD_IMAGE,,}" = "true" ]; then
+        #if [ -d "$SIF_IMAGE_PATH" ]; then
+        #   echo "[INFO] Removing existing image on $SIF_IMAGE_PATH"
+        #   rm -Rf $SIF_IMAGE_PATH
+        #fi
+        if [ -e "$SIF_IMAGE_PATH" ]; then
+            echo "[INFO] Using existing image on $SIF_IMAGE_PATH"
+        else
+            echo "[INFO] Building the image on $SIF_IMAGE_PATH"
+            echo "[INFO] singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+            singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+        fi
+        #echo "[INFO] Building the image on $SIF_IMAGE_PATH"
+        #echo "[INFO] singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+        #singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+    fi
+    
+    echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
+    echo "[INFO] singularity instance start --writable --no-home $SIF_IMAGE_PATH $INSTANCE_NAME"
+    singularity instance start --writable --no-home $SIF_IMAGE_PATH $INSTANCE_NAME
+    
+    echo "[INFO] SINGULARITYENV_VISDOM_PORT=$VISDOM_HOST_PORT SINGULARITYENV_VISDOM_ENABLE_LOGIN=$VISDOM_ENABLE_LOGIN SINGULARITYENV_VISDOM_USERNAME=$VISDOM_USERNAME SINGULARITYENV_VISDOM_PASSWORD=$VISDOM_PASSWORD singularity run --writable instance://$INSTANCE_NAME"
+    #SINGULARITYENV_VISDOM_PORT=$VISDOM_HOST_PORT SINGULARITYENV_VISDOM_ENABLE_LOGIN=$VISDOM_ENABLE_LOGIN SINGULARITYENV_VISDOM_USERNAME=$VISDOM_USERNAME SINGULARITYENV_VISDOM_PASSWORD=$VISDOM_PASSWORD singularity run --writable instance://$INSTANCE_NAME
+    export SINGULARITYENV_VISDOM_PORT=$VISDOM_HOST_PORT
+    export SINGULARITYENV_VISDOM_ENABLE_LOGIN=$VISDOM_ENABLE_LOGIN
+    export SINGULARITYENV_VISDOM_USERNAME=$VISDOM_USERNAME
+    export SINGULARITYENV_VISDOM_PASSWORD=$VISDOM_PASSWORD
+    bash -c "nohup singularity run --writable instance://$INSTANCE_NAME > /tmp/$INSTANCE_NAME.log 2>&1 < /dev/null &"
+    sleep 3
+    cat /tmp/$INSTANCE_NAME.log
+    
+    if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+    fi
+fi
 
-containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
-echo "$containerID" > $INSTANCE_NAME"_containerID"
+echo "$VISDOM_HOST_PORT" > $INSTANCE_NAME"_port"
 
 # Endpoint added to the job variables using a groovy post-script
 echo END "$variables_PA_TASK_NAME"
@@ -106,26 +146,27 @@ echo END "$variables_PA_TASK_NAME"
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow block="none"/>
       <post>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
         </script>
       </post>
+      <cleaning>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw"/>
+        </script>
+      </cleaning>
       <metadata>
         <positionTop>
-            384
+            262.59765625
         </positionTop>
         <positionLeft>
-            602.5
+            104.84375
         </positionLeft>
       </metadata>
     </task>
-    <task name="Loop_Over_Instance_Status" 
-    
-    
-    
-    
-    fork="true">
+    <task fork="true" name="Loop_Over_Instance_Status_S">
       <description>
         <![CDATA[ Loop over service instance status and fetch docker container logs.
 It will run every minute. ]]>
@@ -136,26 +177,205 @@ It will run every minute. ]]>
         <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="Start_Visdom"/>
+        <task ref="Start_Visdom_S"/>
       </depends>
       <scriptExecutable>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status_Singularity/raw"/>
         </script>
       </scriptExecutable>
-      <controlFlow >
-        <loop target="Loop_Over_Instance_Status">
+      <controlFlow>
+        <loop target="Loop_Over_Instance_Status_S">
           <script>
-            <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw" language="groovy"></file>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw"/>
           </script>
         </loop>
       </controlFlow>
       <metadata>
         <positionTop>
-            512
+            392.96875
         </positionTop>
         <positionLeft>
-            602.5
+            37.8515625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Start_Visdom_D">
+      <description>
+        <![CDATA[ Pull Visdom image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="task.documentation" value="https://research.fb.com/downloads/visdom/"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Pre_Start_Service/raw"/>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+PATH=$PATH:/usr/sbin
+
+GET_RANDOM_PORT(){
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+DOCKER_IMAGE=$variables_DOCKER_IMAGE
+INSTANCE_NAME=$variables_INSTANCE_NAME
+VISDOM_ENABLE_LOGIN=$variables_VISDOM_ENABLE_LOGIN
+VISDOM_USERNAME=$variables_VISDOM_USERNAME
+VISDOM_PASSWORD=$variables_VISDOM_PASSWORD
+VISDOM_INTERNAL_PORT=8097
+VISDOM_HOST_PORT=$variables_SERVICE_PORT
+
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
+
+if [ "$VISDOM_HOST_PORT" -eq "-1" ]; then
+    echo "Picking a random port number"
+    VISDOM_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $VISDOM_HOST_PORT"
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo [ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    exit 1
+fi
+
+if [ "$(docker ps --format '{{.Names}}' | grep ^$INSTANCE_NAME$)" ]; then
+    RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+    STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
+    if [ "${RUNNING,,}" = "true" ]; then
+        echo "$INSTANCE_NAME container is running"
+    elif [ "${STOPPED,,}" = "exited" ]; then
+        echo "Starting $INSTANCE_NAME container"
+        docker start $INSTANCE_NAME
+    fi
+else
+    echo "Running $INSTANCE_NAME container"
+    echo docker run -d --name $INSTANCE_NAME -p $VISDOM_HOST_PORT:$VISDOM_INTERNAL_PORT -e VISDOM_ENABLE_LOGIN=$VISDOM_ENABLE_LOGIN -e VISDOM_USERNAME=$VISDOM_USERNAME -e VISDOM_PASSWORD=$VISDOM_PASSWORD $DOCKER_IMAGE
+    docker run -d --name $INSTANCE_NAME -p $VISDOM_HOST_PORT:$VISDOM_INTERNAL_PORT -e VISDOM_ENABLE_LOGIN=$VISDOM_ENABLE_LOGIN -e VISDOM_USERNAME=$VISDOM_USERNAME -e VISDOM_PASSWORD=$VISDOM_PASSWORD $DOCKER_IMAGE
+fi
+
+VISDOM_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$VISDOM_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$VISDOM_PORT" > $INSTANCE_NAME"_port"
+
+containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
+echo "$containerID" > $INSTANCE_NAME"_containerID"
+
+echo END "$variables_PA_TASK_NAME"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
+        </script>
+      </post>
+      <cleaning>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw"/>
+        </script>
+      </cleaning>
+      <metadata>
+        <positionTop>
+            257.59765625
+        </positionTop>
+        <positionLeft>
+            396.71875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Loop_Over_Instance_Status_D">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Visdom_D"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="Loop_Over_Instance_Status_D">
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw"/>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            396.93359375
+        </positionTop>
+        <positionLeft>
+            354.6484375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Condition">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="Documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def engine = variables.get("ENGINE")
+
+println("[INFO] Starting a Visdom server in a " + engine + " container.")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <if else="Start_Visdom_D" target="Start_Visdom_S">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def engine = variables.get("ENGINE")
+if(engine.toLowerCase().equals("singularity")){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            87.3046875
+        </positionTop>
+        <positionLeft>
+            214.21875
         </positionLeft>
       </metadata>
     </task>
@@ -169,14 +389,15 @@ It will run every minute. ]]>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2830px;
-            height:3308px;
+            width:2020px;
+            height:2720px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-379px;left:-597.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_67" style="top: 384px; left: 602.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Visdom image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_70" style="top: 512px; left: 602.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:642.5px;top:423.5px" width="51.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 30.5 88 C 40.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.604289125,65.8307285 L28.92065780914319,44.70810116360394 L24.944079219862537,53.025962831320875 L16.11589214046406,50.368311068741406 L30.604289125,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.604289125,65.8307285 L28.92065780914319,44.70810116360394 L24.944079219862537,53.025962831320875 L16.11589214046406,50.368311068741406 L30.604289125,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:744.0266769263776px;top:461.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_81" style="position: absolute; transform: translate(-50%, -50%); left: 756px; top: 531.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 643px; top: 414px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 673.5px; top: 542px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 673.5px; top: 502px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 754px; top: 502px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 754px; top: 542px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-82.296875px;left:-32.84375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_112" style="top: 262.594px; left: 104.844px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Visdom image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_115" style="top: 392.969px; left: 37.8438px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_118" style="top: 257.594px; left: 396.719px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Visdom image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Start_Visdom_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_121" style="top: 396.922px; left: 354.641px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/visdom.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_124" style="top: 87.2969px; left: 214.219px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><svg style="position:absolute;left:114.5px;top:302.5px" width="54.5" height="91" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 90 C -10 40 43.5 50 33.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M0.30595699999999804,67.17492 L15.253862888233538,52.15626128636938 L6.34957636474296,54.54659212279853 L2.6255350110320643,46.11264192162641 L0.30595699999999804,67.17492" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M0.30595699999999804,67.17492 L15.253862888233538,52.15626128636938 L6.34957636474296,54.54659212279853 L2.6255350110320643,46.11264192162641 L0.30595699999999804,67.17492" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:192.0266769263776px;top:342.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_135" style="position: absolute; transform: translate(-50%, -50%); left: 204px; top: 412.5px;">loop</div><svg style="position:absolute;left:431.5px;top:297.5px" width="29.5" height="100" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 99 C -10 49 18.5 50 8.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.0585930000000006,75.323682 L7.5237007760661605,56.42448503321955 L-0.20798953774155904,61.44653291146323 L-6.353448312470615,54.5738815709611 L-2.0585930000000006,75.323682" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.0585930000000006,75.323682 L7.5237007760661605,56.42448503321955 L-0.20798953774155904,61.44653291146323 L-6.353448312470615,54.5738815709611 L-2.0585930000000006,75.323682" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:509.0266769263776px;top:346.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_144" style="position: absolute; transform: translate(-50%, -50%); left: 521px; top: 416.5px;">loop</div><svg style="position:absolute;left:94.5px;top:126.5px" width="130" height="137" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 136 C -10 86 119 50 109 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.592122249999997,101.3592785 L32.743727530237244,92.29197376320039 L23.556161479977874,91.52475145374801 L22.909200483985252,82.3279345332225 L13.592122249999997,101.3592785" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.592122249999997,101.3592785 L32.743727530237244,92.29197376320039 L23.556161479977874,91.52475145374801 L22.909200483985252,82.3279345332225 L13.592122249999997,101.3592785" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_150" style="position: absolute; transform: translate(-50%, -50%); left: 159px; top: 194.5px;">if</div><svg style="position:absolute;left:203.5px;top:126.5px" width="204" height="132" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 183 131 C 193 81 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M155.09097599999998,95.18531199999998 L141.04232449420522,79.32229239877873 L142.86781710792377,88.35930389137178 L134.216316385577,91.54545129085494 L155.09097599999998,95.18531199999998" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M155.09097599999998,95.18531199999998 L141.04232449420522,79.32229239877873 L142.86781710792377,88.35930389137178 L134.216316385577,91.54545129085494 L155.09097599999998,95.18531199999998" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_154" style="position: absolute; transform: translate(-50%, -50%); left: 305px; top: 192px;">else</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 148.5px; top: 293px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 95px; top: 253px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 115px; top: 423px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 115px; top: 383px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 202px; top: 383px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 202px; top: 423px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 440.5px; top: 288px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 387px; top: 248px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 432px; top: 427px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 432px; top: 387px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 519px; top: 387px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 519px; top: 427px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 254px; top: 117px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 204px; top: 117px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>

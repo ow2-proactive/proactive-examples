@@ -102,21 +102,38 @@ if (variables.get("CONTAINER_LOG_PATH") != null && !variables.get("CONTAINER_LOG
     CONTAINER_LOG_PATH = variables.get("DOCKER_LOG_PATH") // backwards compatibility
 }
 
-CONTAINER_ROOTLESS_ENABLED = true
+def CONTAINER_ROOTLESS_ENABLED = true
 if ("false".equalsIgnoreCase(variables.get("CONTAINER_ROOTLESS_ENABLED"))) {
     CONTAINER_ROOTLESS_ENABLED = false
 }
 
+def CONTAINER_ISOLATION_ENABLED = false
+if ("true".equalsIgnoreCase(variables.get("CONTAINER_ISOLATION_ENABLED"))) {
+    CONTAINER_ISOLATION_ENABLED = true
+}
+
+def CONTAINER_NO_HOME_ENABLED = false
+if ("true".equalsIgnoreCase(variables.get("CONTAINER_NO_HOME_ENABLED"))) {
+    CONTAINER_NO_HOME_ENABLED = true
+}
+
+def CONTAINER_HOST_NETWORK_ENABLED = true
+if ("false".equalsIgnoreCase(variables.get("CONTAINER_HOST_NETWORK_ENABLED"))) {
+    CONTAINER_HOST_NETWORK_ENABLED = false
+}
+
 println "Fork environment info..."
-println "CONTAINER_PLATFORM:         " + CONTAINER_PLATFORM
-println "CONTAINER_ENABLED:          " + CONTAINER_ENABLED
-println "CONTAINER_IMAGE:            " + CONTAINER_IMAGE
-println "CONTAINER_GPU_ENABLED:      " + CONTAINER_GPU_ENABLED
-println "CUDA_ENABLED:               " + CUDA_ENABLED
-println "USE_NVIDIA_RAPIDS:          " + USE_NVIDIA_RAPIDS
-println "HOST_LOG_PATH:              " + HOST_LOG_PATH
-println "CONTAINER_LOG_PATH:         " + CONTAINER_LOG_PATH
-println "CONTAINER_ROOTLESS_ENABLED: " + CONTAINER_ROOTLESS_ENABLED
+println "CONTAINER_PLATFORM:             " + CONTAINER_PLATFORM
+println "CONTAINER_ENABLED:              " + CONTAINER_ENABLED
+println "CONTAINER_IMAGE:                " + CONTAINER_IMAGE
+println "CONTAINER_GPU_ENABLED:          " + CONTAINER_GPU_ENABLED
+println "CUDA_ENABLED:                   " + CUDA_ENABLED
+println "USE_NVIDIA_RAPIDS:              " + USE_NVIDIA_RAPIDS
+println "HOST_LOG_PATH:                  " + HOST_LOG_PATH
+println "CONTAINER_LOG_PATH:             " + CONTAINER_LOG_PATH
+println "CONTAINER_NO_HOME_ENABLED:      " + CONTAINER_NO_HOME_ENABLED
+println "CONTAINER_ROOTLESS_ENABLED:     " + CONTAINER_ROOTLESS_ENABLED
+println "CONTAINER_HOST_NETWORK_ENABLED: " + CONTAINER_HOST_NETWORK_ENABLED
 
 String osName = System.getProperty("os.name")
 println "Operating system : " + osName
@@ -139,8 +156,15 @@ if (CONTAINER_ENABLED && (
     cmd.add("run")
     cmd.add("--rm")
     cmd.add("--shm-size=256M")
-    cmd.add("--env")
-    cmd.add("HOME=/tmp")
+    
+    if (CONTAINER_HOST_NETWORK_ENABLED) {
+        cmd.add("--network=host")
+    }
+    
+    if (CONTAINER_ROOTLESS_ENABLED) {
+        cmd.add("--env")
+        cmd.add("HOME=/tmp")
+    }
 
     if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
         if ("docker".equalsIgnoreCase(CONTAINER_PLATFORM)) {
@@ -213,20 +237,17 @@ if (CONTAINER_ENABLED && (
         cmd.add(currentJavaHome + ":" + currentJavaHome)
 
         // when not on windows, mount a shared folder if it exists
-        sharedDirectory = new File("/shared")
-        if (sharedDirectory.isDirectory() && sharedDirectory.canWrite()) {
-            cmd.add("-v")
-            cmd.add("/shared:/shared")
-        }
+        // sharedDirectory = new File("/shared")
+        // if (sharedDirectory.isDirectory() && sharedDirectory.canWrite()) {
+        //     cmd.add("-v")
+        //     cmd.add("/shared:/shared")
+        // }
     }
 
     // Prepare log directory
-    logPathVolume = ""
     if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
-        mountLogHost = HOST_LOG_PATH
-        logPathContainer = CONTAINER_LOG_PATH
         cmd.add("-v")
-        cmd.add(mountLogHost + ":" + logPathContainer)
+        cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
     }
 
     // Prepare container working directory
@@ -305,7 +326,10 @@ if (CONTAINER_ENABLED &&
         // pull the container inside the synchronization lock
         if (majorVersion >= 3) {
             pullCmd = "singularity pull --dir " + userHome + " " + imageFile + " " + imageUrl
-            process = pullCmd.execute()
+            println pullCmd
+            def env = System.getenv().collect { k, v -> "$k=$v" }
+            env.push('XDG_RUNTIME_DIR=/run/user/$UID')
+            process = pullCmd.execute(env, new File(userHome))
         } else {
             pullCmd = "singularity pull --name " + imageFile + " " + imageUrl
             def env = System.getenv().collect { k, v -> "$k=$v" }
@@ -326,9 +350,29 @@ if (CONTAINER_ENABLED &&
         cmd = []
         cmd.add("singularity")
         cmd.add("exec")
+        // cmd.add("--writable") // by default all singularity containers are available as read only. This option makes the file system accessible as read/write.
+        cmd.add("--writable-tmpfs") // makes the file system accessible as read-write with non persistent data (with overlay support only)
+        
+        if (CONTAINER_NO_HOME_ENABLED) {
+            cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
+        }
+
+        // run a singularity image in an isolated manner
+        if (CONTAINER_ISOLATION_ENABLED) {
+            // cmd.add("--disable-cache") // dont use cache, and dont create cache
+            // cmd.add("--cleanenv") // clean environment before running container
+            // cmd.add("--contain") // use minimal /dev and empty other directories (e.g. /tmp and $HOME) instead of sharing filesystems from your host
+            cmd.add("--containall") // contain not only file systems, but also PID, IPC, and environment
+        }
 
         if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
-            cmd.add("--nv") // add gpu support
+            cmd.add("--nv") // enable experimental NVIDIA GPU support
+        }
+
+        // Prepare log directory
+        if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
+            cmd.add("-B")
+            cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
         }
 
         forkEnvironment.setDockerWindowsToLinux(isWindows)
@@ -363,11 +407,16 @@ if (CONTAINER_ENABLED &&
         }
 
         // Prepare container working directory
-        cmd.add("--pwd")
+        cmd.add("--pwd") // initial working directory for payload process inside the container
         cmd.add(workspaceContainer)
+        cmd.add("--workdir") // working directory to be used for /tmp, /var/tmp and $HOME (if -c/--contain was also used)
+        cmd.add(workspaceContainer)
+
+        // Directory containing the singularity image
         cmd.add((new File(userHome, imageFile)).getAbsolutePath())
-        
+
         forkEnvironment.setPreJavaCommand(cmd)
+        forkEnvironment.addSystemEnvironmentVariable("XDG_RUNTIME_DIR",'/run/user/$UID')
 
         // Show the generated command
         println "SINGULARITY COMMAND : " + forkEnvironment.getPreJavaCommand()

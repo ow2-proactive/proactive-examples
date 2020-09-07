@@ -3,11 +3,17 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="JupyterLab" projectName="Cloud Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
-    <variable name="INSTANCE_NAME" value="jupyterlab-server" model=""/>
-    <variable name="JUPYTERLAB_TOKEN" value="" model="PA:HIDDEN"/>
-    <variable name="HTTPS_ENABLED" value="False" model="PA:Boolean"/>
+    <variable name="NATIVE_SCHEDULER" value=""/>
+    <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
+    <variable name="INSTANCE_NAME" value="jupyterlab-server-$PA_JOB_ID"/>
+    <variable name="ENDPOINT_ID" value="jupyterlab-endpoint-$PA_JOB_ID"/>
     <variable name="PROXYFIED" value="False" model="PA:Boolean"/>
-    <variable name="ENDPOINT_ID" value="jupyterlab-endpoint" />
+    <variable name="HTTPS_ENABLED" value="False" model="PA:Boolean"/>
+    <variable name="SERVICE_PORT" value="-1" model="PA:Integer"/>
+    <variable name="JUPYTERLAB_PASSWORD" value="" model="PA:HIDDEN"/>
+    <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/jupyterlab.sif"/>
+    <variable name="BUILD_IMAGE_IF_NOT_EXISTS" value="True" model="PA:Boolean"/>
+    <variable name="ENGINE" value="docker" model="PA:List(docker,singularity)"/>
   </variables>
   <description>
     <![CDATA[ Deploy a JupyterLab server.
@@ -19,17 +25,269 @@ ENV_VARS (Optional): List of the environment variables. Each environment variabl
     <info name="bucketName" value="cloud-automation"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png"/>
     <info name="pca.states" value="(VOID,RUNNING)"/>
-    <info name="Documentation" value="PCA/PCAUserGuide.html"/>
     <info name="pca.service.id" value="JupyterLab"/>
+    <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+    <info name="NS" value="$NATIVE_SCHEDULER"/>
+    <info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="Start_JupyterLab" 
-    
-    onTaskError="cancelJob" 
-    
-    
-    fork="true">
+    <task name="Start_JupyterLab_S" onTaskError="cancelJob" fork="true">
+      <description>
+        <![CDATA[ Pull JupyterLab image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="DISABLE_PTK" value="true"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="fullchain.pem" accessMode="transferFromGlobalSpace"/>
+        <files  includes="privkey.pem" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <pre>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Pre_Start_Service/raw" language="groovy"></file>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+export XDG_RUNTIME_DIR=/run/user/$UID
+
+################################################################################
+### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+if [ "${variables_HTTPS_ENABLED,,}" = "true" ]; then
+    DOCKER_IMAGE=activeeon/jupyterlab:secured
+else
+    echo "Warning: Your jupyterlab server is NOT secured!"
+    DOCKER_IMAGE=activeeon/jupyterlab:latest
+fi
+
+#ENV_VARS=$variables_ENV_VARS
+JUPYTERLAB_PASSWORD=$variables_JUPYTERLAB_PASSWORD
+SIF_IMAGE_PATH=$variables_SINGULARITY_IMAGE_PATH
+INSTANCE_NAME=$variables_INSTANCE_NAME
+JUPYTER_HOST_PORT=$variables_SERVICE_PORT
+BUILD_IMAGE=$variables_BUILD_IMAGE_IF_NOT_EXISTS
+################################################################################
+#echo "JUPYTERLAB_PASSWORD: $JUPYTERLAB_PASSWORD"
+
+PATH=$PATH:/usr/sbin
+
+# Manually find a free random port to preserve it in case if docker (re)start (Pause/Resume)
+GET_RANDOM_PORT(){
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+if [ "$JUPYTER_HOST_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    JUPYTER_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $JUPYTER_HOST_PORT"
+
+if [ -z "$SIF_IMAGE_PATH" ]; then
+    echo "[ERROR] The singularity image path is not provided by the user. Empty value is not allowed."
+    exit 1
+else
+    echo "Using $SIF_IMAGE_PATH to start the service"
+fi
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo ERROR: The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    exit 1
+fi
+
+if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+    echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
+    exit 128
+else
+    if [ "${BUILD_IMAGE,,}" = "true" ]; then
+        if [ -e "$SIF_IMAGE_PATH" ]; then
+            echo "[INFO] Using existing image on $SIF_IMAGE_PATH"
+        else
+            echo "[INFO] Building the image on $SIF_IMAGE_PATH"
+            echo "[INFO] singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+            singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+        fi
+    fi
+    ################################################################################
+    ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+    if [ "${variables_PROXYFIED,,}" = "true" ]; then
+        ADDITIONAL_OPTIONS="--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'"
+    else
+        ADDITIONAL_OPTIONS=
+    fi
+
+    echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
+    if [ -z "$SIF_IMAGE_PATH" ]; then
+        # singularity instance start --no-home docker://$DOCKER_IMAGE $INSTANCE_NAME
+        singularity instance start docker://$DOCKER_IMAGE $INSTANCE_NAME
+    else
+        # singularity instance start --no-home $SIF_IMAGE_PATH $INSTANCE_NAME
+        singularity instance start $SIF_IMAGE_PATH $INSTANCE_NAME
+    fi
+
+    JUPYTERLAB_PASSWORD_HASH=$(singularity exec instance://$INSTANCE_NAME python -c "from IPython.lib.security import passwd; print(passwd(passphrase='$JUPYTERLAB_PASSWORD', algorithm='sha1'))")
+
+    if [ "${variables_HTTPS_ENABLED,,}" = "true" ]; then
+        echo "[INFO] Running $INSTANCE_NAME container in a secured HTTPS"
+        CERTFILE="$HOME/.cert.pem"
+        KEYFILE="$HOME/.key.pem"
+        if [[ -f fullchain.pem && -f privkey.pem ]]; then
+            cp fullchain.pem $CERTFILE
+            cp privkey.pem $KEYFILE
+        else
+            openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 -subj "/CN=$HOSTNAME" -keyout $KEYFILE -out $CERTFILE
+            echo "[INFO] Auto-signed certificate created."
+        fi
+        echo "singularity exec instance://$INSTANCE_NAME bash -c nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token='' --NotebookApp.password='$JUPYTERLAB_PASSWORD_HASH' --NotebookApp.notebook_dir=$HOME --NotebookApp.certfile=$CERTFILE --NotebookApp.keyfile=$KEYFILE $ADDITIONAL_OPTIONS &> $HOME/$INSTANCE_NAME.txt & &> $HOME/$INSTANCE_NAME.log"
+        singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token='' --NotebookApp.password='$JUPYTERLAB_PASSWORD_HASH' --NotebookApp.notebook_dir=$HOME --NotebookApp.certfile=$CERTFILE --NotebookApp.keyfile=$KEYFILE $ADDITIONAL_OPTIONS &> $HOME/$INSTANCE_NAME.txt &" &> $HOME/$INSTANCE_NAME.log
+    else
+        echo "[INFO] Running $INSTANCE_NAME container in HTTP"
+        echo "singularity exec instance://$INSTANCE_NAME bash -c nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token='' --NotebookApp.password='$JUPYTERLAB_PASSWORD_HASH' --NotebookApp.notebook_dir=$HOME $ADDITIONAL_OPTIONS &> $HOME/$INSTANCE_NAME.txt & &> $HOME/$INSTANCE_NAME.log"
+        singularity exec instance://$INSTANCE_NAME bash -c "nohup jupyter lab --port=$JUPYTER_HOST_PORT --ip=0.0.0.0 --no-browser --NotebookApp.token='' --NotebookApp.password='$JUPYTERLAB_PASSWORD_HASH' --NotebookApp.notebook_dir=$HOME $ADDITIONAL_OPTIONS &> $HOME/$INSTANCE_NAME.txt &" &> $HOME/$INSTANCE_NAME.log
+    fi
+
+    #if [[ -d $HOME/proactive-jupyter-notebooks ]]; then
+    #    git $HOME/proactive-jupyter-notebooks pull origin master
+    #else
+    #    git clone https://github.com/ow2-proactive/proactive-jupyter-notebooks.git $HOME/proactive-jupyter-notebooks
+    #fi
+    #echo "[INFO] Examples git repository proactive-jupyter-notebooks pulled"
+
+    sleep 3
+
+    cat $HOME/$INSTANCE_NAME.txt
+    cat $HOME/$INSTANCE_NAME.log
+
+    ################################################################################
+    if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
+        echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+    else
+        echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
+    fi
+fi
+
+echo "$JUPYTER_HOST_PORT" > $INSTANCE_NAME"_port"
+
+# Endpoint added to the job variables using a groovy post-script
+echo END "$variables_PA_TASK_NAME"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <post>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
+        </script>
+      </post>
+      <cleaning>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Clean_Start_Service/raw" language="groovy"></file>
+        </script>
+      </cleaning>
+      <metadata>
+        <positionTop>
+          646.5
+        </positionTop>
+        <positionLeft>
+          854
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Loop_Over_Instance_Status_S" fork="true">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png"/>
+        <info name="Documentation" value="PCA/PCAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_JupyterLab_S"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Check_Instance_Status_Singularity/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="Loop_Over_Instance_Status_S">
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw" language="groovy"></file>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          779.5
+        </positionTop>
+        <positionLeft>
+          817
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Condition" fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="Documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def engine = variables.get("ENGINE")
+
+println("[INFO] Starting a Jupyterlab server in a " + engine + " container.")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <if target="Start_JupyterLab_S"
+            else="Start_JupyterLab_D">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def engine = variables.get("ENGINE")
+if(engine.toLowerCase().equals("singularity")){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          448.5
+        </positionTop>
+        <positionLeft>
+          973.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start_JupyterLab_D" onTaskError="cancelJob" fork="true">
       <description>
         <![CDATA[ Pull JupyterLab image and start a container ]]>
       </description>
@@ -43,31 +301,7 @@ ENV_VARS (Optional): List of the environment variables. Each environment variabl
       </inputFiles>
       <pre>
         <script>
-          <code language="groovy">
-            <![CDATA[
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def endpointID = variables.get("ENDPOINT_ID")
-    
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")    
-
-proxified = variables.get("PROXYFIED").toLowerCase()
-https_enabled = variables.get("HTTPS_ENABLED").toLowerCase()
-variables.put("PROXYFIED", proxified)
-variables.put("HTTPS_ENABLED", https_enabled)
-
-if (proxified == "true") {
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
-	wsURL = proxyfiedURL.replace("https://", "wss://")
-	wsURL = wsURL.replace("http://", "ws://")
-	println "Proxyfied URL :" + proxyfiedURL
-	println "WebSocket URL :" + wsURL
-	variables.put("PROXYFIED_URL", proxyfiedURL)
-	variables.put("WS_PROXYFIED_URL", wsURL)
-}
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Pre_Start_Service/raw" language="groovy"></file>
         </script>
       </pre>
       <scriptExecutable>
@@ -78,21 +312,30 @@ echo BEGIN "$variables_PA_TASK_NAME"
 
 ################################################################################
 ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-if [ "$variables_HTTPS_ENABLED" == "true" ]; then
+if [ "${variables_HTTPS_ENABLED,,}" = "true" ]; then
     DOCKER_IMAGE=activeeon/jupyterlab:secured
-	PORT=9999
+    JUPYTER_INTERNAL_PORT=9999
 else
-	echo "Warning: Your jupyterlab server is NOT secured!"
+    echo "Warning: Your jupyterlab server is NOT secured!"
     DOCKER_IMAGE=activeeon/jupyterlab:latest
-	PORT=8888
+    JUPYTER_INTERNAL_PORT=8888
 fi
 #ENV_VARS=$variables_ENV_VARS
-JUPYTERLAB_TOKEN=$variables_JUPYTERLAB_TOKEN
+JUPYTERLAB_PASSWORD=$variables_JUPYTERLAB_PASSWORD
+JUPYTER_HOST_PORT=$variables_SERVICE_PORT
 ################################################################################
+#echo "JUPYTERLAB_PASSWORD: $JUPYTERLAB_PASSWORD"
+
+PATH=$PATH:/usr/sbin
 
 # Manually find a free random port to preserve it in case if docker (re)start (Pause/Resume)
 GET_RANDOM_PORT(){
-    read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
     while :
     do
         RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
@@ -101,8 +344,11 @@ GET_RANDOM_PORT(){
     echo $RND_PORT
 }
 
-echo "Pulling "$variables_PA_JOB_NAME" image"
-docker pull $DOCKER_IMAGE
+if [ "$JUPYTER_HOST_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    JUPYTER_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $JUPYTER_HOST_PORT"
 
 INSTANCE_NAME=$variables_INSTANCE_NAME
 
@@ -111,42 +357,49 @@ if [ -z "$INSTANCE_NAME" ]; then
     exit 1
 fi
 
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
+
 if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
     echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
     exit 128
 else
-    ################################################################################
-    ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-    F_PORT=$(GET_RANDOM_PORT)
-    if [ "$variables_PROXYFIED" == "true" ]; then
-    	ADDITIONAL_OPTIONS_STRING="-e ADDITIONAL_OPTIONS=\"--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'\""
+    if [ "${variables_PROXYFIED,,}" = "true" ]; then
+        ADDITIONAL_OPTIONS_STRING="-e ADDITIONAL_OPTIONS=\"--NotebookApp.disable_check_xsrf=True --NotebookApp.websocket_url='$variables_WS_PROXYFIED_URL' --NotebookApp.allow_origin='*'\""
     else
         ADDITIONAL_OPTIONS_STRING=
     fi
-    if [ "$variables_HTTPS_ENABLED" == "true" ]; then
+    if [ "${variables_HTTPS_ENABLED,,}" = "true" ]; then
         echo "Running $INSTANCE_NAME container in a secured HTTPS"
         CERTFILE="/opt/conda/etc/jupyter/fullchain.pem"
         KEYFILE="/opt/conda/etc/jupyter/privkey.pem"
-        if [ -z "$JUPYTERLAB_TOKEN" ]; then
-            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
+        if [ -z "$JUPYTERLAB_PASSWORD" ]; then
+            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
         else
-            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $F_PORT:$PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN  $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker create --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT -e CERTFILE=$CERTFILE -e KEYFILE=$KEYFILE -e JUPYTERLAB_TOKEN='$JUPYTERLAB_PASSWORD' $ADDITIONAL_OPTIONS_STRING $DOCKER_IMAGE" 2>&1)
         fi
-        docker cp fullchain.pem $INSTANCE_NAME:$CERTFILE
-        docker cp privkey.pem $INSTANCE_NAME:$KEYFILE
+        if [[ -f fullchain.pem && -f privkey.pem ]]; then
+            docker cp fullchain.pem $INSTANCE_NAME:$CERTFILE
+            docker cp privkey.pem $INSTANCE_NAME:$KEYFILE
+        else
+            openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 -subj "/CN=$HOSTNAME" -keyout key.pem -out cert.pem
+            echo "Auto-signed certificate created."
+            docker cp cert.pem $INSTANCE_NAME:$CERTFILE
+            docker cp key.pem $INSTANCE_NAME:$KEYFILE
+        fi
         docker start $INSTANCE_NAME
     else
         echo "Running $INSTANCE_NAME container in HTTP"
-        if [ -z "$JUPYTERLAB_TOKEN" ]; then
-            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
+        if [ -z "$JUPYTERLAB_PASSWORD" ]; then
+            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
         else
-            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -e JUPYTERLAB_TOKEN=$JUPYTERLAB_TOKEN $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
+            INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $JUPYTER_HOST_PORT:$JUPYTER_INTERNAL_PORT -e JUPYTERLAB_TOKEN='$JUPYTERLAB_PASSWORD' $ADDITIONAL_OPTIONS_STRING -d $DOCKER_IMAGE" 2>&1)
         fi
     fi
-    ################################################################################
+    
     if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
-        if [ "$RUNNING" == "true" ]; then
+        if [ "${RUNNING,,}" = "true" ]; then
             echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
         fi
     else
@@ -154,140 +407,21 @@ else
     fi
 fi
 
-port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
-echo "$port" > $INSTANCE_NAME"_port"
+JUPYTER_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$JUPYTER_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$JUPYTER_PORT" > $INSTANCE_NAME"_port"
 
 containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
 echo "$containerID" > $INSTANCE_NAME"_containerID"
 
-# Endpoint added to the job variables using a groovy post-script
+echo END "$variables_PA_TASK_NAME"
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
       <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-/*********************************************************************************
-* THIS POSTSCRIPT PROPAGATES USEFUL INFORMATION SUCH AS:                         *
-* 1) SERVICE ENDPOINT (PROTOCOL://HOSTNAME:PORT)                                 *
-* 2) CREDENTIALS (IF THERE ARE ANY) BY ADDING THEM TO 3RD PARTY CREDENTIALS      *
-*********************************************************************************/
-
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.Container
-import org.ow2.proactive.pca.service.client.model.Endpoint
-import org.ow2.proactive.pca.service.client.model.Deployment
-import org.ow2.proactive.pca.service.client.model.Node
-import org.codehaus.groovy.runtime.StackTraceUtils
-
-// Acquire variables
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def proxyfied = variables.get("PROXYFIED")
-def endpointID = variables.get("ENDPOINT_ID")
-def httpsEnabled = variables.get("HTTPS_ENABLED")
-
-// Handle service parameters
-def hostname = variables.get("PA_NODE_HOST")
-def port = new File(instanceName+"_port").text.trim()
-def containerID = new File(instanceName+"_containerID").text.trim()
-def containerUrl = hostname+":"+port
-if (httpsEnabled.toLowerCase()=="true"){
-    containerUrl = "https://"+containerUrl
-} else {
-    containerUrl = "http://"+containerUrl
-}
-variables.put("HOSTNAME", hostname)
-variables.put("PORT", port)
-
-// Determine Cloud Automation URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
-
-try {
-
-    // Get schedulerapi access and acquire session id
-    schedulerapi.connect()
-    def sessionId = schedulerapi.getSession()
-
-    // Connect to Cloud Automation API
-    def apiClient = new ApiClient()
-    apiClient.setBasePath(pcaUrl)
-    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-    // Implement service model
-
-    // Container
-    def Container container = new Container()
-    container.setId(containerID)
-    container.setName(instanceName)
-
-    // Endpoint
-    def Endpoint endpoint = new Endpoint();
-    endpoint.setId(endpointID);
-    endpoint.setUrl(containerUrl);
-    // Set the endpoint parameters according to the Proxy settings
-    if (proxyfied.toLowerCase()=="true"){
-        proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
-        endpoint.setProxyfied(true);
-        endpoint.setProxyfiedUrl(proxyfiedURL)
-    }else{
-        endpoint.setProxyfied(false)
-    }
-
-    // Node
-    def Node node = new Node();
-    node.setName(variables.get("PA_NODE_NAME"))
-    node.setHost(variables.get("PA_NODE_HOST"))
-    node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
-    node.setUrl(variables.get("PA_NODE_URL"))
-
-    // Deployment
-    def Deployment deployment = new Deployment()
-    deployment.setNode(node)
-    deployment.setContainer(container)
-    deployment.setEndpoint(endpoint)
-
-    // Update service instance model (add Deployment, Groups)
-    def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
-    serviceInstanceData.setInstanceStatus("RUNNING")
-    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-    if (proxyfied.toLowerCase()=="true"){
-        serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
-        serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
-    }
-    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
-    println(serviceInstanceData)
-
-    // Inform other platforms that service is running through Synchronization API
-    channel = "Service_Instance_" + instanceId
-    synchronizationapi.createChannelIfAbsent(channel, true)
-    synchronizationapi.put(channel, "RUNNING", true)
-    synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
-    // Add token to the current node
-    token = instanceName
-    nodeUrl = variables.get("PA_NODE_URL")
-    println("Current nodeUrl: " + nodeUrl)
-    println("Adding token:    " + token)
-    rmapi.connect()
-    rmapi.addNodeToken(nodeUrl, token)
-
-    // Log output
-    println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-    println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
-
-    println("END " + variables.get("PA_TASK_NAME"))
-} catch (Exception e) {
-	StackTracUtils.printSanitizedStackTrace(e)
-    throw e
-}
-]]>
-          </code>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Post_Start_Service/raw"/>
         </script>
       </post>
       <cleaning>
@@ -297,19 +431,14 @@ try {
       </cleaning>
       <metadata>
         <positionTop>
-            384
+          644.5
         </positionTop>
         <positionLeft>
-            603.25
+          1082.5
         </positionLeft>
       </metadata>
     </task>
-    <task name="Loop_Over_Instance_Status" 
-    
-    
-    
-    
-    fork="true">
+    <task name="Loop_Over_Instance_Status_D" fork="true">
       <description>
         <![CDATA[ Loop over service instance status and fetch docker container logs.
 It will run every minute. ]]>
@@ -320,7 +449,7 @@ It will run every minute. ]]>
         <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="Start_JupyterLab"/>
+        <task ref="Start_JupyterLab_D"/>
       </depends>
       <scriptExecutable>
         <script>
@@ -328,7 +457,7 @@ It will run every minute. ]]>
         </script>
       </scriptExecutable>
       <controlFlow >
-        <loop target="Loop_Over_Instance_Status">
+        <loop target="Loop_Over_Instance_Status_D">
           <script>
             <file url="${PA_CATALOG_REST_URL}/buckets/cloud-automation-scripts/resources/Fetch_Logs/raw" language="groovy"></file>
           </script>
@@ -336,10 +465,10 @@ It will run every minute. ]]>
       </controlFlow>
       <metadata>
         <positionTop>
-            511
+          777.5
         </positionTop>
         <positionLeft>
-            603.25
+          1080.5
         </positionLeft>
       </metadata>
     </task>
@@ -353,14 +482,15 @@ It will run every minute. ]]>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2830px;
-            height:3308px;
+            width:3824px;
+            height:4780px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-379px;left:-598.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_16" style="top: 384px; left: 603.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull JupyterLab image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Start_JupyterLab</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_19" style="top: 511px; left: 603.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a></div><svg style="position:absolute;left:649px;top:423.5px" width="45.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 24.5 87 C 34.5 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.238288,65.388768 L25.070808262803794,44.19980977790638 L20.509084810289284,52.21171836093322 L11.893758623737014,48.9290129676171 L25.238288,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.238288,65.388768 L25.070808262803794,44.19980977790638 L20.509084810289284,52.21171836093322 L11.893758623737014,48.9290129676171 L25.238288,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:745.0266769263776px;top:460.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_30" style="position: absolute; transform: translate(-50%, -50%); left: 757px; top: 530.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 649.5px; top: 414px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 674px; top: 541px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 674px; top: 501px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 755px; top: 501px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 755px; top: 541px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-443.5px;left:-812px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_339" style="top: 646.5px; left: 854px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull JupyterLab image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Start_JupyterLab_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_342" style="top: 779.5px; left: 817px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_345" style="top: 448.5px; left: 973.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_348" style="top: 644.5px; left: 1082.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull JupyterLab image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Start_JupyterLab_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_351" style="top: 777.5px; left: 1080.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/jupyterlab.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:893.5px;top:686.5px" width="32.5" height="94" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 93 C -10 43 21.5 50 11.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.814512375000001,70.38066975000001 L8.557683974633074,51.903182288641574 L0.6207241654991842,56.59409573787439 L-5.2288900374925475,49.467945748142384 L-1.814512375000001,70.38066975000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.814512375000001,70.38066975000001 L8.557683974633074,51.903182288641574 L0.6207241654991842,56.59409573787439 L-5.2288900374925475,49.467945748142384 L-1.814512375000001,70.38066975000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:971.0266769263776px;top:729.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_362" style="position: absolute; transform: translate(-50%, -50%); left: 983px; top: 799.5px;">loop</div><svg style="position:absolute;left:843.5px;top:488.5px" width="141" height="159" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 158 C -10 108 130 50 120 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.9375,119.25 L34.71202345383081,109.42567971401803 L25.501159641528716,109.02569492527758 L24.487718379108387,99.86202007248932 L15.9375,119.25" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.9375,119.25 L34.71202345383081,109.42567971401803 L25.501159641528716,109.02569492527758 L24.487718379108387,99.86202007248932 L15.9375,119.25" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_368" style="position: absolute; transform: translate(-50%, -50%); left: 913.5px; top: 567.5px;">if</div><svg style="position:absolute;left:963.5px;top:488.5px" width="130" height="157" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 109 156 C 119 106 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M94.78125,117.5625 L86.98026748841322,97.86111243836066 L85.61641462297338,106.97922108881178 L76.396988577225,107.0259478153873 L94.78125,117.5625" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M94.78125,117.5625 L86.98026748841322,97.86111243836066 L85.61641462297338,106.97922108881178 L76.396988577225,107.0259478153873 L94.78125,117.5625" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_372" style="position: absolute; transform: translate(-50%, -50%); left: 1028px; top: 566.5px;">else</div><svg style="position:absolute;left:1134px;top:684.5px" width="44.5" height="94" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 23.5 93 C 33.5 43 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M24.139863,69.89117399999999 L24.450507545194924,48.703831081017896 L19.70917450689161,56.61077492930046 L11.170108474495393,53.13451957412629 L24.139863,69.89117399999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M24.139863,69.89117399999999 L24.450507545194924,48.703831081017896 L19.70917450689161,56.61077492930046 L11.170108474495393,53.13451957412629 L24.139863,69.89117399999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:1235.0266769263776px;top:727.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_381" style="position: absolute; transform: translate(-50%, -50%); left: 1247px; top: 797.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 905.5px; top: 677px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 844px; top: 637px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 894px; top: 810px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 894px; top: 770px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 981px; top: 770px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 981px; top: 810px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1014px; top: 479px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 964px; top: 479px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1134.5px; top: 675px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 1073px; top: 635px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1158px; top: 808px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 1158px; top: 768px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 1245px; top: 768px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 1245px; top: 808px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
