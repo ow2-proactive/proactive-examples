@@ -1,0 +1,424 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="JD_Edwards_Server_Manager" onTaskError="continueJobExecution" priority="normal" projectName="ERP" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable name="JDE_ENDPOINT" value="https://ais_server:port/manage/mgmtrestservice"/>
+    <variable name="JDE_USER" value="demo"/>
+    <variable model="PA:HIDDEN" name="JDE_PASSWORD" value="ENC(B8nLpbVTAvupPzLkccUo/g==)"/>
+    <variable name="JDE_ENVIRONMENT" value="JDV920"/>
+    <variable name="JDE_ROLE" value="*ALL"/>
+    <variable name="JDE_DEVICE" value="Curl"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that runs REST requests to interface with a JD Edwards EnterpriseOne Server Manager.
+These REST requests are supported beginning with JD Edwards EnterpriseOn Server Manager, version 9.1.4.x.
+Before the execution, the user has to provide the following variables:
+JDE_ENDPOINT (required) is the server endpoint.
+JDE_USER (required) is the JD Edwards EnterpriseOne username, which is required if other authentication methods are not being used.
+JDE_PASSWORD (required) is the JD Edwards EnterpriseOne password, which is required if other authentication methods are not being used. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="application-connectors"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/JDE.png"/>
+<info name="documentation" value="https://docs.oracle.com/cd/E61420_01/doc.92/e80710/smcrestapis.htm#EOIRA354"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Authentification">
+      <description>
+        <![CDATA[ A task performing a rest POST request to authenticate to a JD Edwards EnterpriseOne Server Manager.
+The authentication is performed via Username/Password Request using a json request body.
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+PATH: path of the request (relative to the base url)
+SSL_DISABLE_CHECK: to disable ssl certificate check
+CONTENT_TYPE: content-type of the request, should be "application/json" with eventual encoding.
+REQUEST_BODY: a json parameter containing the request body.
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+QUERY_PARAM_<param_name> ]]>
+      </description>
+      <variables>
+        <variable inherited="false" name="ENDPOINT" value="${JDE_ENDPOINT}"/>
+        <variable inherited="false" name="PATH" value="/authenticate"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{ &quot;username&quot;: &quot;${JDE_USERNAME}&quot;,         &quot;password&quot;: &quot;${JDE_PASSWORD}&quot; }"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="DEBUG" value="false"/>
+        <variable inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable inherited="false" name="RESPONSE_PATH" value="userInfo.token"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/JDE.png"/>
+        <info name="documentation" value="https://docs.oracle.com/cd/E61420_01/doc.92/e80710/smcrestapis.htm#EOIRA354"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("AUTH_TOKEN", result)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            49.53125
+        </positionTop>
+        <positionLeft>
+            142.28125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Instance_State">
+      <description>
+        <![CDATA[ A task performing a rest GET request to retrieve the state of a managed instance.
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+PATH: path of the request (relative to the base url)
+SSL_DISABLE_CHECK: to disable ssl certificate check
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+PARAM_<param_name> ]]>
+      </description>
+      <variables>
+        <variable inherited="true" name="ENDPOINT" value="${JDE_ENDPOINT}"/>
+        <variable inherited="false" name="PATH" value="/instancestate"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="DEBUG" value="false"/>
+        <variable inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable inherited="false" name="HEADER_jde-AIS-Auth" value="${AUTH_TOKEN}"/>
+        <variable inherited="false" name="PARAM_instanceName" value="tqa_923_lnx_jas_den60206jems_21500"/>
+        <variable inherited="false" name="PARAM_agentHostName" value="den00xiq.jdedwards.com"/>
+        <variable inherited="false" name="PARAM_jdeHome" value="C:\jde_home_2\SCFHA"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/JDE.png"/>
+        <info name="documentation" value="https://docs.oracle.com/cd/E61420_01/doc.92/e80710/smcrestapis.htm#EOIRA354"/>
+      </genericInformation>
+      <depends>
+        <task ref="Authentification"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            179.53125
+        </positionTop>
+        <positionLeft>
+            157.28125
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2144px;
+            height:2908px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-44.53125px;left:-137.28125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_289" style="top: 49.5312px; left: 142.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a rest POST request to authenticate to a JD Edwards EnterpriseOne Server Manager.
+The authentication is performed via Username/Password Request using a json request body.
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+PATH: path of the request (relative to the base url)
+SSL_DISABLE_CHECK: to disable ssl certificate check
+CONTENT_TYPE: content-type of the request, should be &quot;application/json&quot; with eventual encoding.
+REQUEST_BODY: a json parameter containing the request body.
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+QUERY_PARAM_<param_name>"><img src="/automation-dashboard/styles/patterns/img/wf-icons/JDE.png" width="20px">&nbsp;<span class="name">Authentification</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_292" style="top: 179.531px; left: 157.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a rest GET request to retrieve the state of a managed instance.
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+PATH: path of the request (relative to the base url)
+SSL_DISABLE_CHECK: to disable ssl certificate check
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+PARAM_<param_name>"><img src="/automation-dashboard/styles/patterns/img/wf-icons/JDE.png" width="20px">&nbsp;<span class="name">Instance_State</span></a></div><svg style="position:absolute;left:183px;top:89.5px" width="35.5" height="91" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 14.5 90 C 24.5 40 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M16.093647999999998,68.13216 L18.696525814289718,47.10301291591981 L13.126942819067398,54.45010385447028 L5.014469668759996,50.069718096852405 L16.093647999999998,68.13216" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M16.093647999999998,68.13216 L18.696525814289718,47.10301291591981 L13.126942819067398,54.45010385447028 L5.014469668759996,50.069718096852405 L16.093647999999998,68.13216" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 183.5px; top: 80px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 198px; top: 210px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 198px; top: 170px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
