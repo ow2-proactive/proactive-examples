@@ -11,8 +11,7 @@ import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
 
 // Determine Cloud Automation URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()

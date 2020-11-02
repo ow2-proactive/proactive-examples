@@ -51,8 +51,7 @@ variables.put("HOSTNAME", hostname)
 variables.put("PORT", port)
 
 // Determine Cloud Automation URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL') 
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
 
 try {
     // Get schedulerapi access and acquire session id
@@ -77,7 +76,7 @@ try {
     endpoint.setUrl(containerUrl);
     // Set the endpoint parameters according to the Proxy settings
     if (proxyfied.toLowerCase()=="true"){
-        proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
+        proxyfiedURL = variables.get('PROXYFIED_URL')
         endpoint.setProxyfied(true);
         endpoint.setProxyfiedUrl(proxyfiedURL)
     }else{

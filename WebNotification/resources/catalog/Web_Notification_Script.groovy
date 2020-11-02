@@ -5,8 +5,7 @@ import org.ow2.proactive.notification.client.model.Event
 import org.ow2.proactive.notification.client.ApiException
 
 //Get notification-service URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def notifUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/notification-service")
+def notifUrl = variables.get('PA_NOTIFICATION_SERVICE_REST_URL')
 
 // Instantiate EventRestApi instance
 def apiClient = new ApiClient()
