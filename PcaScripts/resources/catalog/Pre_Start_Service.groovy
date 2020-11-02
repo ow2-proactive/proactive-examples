@@ -3,11 +3,10 @@ def instanceName = variables.get("INSTANCE_NAME")
 def endpointID = variables.get("ENDPOINT_ID")
 def proxified = variables.get("PROXYFIED")
 
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")    
+def pcaPublicUrl = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
 
 if ("true".equalsIgnoreCase(proxified)) {
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
+    proxyfiedURL = pcaPublicUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
     wsURL = proxyfiedURL.replace("https://", "wss://")
     wsURL = wsURL.replace("http://", "ws://")
     println "Proxyfied URL :" + proxyfiedURL
