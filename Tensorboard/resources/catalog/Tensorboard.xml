@@ -5,14 +5,15 @@
     <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
     <variable name="INSTANCE_NAME" value="tensorboard-server-$PA_JOB_ID"/>
     <variable name="ENDPOINT_ID" value="tensorboard-gui-$PA_JOB_ID"/>
-    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
-    <variable model="PA:Boolean" name="HTTP_ENABLED" value="True"/>
+    <variable name="PROXYFIED" value="False" model="PA:Boolean"/>
+    <variable name="HTTP_ENABLED" value="True" model="PA:Boolean"/>
     <variable name="MOUNT_LOG_PATH" value="/shared/$INSTANCE_NAME"/>
-    <variable model="PA:Integer" name="SERVICE_PORT" value="-1"/>
-    <variable model="PA:List(docker,singularity)" name="ENGINE" value="docker"/>
+    <variable name="SERVICE_PORT" value="-1" model="PA:Integer"/>
+    <variable name="ENGINE" value="docker" model="PA:List(docker,singularity)"/>
     <variable name="DOCKER_IMAGE" value="activeeon/tensorboard"/>
     <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/tensorboard.sif"/>
-    <variable model="PA:Boolean" name="BUILD_IMAGE_IF_NOT_EXISTS" value="True"/>
+    <variable name="BUILD_IMAGE_IF_NOT_EXISTS" value="True" model="PA:Boolean"/>
+    <variable name="PASSWORD" value="" model="PA:HIDDEN"/>
   </variables>
   <description>
     <![CDATA[ Deploy a Tensorboard server.
@@ -57,12 +58,43 @@ SIF_IMAGE_PATH=$variables_SINGULARITY_IMAGE_PATH
 BUILD_IMAGE=$variables_BUILD_IMAGE_IF_NOT_EXISTS
 DOCKER_IMAGE=$variables_DOCKER_IMAGE
 TENSORBOARD_HOST_PORT=$variables_SERVICE_PORT
+LOGIN=$variables_PA_USER
+PASSWORD=$variables_PASSWORD
+
+if [[ "${BUILD_IMAGE,,}" = "true" && ! -f SIF_IMAGE_PATH && "$DOCKER_IMAGE" = "activeeon/tensorboard:secured" && -z "$PASSWORD" ]]; then
+    echo "[ERROR] To secure tensorboard, the PASSWORD variable should be set."
+    exit 1
+fi
+
+[[ ! -z "$PASSWORD" ]] && IS_SECURED=true || IS_SECURED=false
+
+if $IS_SECURED; then
+    SIF_IMAGE_DIR="$(dirname "${SIF_IMAGE_PATH}")"
+    if [ ! -f "$SIF_IMAGE_DIR"/singularity-entrypoint.sh ]; then
+        echo "[ERROR] The file $SIF_IMAGE_DIR/singularity-entrypoint.sh is not found."
+        exit 1
+    fi
+    if [ ! -f "$SIF_IMAGE_DIR"/nginx_singularity.conf ]; then
+        echo "[ERROR] The file $SIF_IMAGE_DIR/nginx_singularity.conf is not found."
+        exit 1
+    fi
+fi
 
 imagedecode() { : "${*//+/ }"; echo -e "${_//%/\\x}"; }
 SHARED_PATH=$(imagedecode "$MOUNT_LOG_PATH")
 eval SHARED_PATH=$SHARED_PATH
 echo $SHARED_PATH
 mkdir -p $SHARED_PATH
+if $IS_SECURED; then
+    echo "warning"
+    if [ "$DOCKER_IMAGE" = "activeeon/tensorboard" ]; then
+    	DOCKER_IMAGE="activeeon/tensorboard:secured"
+    fi
+	mkdir -p $SHARED_PATH/.var/log/nginx
+    mkdir -p $SHARED_PATH/.var/lib/nginx/body
+    mkdir -p $SHARED_PATH/.var/run
+    mkdir -p $SHARED_PATH/.nginx
+fi
 ################################################################################
 
 PATH=$PATH:/usr/sbin
@@ -116,10 +148,22 @@ else
     ################################################################################
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
-    echo "[INFO] singularity instance start -B $SHARED_PATH:/logs $SIF_IMAGE_PATH $INSTANCE_NAME"
-    singularity instance start --no-home -B $SHARED_PATH:/logs $SIF_IMAGE_PATH $INSTANCE_NAME
-    TENSORBOARD_EXEC_COMMAND="singularity exec instance://${INSTANCE_NAME} tensorboard --logdir '/logs' --port ${TENSORBOARD_HOST_PORT} &> /dev/null & &> /dev/null"
-    echo $TENSORBOARD_EXEC_COMMAND
+    if $IS_SECURED; then
+        echo "[INFO] singularity instance start --no-home -B $SHARED_PATH:/logs,$SHARED_PATH/.var:/var $SIF_IMAGE_PATH $INSTANCE_NAME"
+        singularity instance start --no-home -B $SHARED_PATH:/logs,$SHARED_PATH/.var:/var $SIF_IMAGE_PATH $INSTANCE_NAME
+        echo "[INFO] cp $SIF_IMAGE_DIR/singularity-entrypoint.sh $SHARED_PATH/singularity-entrypoint.sh"
+        cp $SIF_IMAGE_DIR/singularity-entrypoint.sh $SHARED_PATH/singularity-entrypoint.sh
+        echo "[INFO] cp $SIF_IMAGE_DIR/nginx_singularity.conf $SHARED_PATH/.nginx/nginx_singularity.conf"
+        cp $SIF_IMAGE_DIR/nginx_singularity.conf $SHARED_PATH/.nginx/nginx_singularity.conf
+        echo "[INFO] chmod +x $SHARED_PATH/singularity-entrypoint.sh"
+        chmod +x $SHARED_PATH/singularity-entrypoint.sh
+        TENSORBOARD_EXEC_COMMAND="singularity exec instance://${INSTANCE_NAME} /bin/bash /logs/singularity-entrypoint.sh $TENSORBOARD_HOST_PORT $LOGIN $PASSWORD /logs &> /dev/null & &> /dev/null"
+    else
+        echo "[INFO] singularity instance start -B $SHARED_PATH:/logs $SIF_IMAGE_PATH $INSTANCE_NAME"
+        singularity instance start --no-home -B $SHARED_PATH:/logs $SIF_IMAGE_PATH $INSTANCE_NAME
+        TENSORBOARD_EXEC_COMMAND="singularity exec instance://${INSTANCE_NAME} tensorboard --logdir '/logs' --port ${TENSORBOARD_HOST_PORT} &> /dev/null & &> /dev/null"
+    fi
+    echo "[INFO] $TENSORBOARD_EXEC_COMMAND"
     eval $TENSORBOARD_EXEC_COMMAND
     sleep 3
     ################################################################################
@@ -302,15 +346,32 @@ DOCKER_IMAGE=$variables_DOCKER_IMAGE
 INSTANCE_NAME=$variables_INSTANCE_NAME
 MOUNT_LOG_PATH=$variables_MOUNT_LOG_PATH
 TENSORBOARD_HOST_PORT=$variables_SERVICE_PORT
+LOGIN=$variables_PA_USER
+PASSWORD=$variables_PASSWORD
+
+if [[ "$DOCKER_IMAGE" = "activeeon/tensorboard:secured" && -z "$PASSWORD" ]]; then
+    echo "[ERROR] To secure tensorboard, the PASSWORD variable should be set."
+    exit 1
+fi
+
+[[ ("$DOCKER_IMAGE" = "activeeon/tensorboard" || "$DOCKER_IMAGE" = "activeeon/tensorboard:secured") && ! -z "$PASSWORD" ]] && IS_SECURED=true || IS_SECURED=false
 
 avx_info=$(grep avx /proc/cpuinfo)
 if [ -z "$avx_info" ] && [ "$DOCKER_IMAGE" -eq "activeeon/tensorboard" ]
 then
       echo "\$avx_info is empty, no AVX support"
       DOCKER_IMAGE=activeeon/tensorboard:no-avx
+      if $IS_SECURED; then
+          echo "[WARNING] Due to no AVX support, LOGIN and PASSWORD protection is ignored."
+          IS_SECURED=false
+      fi
 else
       echo "\$avx_info is NOT empty, with AVX support"
-      DOCKER_IMAGE=activeeon/tensorboard
+      if $IS_SECURED; then
+          DOCKER_IMAGE=activeeon/tensorboard:secured
+      else
+          DOCKER_IMAGE=activeeon/tensorboard
+      fi
 fi
 
 imagedecode() { : "${*//+/ }"; echo -e "${_//%/\\x}"; }
@@ -361,11 +422,20 @@ if [ "$(docker ps --format '{{.Names}}' | grep ^$INSTANCE_NAME$)" ]; then
     fi
 else
     echo "Running $INSTANCE_NAME container"
-    echo docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBOARD_INTERNAL_PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
-    docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBOARD_INTERNAL_PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
+    if $IS_SECURED; then
+        echo docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBOARD_HOST_PORT -v $SHARED_PATH:/logs -e PORT=$TENSORBOARD_HOST_PORT -e LOGIN=$LOGIN -e PASSWORD=$PASSWORD -e "discovery.type=single-node" $DOCKER_IMAGE
+        docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBOARD_HOST_PORT -v $SHARED_PATH:/logs -e PORT=$TENSORBOARD_HOST_PORT -e LOGIN=$LOGIN -e PASSWORD=$PASSWORD -e "discovery.type=single-node" $DOCKER_IMAGE
+    else
+        echo docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBOARD_INTERNAL_PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
+        docker run -d --name $INSTANCE_NAME -p $TENSORBOARD_HOST_PORT:$TENSORBOARD_INTERNAL_PORT -v $SHARED_PATH:/logs -e "discovery.type=single-node" $DOCKER_IMAGE
+    fi
 fi
 
-TENSORBOARD_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$TENSORBOARD_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+if $IS_SECURED; then
+    TENSORBOARD_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$TENSORBOARD_HOST_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+else
+    TENSORBOARD_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$TENSORBOARD_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+fi
 echo "$TENSORBOARD_PORT" > $INSTANCE_NAME"_port"
 
 containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
