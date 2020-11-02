@@ -35,8 +35,7 @@ if (engine != null && "singularity".equalsIgnoreCase(engine)) {
 }
 
 // Determine Cloud Automation URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL') 
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()
