@@ -1,7 +1,6 @@
 # ProActive Examples
 
 This repository includes a sub directory per bucket, in which a metadata file centralizes object-related-information: bucket name, object name, object kind,..
-If the "studio_template" section is specified, the object/workflow is also considered as a studio template.
 
 The aim of this project is to centralize all proactive workflows and other related objects (scripts, images, etc). The workflows from the ProActive Examples project are pushed to Catalog storage inside proactive.
 
