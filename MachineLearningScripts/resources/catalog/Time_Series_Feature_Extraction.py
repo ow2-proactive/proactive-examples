@@ -3,6 +3,7 @@
 
 This module contains the Python script for the Summarize Data task.
 """
+import ssl
 import urllib.request
 
 from tsfresh import extract_features
@@ -18,7 +19,7 @@ print("BEGIN " + __file__)
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
-exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
 global compress_and_transfer_dataframe_in_variables
 global assert_not_none_not_empty, is_not_none_not_empty
