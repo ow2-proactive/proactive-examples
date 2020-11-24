@@ -156,11 +156,11 @@ if (CONTAINER_ENABLED && (
     cmd.add("run")
     cmd.add("--rm")
     cmd.add("--shm-size=256M")
-    
+
     if (CONTAINER_HOST_NETWORK_ENABLED) {
         cmd.add("--network=host")
     }
-    
+
     if (CONTAINER_ROOTLESS_ENABLED) {
         cmd.add("--env")
         cmd.add("HOME=/tmp")
@@ -281,152 +281,161 @@ if (CONTAINER_ENABLED && (
 if (CONTAINER_ENABLED &&
     "singularity".equalsIgnoreCase(CONTAINER_PLATFORM)) {
 
-    imageUrl = CONTAINER_IMAGE
-    imageName = imageUrl.substring(imageUrl.indexOf("://") + 3).replace("/","_").replace(":","_")
-    imageLockFileName = imageName + ".lock"
     userHome = System.getProperty("user.home")
 
-    try {
-        switch (family) {
-            case OperatingSystemFamily.WINDOWS:
-            throw new IllegalStateException("Singularity is not supported on Windows operating system")
-            case OperatingSystemFamily.MAC:
-            throw new IllegalStateException("Singularity is not supported on Mac operating system")
-            default:
-                isWindows = false;
-        }
-
-        process = "singularity --version".execute()
-        majorVersion = 0
-        if (process.waitFor() == 0) {
-            version = process.text
-            version = version.replace("singularity version ", "").trim()
-            println "Singularity version: " + version
-            majorVersion = Integer.parseInt(version.substring(0, version.indexOf(".")))
-        } else {
-            throw new IllegalStateException("Cannot find singularity command")
-        }
-
-        if (majorVersion >= 3) {
-            imageFile = imageName + ".sif"
-        } else {
-            imageFile = imageName + ".simg"
-        }
-
-        // synchronization to avoid concurrent NFS conflicts when creating the image
-        imageLockPath = new File(userHome, imageLockFileName);
-        if (!imageLockPath.exists()) {
-            imageLockPath.createNewFile()
-        } else {
-            while (imageLockPath.exists()) {
-                Thread.sleep(1000)
-            }
-        }
-
-        // pull the container inside the synchronization lock
-        if (majorVersion >= 3) {
-            pullCmd = "singularity pull --dir " + userHome + " " + imageFile + " " + imageUrl
-            println pullCmd
-            def env = System.getenv().collect { k, v -> "$k=$v" }
-            env.push('XDG_RUNTIME_DIR=/run/user/$UID')
-            process = pullCmd.execute(env, new File(userHome))
-        } else {
-            pullCmd = "singularity pull --name " + imageFile + " " + imageUrl
-            def env = System.getenv().collect { k, v -> "$k=$v" }
-            env.push("SINGULARITY_PULLFOLDER=" + userHome)
-            process = pullCmd.execute(env, new File(userHome))
-        }
-
-        process.in.eachLine { line ->
-            println line
-        }
-        process.waitFor()
-
-        (new File(userHome, imageFile)).setReadable(true, false)
-
-        // release lock
-        imageLockPath.delete()
-
-        cmd = []
-        cmd.add("singularity")
-        cmd.add("exec")
-        // cmd.add("--writable") // by default all singularity containers are available as read only. This option makes the file system accessible as read/write.
-        cmd.add("--writable-tmpfs") // makes the file system accessible as read-write with non persistent data (with overlay support only)
-        
-        if (CONTAINER_NO_HOME_ENABLED) {
-            cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
-        }
-
-        // run a singularity image in an isolated manner
-        if (CONTAINER_ISOLATION_ENABLED) {
-            // cmd.add("--disable-cache") // dont use cache, and dont create cache
-            // cmd.add("--cleanenv") // clean environment before running container
-            // cmd.add("--contain") // use minimal /dev and empty other directories (e.g. /tmp and $HOME) instead of sharing filesystems from your host
-            cmd.add("--containall") // contain not only file systems, but also PID, IPC, and environment
-        }
-
-        if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
-            cmd.add("--nv") // enable experimental NVIDIA GPU support
-        }
-
-        // Prepare log directory
-        if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
-            cmd.add("-B")
-            cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
-        }
-
-        forkEnvironment.setDockerWindowsToLinux(isWindows)
-
-        // Prepare ProActive home volume
-        paHomeHost = variables.get("PA_SCHEDULER_HOME")
-        paHomeContainer = (isWindows ? forkEnvironment.convertToLinuxPath(paHomeHost) : paHomeHost)
-        cmd.add("-B")
-        cmd.add(paHomeHost + ":" + paHomeContainer)
-        // Prepare working directory (For Dataspaces and serialized task file)
-        workspaceHost = localspace
-        workspaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(workspaceHost) : workspaceHost)
-        cmd.add("-B")
-        cmd.add(workspaceHost + ":" + workspaceContainer)
-
-        cachespaceHost = cachespace
-        cachespaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(cachespaceHost) : cachespaceHost)
-        cachespaceHostFile = new File(cachespaceHost)
-        if (cachespaceHostFile.exists() && cachespaceHostFile.canRead()) {
-            cmd.add("-B")
-            cmd.add(cachespaceHost + ":" + cachespaceContainer)
-        } else {
-            println cachespaceHost + " does not exist or is not readable, access to cache space will be disabled in the container"
-        }
-
-        if (!isWindows) {
-            // when not on windows, mount and use the current JRE
-            currentJavaHome = System.getProperty("java.home")
-            forkEnvironment.setJavaHome(currentJavaHome)
-            cmd.add("-B")
-            cmd.add(currentJavaHome + ":" + currentJavaHome)
-        }
-
-        // Prepare container working directory
-        cmd.add("--pwd") // initial working directory for payload process inside the container
-        cmd.add(workspaceContainer)
-        cmd.add("--workdir") // working directory to be used for /tmp, /var/tmp and $HOME (if -c/--contain was also used)
-        cmd.add(workspaceContainer)
-
-        // Directory containing the singularity image
-        cmd.add((new File(userHome, imageFile)).getAbsolutePath())
-
-        forkEnvironment.setPreJavaCommand(cmd)
-        forkEnvironment.addSystemEnvironmentVariable("XDG_RUNTIME_DIR",'/run/user/$UID')
-
-        // Show the generated command
-        println "SINGULARITY COMMAND : " + forkEnvironment.getPreJavaCommand()
-    } catch (Exception e) {
-        StackTraceUtils.deepSanitize(e)
-        e.stackTrace.head().lineNumber
-        throw e
-    } finally {
-        (new File(userHome, imageLockFileName)).delete()
+    switch (family) {
+        case OperatingSystemFamily.WINDOWS:
+        throw new IllegalStateException("Singularity is not supported on Windows operating system")
+        case OperatingSystemFamily.MAC:
+        throw new IllegalStateException("Singularity is not supported on Mac operating system")
+        default:
+            isWindows = false;
     }
+
+    if (CONTAINER_IMAGE.endsWith(".sif")) {
+        sif_image_path = CONTAINER_IMAGE
+    }
+    else {
+        try {
+            imageUrl = CONTAINER_IMAGE
+            imageName = imageUrl.substring(imageUrl.indexOf("://") + 3).replace("/","_").replace(":","_")
+            imageLockFileName = imageName + ".lock"
+
+            process = "singularity --version".execute()
+            majorVersion = 0
+            if (process.waitFor() == 0) {
+                version = process.text
+                version = version.replace("singularity version ", "").trim()
+                println "Singularity version: " + version
+                majorVersion = Integer.parseInt(version.substring(0, version.indexOf(".")))
+            } else {
+                throw new IllegalStateException("Cannot find singularity command")
+            }
+
+            if (majorVersion >= 3) {
+                imageFile = imageName + ".sif"
+            } else {
+                imageFile = imageName + ".simg"
+            }
+
+            // synchronization to avoid concurrent NFS conflicts when creating the image
+            imageLockPath = new File(userHome, imageLockFileName);
+            if (!imageLockPath.exists()) {
+                imageLockPath.createNewFile()
+            } else {
+                while (imageLockPath.exists()) {
+                    Thread.sleep(1000)
+                }
+            }
+
+            // pull the container inside the synchronization lock
+            if (majorVersion >= 3) {
+                pullCmd = "singularity pull --dir " + userHome + " " + imageFile + " " + imageUrl
+                println pullCmd
+                def env = System.getenv().collect { k, v -> "$k=$v" }
+                env.push('XDG_RUNTIME_DIR=/run/user/$UID')
+                process = pullCmd.execute(env, new File(userHome))
+            } else {
+                pullCmd = "singularity pull --name " + imageFile + " " + imageUrl
+                def env = System.getenv().collect { k, v -> "$k=$v" }
+                env.push("SINGULARITY_PULLFOLDER=" + userHome)
+                process = pullCmd.execute(env, new File(userHome))
+            }
+
+            process.in.eachLine { line ->
+                println line
+            }
+            process.waitFor()
+
+            (new File(userHome, imageFile)).setReadable(true, false)
+
+            // release lock
+            imageLockPath.delete()
+
+            sif_image_path = (new File(userHome, imageFile)).getAbsolutePath()
+
+        } catch (Exception e) {
+            StackTraceUtils.deepSanitize(e)
+            e.stackTrace.head().lineNumber
+            throw e
+        } finally {
+            (new File(userHome, imageLockFileName)).delete()
+        }
+    }
+
+    cmd = []
+    cmd.add("singularity")
+    cmd.add("exec")
+    // cmd.add("--writable") // by default all singularity containers are available as read only. This option makes the file system accessible as read/write.
+    cmd.add("--writable-tmpfs") // makes the file system accessible as read-write with non persistent data (with overlay support only)
+
+    if (CONTAINER_NO_HOME_ENABLED) {
+        cmd.add("--no-home") // do NOT mount users home directory if home is not the current working directory
+    }
+
+    // run a singularity image in an isolated manner
+    if (CONTAINER_ISOLATION_ENABLED) {
+        // cmd.add("--disable-cache") // dont use cache, and dont create cache
+        // cmd.add("--cleanenv") // clean environment before running container
+        // cmd.add("--contain") // use minimal /dev and empty other directories (e.g. /tmp and $HOME) instead of sharing filesystems from your host
+        cmd.add("--containall") // contain not only file systems, but also PID, IPC, and environment
+    }
+
+    if (CUDA_ENABLED && CONTAINER_GPU_ENABLED) {
+        cmd.add("--nv") // enable experimental NVIDIA GPU support
+    }
+
+    // Prepare log directory
+    if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
+        cmd.add("-B")
+        cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
+    }
+
+    forkEnvironment.setDockerWindowsToLinux(isWindows)
+
+    // Prepare ProActive home volume
+    paHomeHost = variables.get("PA_SCHEDULER_HOME")
+    paHomeContainer = (isWindows ? forkEnvironment.convertToLinuxPath(paHomeHost) : paHomeHost)
+    cmd.add("-B")
+    cmd.add(paHomeHost + ":" + paHomeContainer)
+    // Prepare working directory (For Dataspaces and serialized task file)
+    workspaceHost = localspace
+    workspaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(workspaceHost) : workspaceHost)
+    cmd.add("-B")
+    cmd.add(workspaceHost + ":" + workspaceContainer)
+
+    cachespaceHost = cachespace
+    cachespaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(cachespaceHost) : cachespaceHost)
+    cachespaceHostFile = new File(cachespaceHost)
+    if (cachespaceHostFile.exists() && cachespaceHostFile.canRead()) {
+        cmd.add("-B")
+        cmd.add(cachespaceHost + ":" + cachespaceContainer)
+    } else {
+        println cachespaceHost + " does not exist or is not readable, access to cache space will be disabled in the container"
+    }
+
+    if (!isWindows) {
+        // when not on windows, mount and use the current JRE
+        currentJavaHome = System.getProperty("java.home")
+        forkEnvironment.setJavaHome(currentJavaHome)
+        cmd.add("-B")
+        cmd.add(currentJavaHome + ":" + currentJavaHome)
+    }
+
+    // Prepare container working directory
+    cmd.add("--pwd") // initial working directory for payload process inside the container
+    cmd.add(workspaceContainer)
+    cmd.add("--workdir") // working directory to be used for /tmp, /var/tmp and $HOME (if -c/--contain was also used)
+    cmd.add(workspaceContainer)
+
+    // Directory containing the singularity image
+    cmd.add(sif_image_path)
+
+    forkEnvironment.setPreJavaCommand(cmd)
+    forkEnvironment.addSystemEnvironmentVariable("XDG_RUNTIME_DIR",'/run/user/$UID')
+
+    // Show the generated command
+    println "SINGULARITY COMMAND : " + forkEnvironment.getPreJavaCommand()
 }
 
 if (!CONTAINER_ENABLED) {
