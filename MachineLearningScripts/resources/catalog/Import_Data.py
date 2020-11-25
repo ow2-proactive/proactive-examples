@@ -32,14 +32,31 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-FILE_URL = variables.get("FILE_URL")
+IMPORT_FROM = variables.get("IMPORT_FROM")
+FILE_PATH = variables.get("FILE_PATH")
 FILE_DELIMITER = variables.get("FILE_DELIMITER")
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
 
-assert_not_none_not_empty(FILE_URL, "FILE_URL should be defined!")
+assert_not_none_not_empty(IMPORT_FROM, "IMPORT_FROM should be defined!")
+assert_not_none_not_empty(FILE_PATH, "FILE_PATH should be defined!")
 assert_not_none_not_empty(FILE_DELIMITER, "FILE_DELIMITER should be defined!")
 
-dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
+# -------------------------------------------------------------
+# Load file
+#
+if IMPORT_FROM.upper() == "PA:USER_FILE":
+    print("Importing file from the user space")
+    userspaceapi.connect()
+    out_file = gateway.jvm.java.io.File(FILE_PATH)
+    userspaceapi.pullFile(FILE_PATH, out_file)
+
+if IMPORT_FROM.upper() == "PA:GLOBAL_FILE":
+    print("Importing file from the global space")
+    globalspaceapi.connect()
+    out_file = gateway.jvm.java.io.File(FILE_PATH)
+    globalspaceapi.pullFile(FILE_PATH, out_file)
+
+dataframe = pd.read_csv(FILE_PATH, FILE_DELIMITER)
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
