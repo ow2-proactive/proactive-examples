@@ -98,13 +98,13 @@ if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
     exit 128
 else
     echo "Running $INSTANCE_NAME container"
-    
+
     if [[ -z $MONGODB_USER ]]; then
         INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $MONGODB_HOST_PORT:$MONGODB_INTERNAL_PORT -d $DOCKER_IMAGE)
     else
         INSTANCE_STATUS=$(docker run --name $INSTANCE_NAME -p $MONGODB_HOST_PORT:$MONGODB_INTERNAL_PORT -e MONGO_INITDB_ROOT_USERNAME=$MONGODB_USER -e MONGO_INITDB_ROOT_PASSWORD=$MONGODB_PASSWORD -d $DOCKER_IMAGE)
     fi
-    
+
     if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
         if [ "${RUNNING,,}" = "true" ]; then
@@ -285,6 +285,13 @@ BUILD_IMAGE=$variables_BUILD_IMAGE_IF_NOT_EXISTS
 MONGODB_USER=$variables_USER
 MONGODB_PASSWORD=$variables_PASSWORD
 MONGODB_HOST_PORT=$variables_SERVICE_PORT
+MONGODB_MOUNT_PATH=$variables_MOUNT_DB_PATH
+mkdir -p $MONGODB_MOUNT_PATH
+mkdir -p $MONGODB_MOUNT_PATH/db
+MONGODB_LOGS=$MONGODB_MOUNT_PATH.log
+> $MONGODB_LOGS
+echo "[INFO] MONGODB_MOUNT_PATH=$MONGODB_MOUNT_PATH"
+echo "[INFO] MONGODB_LOGS=$MONGODB_LOGS"
 
 if [ "$MONGODB_HOST_PORT" -eq "-1" ]; then
     echo "[INFO] Picking a random port number"
@@ -316,30 +323,30 @@ if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
 else
     if [ "${BUILD_IMAGE,,}" = "true" ]; then
         if [ -e "$SIF_IMAGE_PATH" ]; then
-            echo "[INFO] Using existing sandbox on $SIF_IMAGE_PATH"
+            echo "[INFO] Using existing image on $SIF_IMAGE_PATH"
         else
-            echo "[INFO] Building the sandbox on $SIF_IMAGE_PATH"
-            echo "[INFO] singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
-            singularity build --sandbox $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
+            echo "[INFO] Building the image on $SIF_IMAGE_PATH"
+            echo "[INFO] singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE"
+            singularity build $SIF_IMAGE_PATH docker://$DOCKER_IMAGE
         fi
     fi
-    
+
     echo "[INFO] Starting the singularity instance $INSTANCE_NAME"
-    echo "[INFO] singularity instance start --writable --no-home $SIF_IMAGE_PATH $INSTANCE_NAME"
-    singularity instance start --writable --no-home $SIF_IMAGE_PATH $INSTANCE_NAME
-    
-    echo "[INFO] Cleaning the MongoDB data folder"
-    echo "[INFO] rm -rf $SIF_IMAGE_PATH/data && mkdir -p $SIF_IMAGE_PATH/data/db"
-    rm -rf $SIF_IMAGE_PATH/data && mkdir -p $SIF_IMAGE_PATH/data/db
-    
+    echo "[INFO] singularity instance start --no-home -B $MONGODB_MOUNT_PATH:/data $SIF_IMAGE_PATH $INSTANCE_NAME"
+    singularity instance start --no-home -B $MONGODB_MOUNT_PATH:/data $SIF_IMAGE_PATH $INSTANCE_NAME
+
+    # echo "[INFO] Cleaning the MongoDB data folder"
+    # echo "[INFO] rm -rf $SIF_IMAGE_PATH/data && mkdir -p $SIF_IMAGE_PATH/data/db"
+    # rm -rf $SIF_IMAGE_PATH/data && mkdir -p $SIF_IMAGE_PATH/data/db
+
     echo "[INFO] Running MongoDB"
     export SINGULARITYENV_MONGO_INITDB_ROOT_USERNAME=$MONGODB_USER
     export SINGULARITYENV_MONGO_INITDB_ROOT_PASSWORD=$MONGODB_PASSWORD
-    echo "bash -c nohup singularity run instance://$INSTANCE_NAME mongod --port $MONGODB_HOST_PORT > /tmp/$INSTANCE_NAME.log 2>&1 < /dev/null &"
-    bash -c "nohup singularity run instance://$INSTANCE_NAME mongod --port $MONGODB_HOST_PORT > /tmp/$INSTANCE_NAME.log 2>&1 < /dev/null &"
-    sleep 5
-    cat /tmp/$INSTANCE_NAME.log
-    
+    echo "bash -c nohup singularity run instance://$INSTANCE_NAME mongod --port $MONGODB_HOST_PORT > $MONGODB_LOGS 2>&1 < /dev/null &"
+    bash -c "nohup singularity run instance://$INSTANCE_NAME mongod --port $MONGODB_HOST_PORT > $MONGODB_LOGS 2>&1 < /dev/null &"
+    sleep 10
+    cat $MONGODB_LOGS
+
     if [ "$(singularity instance list | grep "^$INSTANCE_NAME$")" ]; then
         echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
     fi
