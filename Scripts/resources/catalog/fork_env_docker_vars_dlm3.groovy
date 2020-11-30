@@ -34,6 +34,7 @@ if (DOCKER_ENABLED) {
     if (variables.get("DOCKER_IMAGE") != null && !variables.get("DOCKER_IMAGE").isEmpty()) {
         containerName = variables.get("DOCKER_IMAGE")
     }
+
     cmd = []
     cmd.add("docker")
     cmd.add("run")
@@ -56,23 +57,37 @@ if (DOCKER_ENABLED) {
     }
     forkEnvironment.setDockerWindowsToLinux(isWindows)
 
+    paContainerName = System.getProperty("proactive.container.name")
+    isPANodeInContainer = (paContainerName != null && !paContainerName.isEmpty())
+
+    if (isPANodeInContainer) {
+        cmd.add("--volumes-from")
+        cmd.add(paContainerName)
+    }
+
     // Prepare ProActive home volume
     paHomeHost = variables.get("PA_SCHEDULER_HOME")
     paHomeContainer = (isWindows ? forkEnvironment.convertToLinuxPath(paHomeHost) : paHomeHost)
-    cmd.add("-v")
-    cmd.add(paHomeHost + ":" + paHomeContainer)
+    if (!isPANodeInContainer) {
+        cmd.add("-v")
+        cmd.add(paHomeHost + ":" + paHomeContainer)
+    }
     // Prepare working directory (For Dataspaces and serialized task file)
     workspaceHost = localspace
     workspaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(workspaceHost) : workspaceHost)
-    cmd.add("-v")
-    cmd.add(workspaceHost + ":" + workspaceContainer)
+    if (!isPANodeInContainer) {
+        cmd.add("-v")
+        cmd.add(workspaceHost + ":" + workspaceContainer)
+    }
 
     cachespaceHost = cachespace
     cachespaceContainer = (isWindows ? forkEnvironment.convertToLinuxPath(cachespaceHost) : cachespaceHost)
     cachespaceHostFile = new File(cachespaceHost)
     if (cachespaceHostFile.exists() && cachespaceHostFile.canRead()) {
-        cmd.add("-v")
-        cmd.add(cachespaceHost + ":" + cachespaceContainer)
+        if (!isPANodeInContainer) {
+            cmd.add("-v")
+            cmd.add(cachespaceHost + ":" + cachespaceContainer)
+        }
     } else {
         println cachespaceHost + " does not exist or is not readable, access to cache space will be disabled in the container"
     }
@@ -81,8 +96,10 @@ if (DOCKER_ENABLED) {
         // when not on windows, mount and use the current JRE
         currentJavaHome = System.getProperty("java.home")
         forkEnvironment.setJavaHome(currentJavaHome)
-        cmd.add("-v")
-        cmd.add(currentJavaHome + ":" + currentJavaHome)
+        if (!isPANodeInContainer) {
+            cmd.add("-v")
+            cmd.add(currentJavaHome + ":" + currentJavaHome)
+        }
     }
 
     // Prepare container working directory
