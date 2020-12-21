@@ -238,7 +238,7 @@ def predict_api(api_token, model_name, image) -> str:
 
 
 def deploy_api(model_name, model_file) -> str:
-    model_zip_path = MODEL_BASE_PATH + "/new_model.zip"
+    model_zip_path = MODEL_BASE_PATH + str(uuid.uuid4())+".zip"
     api_token = connexion.request.form["api_token"]
     model_name = connexion.request.form["model_name"]
     append = connexion.request.form["append"]
