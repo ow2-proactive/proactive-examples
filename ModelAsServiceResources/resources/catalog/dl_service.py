@@ -20,6 +20,7 @@ import flask
 import requests
 import numpy as np
 import shutil
+import uuid
 #import datetime
 #datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -202,13 +203,16 @@ def predict_api(api_token, model_name, image) -> str:
     if auth_token(api_token):
         model_name = connexion.request.form['model_name']
         image = connexion.request.files["image"]
+        class_names = connexion.request.form['class_names']
+        class_names = class_names.split(",")
         log("[INFO] Calling predict_api", api_token)
-        image.save('/model_as_service/sample_image.png')
+        image_path = '/model_as_service/'+str(uuid.uuid4())+'.png'
+        image.save(image_path)
 
         try:
             model_version = int(connexion.request.form["model_version"])
         except:
-            model_version = utils.get_biggest_deployed_model_version(model_name)
+            model_version = utils.get_newest_deployed_version(model_name)
             pass
 
         model_version_status = utils.check_model_name_version(model_name, model_version)
@@ -216,9 +220,7 @@ def predict_api(api_token, model_name, image) -> str:
         if model_version_status == "version deployed":
             try:
                 #data_preprocessing
-                img = utils.load_image('/model_as_service/sample_image.png')
-        
-                class_names = ['T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot']
+                img = utils.load_image(image_path)
 
                 data = json.dumps({"signature_name": "serving_default", "instances": img.tolist()})
 
@@ -227,7 +229,6 @@ def predict_api(api_token, model_name, image) -> str:
                 json_response = requests.post(prediction_link, data=data, headers=headers)
                 predictions = json.loads(json_response.text)['predictions']
                 return class_names[np.argmax(predictions[0])]
-                #return np.argmax(predictions[0])
             except Exception as e:
                 return log(str(e), api_token)
         else:
