@@ -61,6 +61,8 @@ MODEL_CONFIG_FILE = join(INSTANCE_PATH, 'models.config')
 TRACE_FILE = join(INSTANCE_PATH, 'trace.txt')  # default trace file
 CONFIG_FILE = join(INSTANCE_PATH, 'config.json')  # default config file
 PREDICTIONS_FILE = join(INSTANCE_PATH, 'predictions.csv')  # default predictions file
+TENSORFLOW_SERVER_LOGS_FILE = join(INSTANCE_PATH, 'tensorflow_server.log')  # default tensorflow server file logs
+
 TOKENS = {
     'user': hexlify(os.urandom(16)).decode(),  # api key
     'test': hexlify(os.urandom(16)).decode()
@@ -80,7 +82,6 @@ fernet = Fernet(USER_KEY)
 decrypted_data = fernet.decrypt(encrypted_data)
 message = decrypted_data.decode()
 user_credentials = json.loads(message)
-
 
 # Get proactive server url
 proactive_rest = user_credentials['ciUrl']
@@ -267,7 +268,7 @@ def deploy_api(model_name, model_file) -> str:
             tf_server = subprocess.Popen(["tensorflow_model_server "
                                 "--rest_api_port=$REST_API_PORT "
                                 "--model_config_file_poll_wait_seconds=$CONFIG_FILE_POLL_SECONDS "
-                                "--model_config_file=$MODEL_CONFIG_FILE > server_test.log 2>&1"],
+                                "--model_config_file=$MODEL_CONFIG_FILE > $TENSORFLOW_SERVER_LOGS_FILE 2>&1"],
                                 stdout=subprocess.DEVNULL,
                                 shell=True,
                                 preexec_fn=os.setsid)
@@ -368,7 +369,7 @@ def redeploy_api() -> str:
             tf_server = subprocess.Popen(["tensorflow_model_server "
                                 "--rest_api_port=$REST_API_PORT "
                                 "--model_config_file_poll_wait_seconds=$CONFIG_FILE_POLL_SECONDS "
-                                "--model_config_file=$MODEL_CONFIG_FILE > server_test.log 2>&1"],
+                                "--model_config_file=$MODEL_CONFIG_FILE > $TENSORFLOW_SERVER_LOGS_FILE 2>&1"],
                                 stdout=subprocess.DEVNULL,
                                 shell=True,
                                 preexec_fn=os.setsid)
