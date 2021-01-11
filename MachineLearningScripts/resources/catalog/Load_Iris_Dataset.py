@@ -28,7 +28,7 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-FILE_URL = variables.get("FILE_URL")
+FILE_URL = variables.get("FILE_PATH")
 FILE_DELIMITER = variables.get("FILE_DELIMITER")
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
 
@@ -36,6 +36,7 @@ assert_not_none_not_empty(FILE_URL, "FILE_URL should be defined!")
 assert_not_none_not_empty(FILE_DELIMITER, "FILE_DELIMITER should be defined!")
 
 dataframe = pd.read_csv(FILE_URL, FILE_DELIMITER)
+feature_names=dataframe.columns
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
@@ -46,6 +47,7 @@ print("dataframe id (out): ", dataframe_id)
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
+resultMetadata.put("task.feature_names", feature_names)
 
 # -------------------------------------------------------------
 # Preview results
