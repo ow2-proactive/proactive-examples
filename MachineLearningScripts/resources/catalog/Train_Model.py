@@ -3,7 +3,6 @@
 
 This module contains the Python script for the Train Model task.
 """
-import ssl
 import urllib.request
 import bz2
 import json
@@ -27,11 +26,9 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+
 PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
-if PA_PYTHON_UTILS_URL.startswith('https'):
-    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
-else:
-    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
 global is_nvidia_rapids_enabled, is_not_none_not_empty
 global raiser, get_input_variables, dict_to_obj
@@ -77,7 +74,8 @@ input_variables = {
     'task.dataframe_id': None,
     'task.dataframe_id_train': None,
     'task.algorithm_json': None,
-    'task.label_column': None
+    'task.label_column': None,
+    'task.feature_names': None
 }
 get_input_variables(input_variables)
 
@@ -89,6 +87,9 @@ if input_variables['task.dataframe_id_train'] is not None:
 print("dataframe id (in): ", dataframe_id)
 
 dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
+dataframe = get_and_decompress_dataframe(dataframe_id)
+
+
 
 if NVIDIA_RAPIDS_ENABLED:
     dataframe = cudf.read_json(dataframe_json, orient='split')
@@ -366,6 +367,8 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.model_metadata_id", model_metadata_id)
+resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.feature_names", input_variables['task.feature_names'])
 
 # -----------------------------------------------------------------
 # Explainer shap
