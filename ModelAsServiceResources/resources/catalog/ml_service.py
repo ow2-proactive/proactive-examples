@@ -229,46 +229,46 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
     
     #log("Drifts are: " + json.dumps(drifts, indent = 4) )
     return(json.dumps(drifts))    
-                    
-                    
-    # if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
-    #     # log("The model has an associated metadata")
-    #     model_metadata = pd.read_pickle(CURRENT_META_FILE)
-    #     log("model_metadata:\n" + str(model_metadata), token)
-    #     # log("Calculating data drift measures", token)
-    #     predict_mean = predict_dataframe.mean(axis=0)  # mean
-    #     predict_std = predict_dataframe.std(axis=0)    # standard deviation
-    #     # predict_metadata = pd.DataFrame({'Mean': predict_mean, 'Std': predict_std}).T
-    #     predict_metadata = pd.DataFrame({0: predict_mean, 1: predict_std}).T
-    #     log("predict_metadata:\n" + str(predict_metadata), token)
-    #     size_data = len(model_metadata.columns)
-    #     model_metadata_normal = norm.rvs(
-    #         size=size_data,
-    #         loc=model_metadata.iloc[0],    # mean
-    #         scale=model_metadata.iloc[1])  # std
-    #     predict_metadata_normal = norm.rvs(
-    #         size=size_data,
-    #         loc=predict_metadata.iloc[0],    # mean
-    #         scale=predict_metadata.iloc[1])  # std
-    #     # Wasserstein distance
-    #     score = wasserstein_distance(model_metadata_normal, predict_metadata_normal)
-    #     log("Wasserstein distance: " + str(score), token)
-    #     # Data drift detection
-    #     DRIFT_THRESHOLD = get_config('DRIFT_THRESHOLD')
-    #     log("Drift threshold was set to: " + str(DRIFT_THRESHOLD), token)
-    #     # Send web notification alerts
-    #     if DRIFT_THRESHOLD is not None and score > DRIFT_THRESHOLD:
-    #         log("Data drift detected!", token)
-    #         if get_config('DRIFT_NOTIFICATION'):
-    #             log("Sending a web notification", token)
-    #             message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
-    #             if submit_web_notification(message, token):
-    #                 log("Web notification sent!")
-    #             else:
-    #                 log("Error occurred while sending a web notification")
-    # else:
-    #     log("Model metadata not found")
-
+    # the code below is kept in case we need to use model metadata again in DDD              
+     """               
+      if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
+         # log("The model has an associated metadata")
+         model_metadata = pd.read_pickle(CURRENT_META_FILE)
+         log("model_metadata:\n" + str(model_metadata), token)
+         # log("Calculating data drift measures", token)
+         predict_mean = predict_dataframe.mean(axis=0)  # mean
+         predict_std = predict_dataframe.std(axis=0)    # standard deviation
+         # predict_metadata = pd.DataFrame({'Mean': predict_mean, 'Std': predict_std}).T
+         predict_metadata = pd.DataFrame({0: predict_mean, 1: predict_std}).T
+         log("predict_metadata:\n" + str(predict_metadata), token)
+         size_data = len(model_metadata.columns)
+         model_metadata_normal = norm.rvs(
+             size=size_data,
+             loc=model_metadata.iloc[0],    # mean
+             scale=model_metadata.iloc[1])  # std
+         predict_metadata_normal = norm.rvs(
+             size=size_data,
+             loc=predict_metadata.iloc[0],    # mean
+             scale=predict_metadata.iloc[1])  # std
+         # Wasserstein distance
+         score = wasserstein_distance(model_metadata_normal, predict_metadata_normal)
+         log("Wasserstein distance: " + str(score), token)
+         # Data drift detection
+         DRIFT_THRESHOLD = get_config('DRIFT_THRESHOLD')
+         log("Drift threshold was set to: " + str(DRIFT_THRESHOLD), token)
+         # Send web notification alerts
+         if DRIFT_THRESHOLD is not None and score > DRIFT_THRESHOLD:
+             log("Data drift detected!", token)
+             if get_config('DRIFT_NOTIFICATION'):
+                 log("Sending a web notification", token)
+                 message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
+                 if submit_web_notification(message, token):
+                     log("Web notification sent!")
+                 else:
+                     log("Error occurred while sending a web notification")
+     else:
+         log("Model metadata not found")
+     """
 def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables={}, token=""):
     result = False
     try:
