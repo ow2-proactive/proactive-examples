@@ -200,7 +200,7 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
                     if(i>=window):
                     	detected_drifts_indices.append(i-window)
         
-        if(detector=="Page Hinkley"):
+        elif(detector=="Page Hinkley"):
             ph = PageHinkley()
             for i in range(len(overall_dataframe[feature])):
                 ph.add_element(float(overall_dataframe[feature][i]))
@@ -209,14 +209,16 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
                     	detected_drifts_indices.append(i-window)
 
 
-        if(detector=="ADWIN"):
+        elif(detector=="ADWIN"):
             adwin = ADWIN()
             for i in range(len(overall_dataframe[feature])):
                 adwin.add_element(float(overall_dataframe[feature][i]))
                 if adwin.detected_change():
                     if(i>=window):
                     	detected_drifts_indices.append(i-window)
-
+       
+        else:
+            log("No such detector. Please choose from HDDM, Page Hinkley, or ADWIN")
                     
         
         if(len(detected_drifts_indices) != 0):
