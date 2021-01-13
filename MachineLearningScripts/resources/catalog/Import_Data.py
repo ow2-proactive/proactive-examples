@@ -102,7 +102,6 @@ if data_type_identification_enabled:
             data = original_data.copy(deep=True)
             for column in data.columns:
                 try:    
-                    print("- Feature *{}* treated".format(column))
                     data = data.astype({column: pd.Int64Dtype()})
                 except TypeError:
                     pass     
@@ -171,7 +170,8 @@ if data_type_identification_enabled:
             # Label our predictions: 0 represents "categorical" and 1 represents "numerical"
             labeled_predictions = self.label_predictions(predictions, mappings)
             # Summarize everything in a dataframe
-            final_predictions = pd.DataFrame(labeled_predictions, columns=["Predictions"], index=data.columns)
+            final_predictions = pd.DataFrame(labeled_predictions, columns=["Data type prediction"], index=data.columns)
+            print(final_predictions)
             return final_predictions
 
         def load_variables(self, path):
