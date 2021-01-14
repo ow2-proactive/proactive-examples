@@ -44,7 +44,7 @@ def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 # Environment variables
 INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not None else "/model_as_service"
-MODEL_BASE_PATH = os.getenv('MODEL_BASE_PATH') if os.getenv('MODEL_BASE_PATH') is not None else "/tmp"
+MODEL_SAVE_PATH = join(INSTANCE_PATH, "tmp")
 PROMETHEUS_SERVICE_INTERNAL_PORT = os.getenv('PROMETHEUS_SERVICE_INTERNAL_PORT') if os.getenv('PROMETHEUS_SERVICE_INTERNAL_PORT') is not None else "9091"
 CONFIG_FILE_POLL_SECONDS = os.getenv('CONFIG_FILE_POLL_SECONDS') if os.getenv('CONFIG_FILE_POLL_SECONDS') is not None else "30"
 DEBUG_ENABLED = os.getenv('DEBUG_ENABLED') if os.getenv('DEBUG_ENABLED') is not None else False
@@ -53,6 +53,8 @@ HTTPS_ENABLED = os.getenv('HTTPS_ENABLED') if os.getenv('HTTPS_ENABLED') is not 
 
 os.environ['REST_API_PORT'] = "8501"
 os.environ['MODEL_CONFIG_FILE'] = join(INSTANCE_PATH, 'models.config')
+os.environ['TENSORFLOW_SERVER_LOGS_FILE'] = join(INSTANCE_PATH, 'tensorflow_server.log')
+os.environ['MODEL_SAVE_PATH'] = join(INSTANCE_PATH, MODEL_SAVE_PATH)
 
 # General parameters
 REST_API_PORT = 8501
@@ -61,7 +63,6 @@ MODEL_CONFIG_FILE = join(INSTANCE_PATH, 'models.config')
 TRACE_FILE = join(INSTANCE_PATH, 'trace.txt')  # default trace file
 CONFIG_FILE = join(INSTANCE_PATH, 'config.json')  # default config file
 PREDICTIONS_FILE = join(INSTANCE_PATH, 'predictions.csv')  # default predictions file
-TENSORFLOW_SERVER_LOGS_FILE = join(INSTANCE_PATH, 'tensorflow_server.log')  # default tensorflow server file logs
 
 TOKENS = {
     'user': hexlify(os.urandom(16)).decode(),  # api key
@@ -239,12 +240,12 @@ def predict_api(api_token, model_name, image) -> str:
 
 
 def deploy_api(model_name, model_file) -> str:
-    model_zip_path = MODEL_BASE_PATH + str(uuid.uuid4())+".zip"
+    model_zip_path = os.environ['MODEL_SAVE_PATH'] + str(uuid.uuid4())+".zip"
     api_token = connexion.request.form["api_token"]
     model_name = connexion.request.form["model_name"]
     append = connexion.request.form["append"]
     model_file = connexion.request.files["model_file"]
-    model_download_path = MODEL_BASE_PATH + "/" + model_name
+    model_download_path = os.environ['MODEL_SAVE_PATH'] + "/" + model_name
     download_model = True
 
     #if model_version is empty, model_version will be set on None
@@ -380,7 +381,7 @@ def redeploy_api() -> str:
         pass
         model_name = connexion.request.form["model_name"]
         append = connexion.request.form["append"]
-        model_download_path = MODEL_BASE_PATH + "/" + model_name
+        model_download_path = os.environ['MODEL_SAVE_PATH'] + "/" + model_name
         
         #Model Versionning Management
         # if model_version was not specified, it will be set by default as "the latest model_version number + 1"
@@ -446,9 +447,9 @@ def list_saved_models(json_response) -> str:
     if auth_token(api_token):
         json_response = connexion.request.form["json_response"]
         if json_response == "true":
-            model_download_path = 'tree -J '+ MODEL_BASE_PATH
+            model_download_path = 'tree -J '+ os.environ['MODEL_SAVE_PATH']
         else:
-            model_download_path = 'tree '+ MODEL_BASE_PATH
+            model_download_path = 'tree '+ os.environ['MODEL_SAVE_PATH']
         tree_model_download_path = os.popen(model_download_path).read()
         return tree_model_download_path
     else:
@@ -459,7 +460,7 @@ def clean_saved_models(model_name) -> str:
     log("[INFO] Cleaning the downloaded models", api_token)
     if auth_token(api_token):
         model_name = connexion.request.form["model_name"]
-        model_path = os.environ['MODEL_BASE_PATH'] + "/" + model_name
+        model_path = os.environ['MODEL_SAVE_PATH'] + "/" + model_name
         try:
             model_version = int(connexion.request.form["model_version"])
         except:
