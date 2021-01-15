@@ -91,7 +91,6 @@ print("dataframe id (in): ", dataframe_id)
 
 dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
 
-
 if NVIDIA_RAPIDS_ENABLED:
     dataframe = cudf.read_json(dataframe_json, orient='split')
 else:
