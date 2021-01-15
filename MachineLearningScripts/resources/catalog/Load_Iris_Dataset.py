@@ -57,7 +57,7 @@ if IMPORT_FROM.upper() == "PA:GLOBAL_FILE":
     globalspaceapi.pullFile(FILE_PATH, out_file)
 
 dataframe = pd.read_csv(FILE_PATH, FILE_DELIMITER)
-feature_names=dataframe.columns
+feature_names = dataframe.columns
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
