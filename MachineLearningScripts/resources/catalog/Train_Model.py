@@ -77,7 +77,8 @@ input_variables = {
     'task.dataframe_id': None,
     'task.dataframe_id_train': None,
     'task.algorithm_json': None,
-    'task.label_column': None
+    'task.label_column': None,
+    'task.feature_names': None
 }
 get_input_variables(input_variables)
 
@@ -366,7 +367,8 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.model_metadata_id", model_metadata_id)
-
+resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.feature_names", input_variables['task.feature_names'])
 # -----------------------------------------------------------------
 # Explainer shap
 #

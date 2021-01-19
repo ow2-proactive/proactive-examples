@@ -6,7 +6,17 @@ import pandas as pd
 
 def raiser(msg): raise Exception(msg)
 
-
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, preview_dataframe_in_task_result
+global compress_and_transfer_dataframe_in_variables
+global assert_not_none_not_empty, assert_valid_float
+global assert_between, get_input_variables
+global get_and_decompress_dataframe
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
@@ -24,11 +34,14 @@ API_PREDICT_ENDPOINT = API_ENDPOINT + API_PREDICT
 print("API_PREDICT_ENDPOINT: ", API_PREDICT_ENDPOINT)
 
 INPUT_DATA = variables.get("INPUT_DATA")
+DATA_DRIFT_DETECTOR = variables.get("DATA_DRIFT_DETECTOR")
 
 input_variables = {
     'task.dataframe_id_test': None,
     'task.dataframe_id': None,
-    'task.label_column': None
+    'task.label_column': None,
+    'task.feature_names': None,
+    'task.dataframe_sampled_id': None
 }
 for key in input_variables.keys():
     for res in results:
@@ -45,6 +58,12 @@ else:
     LABEL_COLUMN = input_variables['task.label_column']
     if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
         is_labeled_data = True
+        
+        
+dataframe_sampled_id = input_variables['task.dataframe_sampled_id']
+dataframe_sampled = get_and_decompress_dataframe(dataframe_sampled_id) 
+print(dataframe_sampled)
+dataframe_sampled_json = dataframe_sampled.to_json(orient='values') 
 
 dataframe_columns_name = None
 if input_variables['task.dataframe_id_test'] is not None:
@@ -79,14 +98,20 @@ else:
     raiser("There is no input data")
 
 headers = {'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}
-data = {'dataframe_json': dataframe_json, 'api_token': SERVICE_TOKEN}
+data = {'predict_dataframe_json': dataframe_json, 'api_token': SERVICE_TOKEN, 'detector': DATA_DRIFT_DETECTOR}
 data_json = json.dumps(data)
 req = requests.post(API_PREDICT_ENDPOINT, data=data_json, headers=headers, verify=False)
 
-predictions = json.loads(req.text)
-print("predictions:\n", predictions)
+#predictions = json.loads(req.text)
+#print("predictions:\n", predictions)
+response = json.loads(req.text)
+predict_and_drifts = json.loads(response)
+predictions = predict_and_drifts["predictions"]
+print("predictions :\n", predictions)
+drifts = predict_and_drifts["drifts"]
+print("drifts :\n", drifts)
 
-predictions = pd.read_json(predictions, orient='records')
+#predictions = pd.read_json(predictions, orient='records')
 df_dataframe = pd.read_json(dataframe_json, orient='records')
 if dataframe_columns_name is not None:
     df_dataframe.columns = list(dataframe_columns_name)
