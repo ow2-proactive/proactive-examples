@@ -2,7 +2,7 @@ import bz2
 import json
 import requests
 import pandas as pd
-
+import urllib.request
 
 def raiser(msg): raise Exception(msg)
 
