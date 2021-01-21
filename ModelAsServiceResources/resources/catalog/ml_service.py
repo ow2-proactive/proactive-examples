@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # import os, sys, bz2, uuid, pickle, json, connexion, wget
-# import numpy as np
+import numpy
 import os
 import sys
 import glob
@@ -21,12 +21,18 @@ from flask_cors import CORS
 from joblib import load
 from flask import jsonify
 from tempfile import TemporaryFile
+from json import JSONEncoder
 
 from scipy.stats import norm
 from scipy.stats import wasserstein_distance
 from urllib.parse import quote
 from distutils.util import strtobool
 
+class NumpyArrayEncoder(JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, numpy.ndarray):
+            return obj.tolist()
+        return JSONEncoder.default(self, obj)
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -44,6 +50,15 @@ except ImportError:
 #     install('json2html')
 #     from json2html import *
 
+try:
+    from skmultiflow.drift_detection.hddm_w import HDDM_W
+except ImportError:
+    install('scikit-multiflow')
+    from skmultiflow.drift_detection.hddm_w import HDDM_W
+
+from skmultiflow.drift_detection import PageHinkley
+from skmultiflow.drift_detection.adwin import ADWIN
+
 
 # Environment variables
 INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not None else None
@@ -55,6 +70,7 @@ MODEL_FILE_EXT = '.model'
 META_FILE_EXT = '.meta'
 CURRENT_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + MODEL_FILE_EXT)  # default model path
 CURRENT_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + META_FILE_EXT)    # default meta path
+CURRENT_BASELINE_DATA = join(UPLOAD_MODELS_FOLDER, 'baseline_data' + '.csv') # baseline data path
 TRACE_FILE = join(UPLOAD_MODELS_FOLDER, 'trace.txt')  # default trace file
 CONFIG_FILE = join(UPLOAD_MODELS_FOLDER, 'config.json')  # default config file
 PREDICTIONS_FILE = join(UPLOAD_MODELS_FOLDER, 'predictions.csv')  # default predictions file
@@ -143,9 +159,73 @@ def log(message, token=""):
         datetime_str = dt.today().strftime('%Y-%m-%d %H:%M:%S')
         print(datetime_str, token, message)
     return message
+    
+ 
+def dumper(obj):
+    try:
+        return obj.toJSON()
+    except:
+        return obj.__dict__
 
 
-def perform_drift_detection(predict_dataframe, token=""):
+def perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, token="") -> str :
+
+    log("calling perform_drift_detection", token)
+    log("data drift detection method: " + detector)
+    
+    baseline_data=dataframe.values.tolist()
+    predict_data=predict_dataframe.values.tolist()
+    
+    overall_data=list()
+    for a in baseline_data:
+        overall_data.append(a)
+    for b in predict_data:
+        overall_data.append(b)
+
+    
+    
+    overall_dataframe = pd.DataFrame(overall_data, columns=feature_names)
+    drifts=dict()
+    window=len(baseline_data)
+    for feature in feature_names:
+        
+        detected_drifts_indices=list()
+
+        if(detector=="HDDM"):
+            hddm_w = HDDM_W()
+            for i in range(len(overall_dataframe[feature])):
+                hddm_w.add_element(float(overall_dataframe[feature][i]))
+                if hddm_w.detected_change():
+                    if(i>=window):
+                    	detected_drifts_indices.append(i-window)
+        
+        if(detector=="Page Hinkley"):
+            ph = PageHinkley()
+            for i in range(len(overall_dataframe[feature])):
+                ph.add_element(float(overall_dataframe[feature][i]))
+                if ph.detected_change():
+                    if(i>=window):
+                    	detected_drifts_indices.append(i-window)
+
+
+        if(detector=="ADWIN"):
+            adwin = ADWIN()
+            for i in range(len(overall_dataframe[feature])):
+                adwin.add_element(float(overall_dataframe[feature][i]))
+                if adwin.detected_change():
+                    if(i>=window):
+                    	detected_drifts_indices.append(i-window)
+
+                    
+        
+        if(len(detected_drifts_indices) != 0):
+            log("Data drift detected in feature: " + feature)
+            log("The drifted rows are: " + str(detected_drifts_indices))
+            drifts[feature] = detected_drifts_indices
+    return(json.dumps(drifts))
+    
+    #this code is commented in case needed in future for drift detection
+    """
     log("calling perform_drift_detection", token)
     if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
         # log("The model has an associated metadata")
@@ -184,7 +264,7 @@ def perform_drift_detection(predict_dataframe, token=""):
                     log("Error occurred while sending a web notification")
     else:
         log("Model metadata not found")
-
+    """
 
 def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables={}, token=""):
     result = False
@@ -273,26 +353,45 @@ def get_token_api(user) -> str:
 
 
 def predict_api(data: str) -> str:
+    predict_drifts = dict()
+    drifts_json = "No baseline data added for the drift detection."
     api_token = data['api_token']
     log("calling predict_api", api_token)
+    detector = data['detector']
+    dataframe = pd.DataFrame()
+    feature_names = list()
+    if exists(CURRENT_BASELINE_DATA): #and isfile(CURRENT_BASELINE_DATA):
+    	dataframe = pd.read_csv(CURRENT_BASELINE_DATA)
+    if(dataframe.empty == False):
+    	feature_names=dataframe.columns
+
     if auth_token(api_token):
         if exists(CURRENT_MODEL_FILE) and isfile(CURRENT_MODEL_FILE):
             try:
-                dataframe_json = data['dataframe_json']
-                dataframe = pd.read_json(dataframe_json, orient='values')
+                #dataframe_json = data['dataframe_json']
+                #dataframe = pd.read_json(dataframe_json, orient='values')
+                predict_dataframe_json = data['predict_dataframe_json']
+                predict_dataframe = pd.read_json(predict_dataframe_json, orient='values')
+                
                 if get_config('DRIFT_ENABLED'):
-                    perform_drift_detection(dataframe, api_token)
+                    if(dataframe.empty == False):
+                    	drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, api_token)
+                else:
+                    drifts_json="Drift detection is not enabled."
+                    
                 model = load(CURRENT_MODEL_FILE)
                 log("model:\n" + str(model))
                 log("dataframe:\n" + str(dataframe.head()))
-                predictions = model.predict(dataframe.values)
+                predictions = model.predict(predict_dataframe.values)
                 if get_config('LOG_PREDICTIONS'):
                     log("Logging predictions")
-                    dataframe_predictions = dataframe.assign(predictions=predictions)
+                    dataframe_predictions = predict_dataframe.assign(predictions=predictions)
                     dataframe_predictions.to_csv(PREDICTIONS_FILE, header=False, index=False, mode="a")
                     log("Done")
                 log("Model predictions done", api_token)
-                return json.dumps(list(predictions))
+                predict_drifts['predictions'] = list(predictions)
+                predict_drifts['drifts'] = drifts_json
+                return json.dumps(predict_drifts) 
             except Exception as e:
                 return log(str(e), api_token)
         else:
@@ -309,6 +408,10 @@ def deploy_api() -> str:
         model_file = connexion.request.files['model_file']
         model_file.save(CURRENT_MODEL_FILE)
         log("The new model file was deployed successfully at:\n" + CURRENT_MODEL_FILE)
+        if "baseline_data" in connexion.request.files:
+        	baseline_data = connexion.request.files['baseline_data']
+        	baseline_data.save(CURRENT_BASELINE_DATA)
+            #log("The new baseline data file was deployed successfully at:\n" + CURRENT_BASELINE_DATA)
         # Check if model metadata exists and save it
         if "model_metadata_json" in connexion.request.form:
             log("Adding model metadata")
@@ -320,6 +423,7 @@ def deploy_api() -> str:
             log("model_metadata:\n" + str(model_metadata), api_token)
             model_metadata.to_pickle(CURRENT_META_FILE)
             log("The new model metadata file was saved successfully at:\n" + CURRENT_META_FILE)
+
         # Check if debug is enabled
         if "debug_enabled" in connexion.request.form:
             debug_enabled = connexion.request.form['debug_enabled']
