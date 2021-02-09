@@ -2,8 +2,12 @@ import com.google.common.base.Splitter;
 
 signals = args[0]
 
-signalsList = Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals)
+Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
 
-println("Waiting for signal "+ signalsList)
+println("Waiting for signal "+ signalsSet)
 
-signalapi.waitForAny(signalsList)
+signalapi.waitForAny(signalsSet)
+
+
+
+
