@@ -186,10 +186,13 @@ if (CONTAINER_ENABLED && (
 
     paContainerName = System.getProperty("proactive.container.name")
     isPANodeInContainer = (paContainerName != null && !paContainerName.isEmpty())
+    paContainerHostAddress = System.getProperty("proactive.container.host.address")
 
     if (isPANodeInContainer) {
         cmd.add("--volumes-from")
         cmd.add(paContainerName)
+        cmd.add("--add-host")
+        cmd.add("service-node:" + paContainerHostAddress)
     }
 
     // Prepare ProActive home volume
@@ -243,10 +246,8 @@ if (CONTAINER_ENABLED && (
     if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
         mountLogHost = HOST_LOG_PATH
         logPathContainer = CONTAINER_LOG_PATH
-        if (!isPANodeInContainer) {
-            cmd.add("-v")
-            cmd.add(mountLogHost + ":" + logPathContainer)
-        }
+        cmd.add("-v")
+        cmd.add(mountLogHost + ":" + logPathContainer)
     }
 
     // Prepare container working directory

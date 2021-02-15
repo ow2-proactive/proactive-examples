@@ -138,10 +138,13 @@ if (DOCKER_ENABLED) {
 
     paContainerName = System.getProperty("proactive.container.name")
     isPANodeInContainer = (paContainerName != null && !paContainerName.isEmpty())
+    paContainerHostAddress = System.getProperty("proactive.container.host.address")
 
     if (isPANodeInContainer) {
         cmd.add("--volumes-from")
         cmd.add(paContainerName)
+        cmd.add("--add-host")
+        cmd.add("service-node:" + paContainerHostAddress)
     }
 
     // Prepare ProActive home volume
@@ -186,10 +189,8 @@ if (DOCKER_ENABLED) {
     if (MOUNT_LOG_PATH && DOCKER_LOG_PATH) {
         mountLogHost = MOUNT_LOG_PATH
         logPathContainer = DOCKER_LOG_PATH
-        if (!isPANodeInContainer) {
-            cmd.add("-v")
-            cmd.add(mountLogHost + ":" + logPathContainer)
-        }
+        cmd.add("-v")
+        cmd.add(mountLogHost + ":" + logPathContainer)
     }
 
     sharedDirectory = new File("/shared")

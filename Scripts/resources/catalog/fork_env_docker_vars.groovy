@@ -56,10 +56,13 @@ if (DOCKER_ENABLED) {
 
     paContainerName = System.getProperty("proactive.container.name")
     isPANodeInContainer = (paContainerName != null && !paContainerName.isEmpty())
+    paContainerHostAddress = System.getProperty("proactive.container.host.address")
 
     if (isPANodeInContainer) {
         cmd.add("--volumes-from")
         cmd.add(paContainerName)
+        cmd.add("--add-host")
+        cmd.add("service-node:" + paContainerHostAddress)
     }
 
     // Prepare ProActive home volume
