@@ -19,8 +19,10 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBaseP
 def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId).getInstanceStatus()
 if (currentStatus.equals("FINISHED")){
     variables.put("IS_FINISHED",true)
-    schedulerapi.connect()
-    schedulerapi.removeThirdPartyCredential(credentialsKey)
+    if(credentialsKey){
+        schedulerapi.connect()
+        schedulerapi.removeThirdPartyCredential(credentialsKey)
+    }
     synchronizationapi.deleteChannel(channel)
     // Remove token in the current node
     token = instanceName
