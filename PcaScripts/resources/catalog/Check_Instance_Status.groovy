@@ -6,6 +6,7 @@ def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 def channel = "Service_Instance_" + instanceId
+def credentialsKey = variables.get("CREDENTIALS_KEY")
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()
@@ -18,6 +19,10 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBaseP
 def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId).getInstanceStatus()
 if (currentStatus.equals("FINISHED")){
     variables.put("IS_FINISHED",true)
+    if(credentialsKey){
+        schedulerapi.connect()
+        schedulerapi.removeThirdPartyCredential(credentialsKey)
+    }
     synchronizationapi.deleteChannel(channel)
     // Remove token in the current node
     token = instanceName
