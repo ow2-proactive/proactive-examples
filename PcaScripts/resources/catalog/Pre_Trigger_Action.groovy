@@ -11,6 +11,8 @@ def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def channel = "Service_Instance_" + instanceId
 def instanceName = synchronizationapi.get(channel, "INSTANCE_NAME")
 variables.put("INSTANCE_NAME", instanceName)
+def credentialsKey = synchronizationapi.get(channel, "CREDENTIALS_KEY")
+variables.put("CREDENTIALS_KEY", credentialsKey)
 
 // Inform other platforms that service is running through Synchronization API
 if(action.equals("RESUME_LAUNCHED")){
