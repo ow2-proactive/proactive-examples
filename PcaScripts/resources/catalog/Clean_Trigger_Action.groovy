@@ -10,6 +10,7 @@ import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 // Acquire variables
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
+def credentialsKey = variables.get("CREDENTIALS_KEY")
 
 // Handle service parameters
 def hostname = variables.get("PA_NODE_HOST")
@@ -20,6 +21,7 @@ def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-servic
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()
+schedulerapi.removeThirdPartyCredential(credentialsKey)
 def sessionId = schedulerapi.getSession()
 
 // Connect to Cloud Automation API
