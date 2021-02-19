@@ -17,7 +17,7 @@ def hostname = variables.get("PA_NODE_HOST")
 
 // Determine Cloud Automation URL
 def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/cloud-automation-service")
+def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/service-automation-service")
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()
