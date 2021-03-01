@@ -20,10 +20,21 @@ def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId,
 if (currentStatus.equals("FINISHED")){
     variables.put("IS_FINISHED",true)
     if(credentialsKey){
-        schedulerapi.connect()
         schedulerapi.removeThirdPartyCredential(credentialsKey)
     }
     synchronizationapi.deleteChannel(channel)
+
+    // detach service to the current and parent job
+    schedulerapi.detachService(variables.get("PA_JOB_ID"), instanceId as int)
+    if (genericInformation.containsKey("PARENT_JOB_ID") && !schedulerapi.isJobFinished(genericInformation.get("PARENT_JOB_ID"))) {
+        try {
+            schedulerapi.detachService(genericInformation.get("PARENT_JOB_ID"), instanceId as int)
+        } catch (Exception e) {
+            // for the rare case where parent job just terminated
+            printn "WARN: could not detach service from job " + genericInformation.get("PARENT_JOB_ID") + " : " + e.getMessage()
+        }
+    }
+
     // Remove token in the current node
     token = instanceName
     nodeUrl = variables.get("PA_NODE_URL")
