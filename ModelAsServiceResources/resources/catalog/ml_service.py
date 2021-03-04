@@ -186,25 +186,22 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
             hddm_w = HDDM_W()
             for i in range(len(overall_dataframe[feature])):
                 hddm_w.add_element(float(overall_dataframe[feature][i]))
-                if hddm_w.detected_change():
-                    if i >= window:
-                        detected_drifts_indices.append(i-window)
+                if hddm_w.detected_change() and i >= window:
+                    detected_drifts_indices.append(i-window)
         # Page Hinkley
         if detector == "Page Hinkley":
             ph = PageHinkley()
             for i in range(len(overall_dataframe[feature])):
                 ph.add_element(float(overall_dataframe[feature][i]))
-                if ph.detected_change():
-                    if i >= window:
-                        detected_drifts_indices.append(i-window)
+                if ph.detected_change() and i >= window:
+                    detected_drifts_indices.append(i-window)
         # ADWIN
         if detector == "ADWIN":
             adwin = ADWIN()
             for i in range(len(overall_dataframe[feature])):
                 adwin.add_element(float(overall_dataframe[feature][i]))
-                if adwin.detected_change():
-                    if i >= window:
-                        detected_drifts_indices.append(i-window)
+                if adwin.detected_change() and i >= window:
+                    detected_drifts_indices.append(i-window)
         # Check for detected drifts
         if len(detected_drifts_indices) != 0:
             log("Data drift detected in feature: " + feature)
