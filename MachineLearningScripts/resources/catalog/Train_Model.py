@@ -246,9 +246,11 @@ if alg.is_supervised:
             from sklearn.linear_model import LinearRegression
             model = LinearRegression(**alg.input_variables.__dict__)
     elif alg.name == 'SupportVectorRegression':
-        from sklearn.svm import SVR
+        if NVIDIA_RAPIDS_ENABLED:
+            from cuml.svm import SVR
+        else:
+            from sklearn.svm import SVR
         model = SVR(**alg.input_variables.__dict__)
-        warn_not_gpu_support(alg)
     elif alg.name == 'BayesianRidgeRegression':
         from sklearn.linear_model import BayesianRidge
         model = BayesianRidge(**alg.input_variables.__dict__)
@@ -335,12 +337,16 @@ if model is not None:
         # Check if cv score should be calculated for the AutoML workflow
         #
         if alg.automl:
-            CV = int(variables.get("N_SPLITS")) if variables.get("N_SPLITS") is not None else 5
-            scores = cross_val_score(model, dataframe_train, dataframe_label, cv=CV, scoring=alg.scoring)
-            if alg.type == 'classification' or alg.type == 'anomaly':
-                loss = 1 - np.mean(scores)
-            if alg.type == 'regression':
-                loss = np.abs(np.mean(scores))
+            if NVIDIA_RAPIDS_ENABLED and alg.type == 'regression':
+                print("[Warning] The loss could not be calculated using cross_val_score on GPU for regression "
+                      "algorithms!")
+            else:
+                CV = int(variables.get("N_SPLITS")) if variables.get("N_SPLITS") is not None else 5
+                scores = cross_val_score(model, dataframe_train, dataframe_label, cv=CV, scoring=alg.scoring)
+                if alg.type == 'classification' or alg.type == 'anomaly':
+                    loss = 1 - np.mean(scores)
+                if alg.type == 'regression':
+                    loss = np.abs(np.mean(scores))
         # -------------------------------------------------------------
         # Check if model explainer can be used
         #
