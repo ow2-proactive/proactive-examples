@@ -15,8 +15,7 @@ import shap
 import numpy as np
 import pandas as pd
 
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import StratifiedKFold
+# from packaging import version
 
 global variables, resultMetadata, resultMap
 
@@ -50,25 +49,41 @@ print('NVIDIA_RAPIDS_ENABLED: ', NVIDIA_RAPIDS_ENABLED)
 
 if NVIDIA_RAPIDS_ENABLED:
     import cudf
+    # import cuml
+    # import cupy as cp
 
     def cross_val_score(clf, X, y, cv=3, scoring=None):
+        from sklearn.model_selection import StratifiedKFold
+        # from sklearn.model_selection import KFold
+        from cupy import asnumpy
+        from cuml.metrics import accuracy_score
         kf = StratifiedKFold(cv)
+        # kf = KFold(cv)
         acc_scores = []
         i = 0
-        for train_index, test_index in kf.split(X, y):
-            X_train, X_test = X[train_index], X[test_index]
-            y_train, y_test = y[train_index], y[test_index]
+        # for train_index, test_index in kf.split(X):
+        for train_index, test_index in kf.split(X, asnumpy(y)):
+            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+            # X_train, X_test = X[train_index], X[test_index]
+            # y_train, y_test = y[train_index], y[test_index]
             try:
-                clf.fit(X_train, y_train)
+                clf.fit(X_train, y_train, convert_dtype=True)
             except:
-                clf.fit(X_train)
+                clf.fit(X_train, y_train)
             y_pred = clf.predict(X_test)
-            acc_score = accuracy_score(y_test, y_pred.to_pandas())
+            acc_score = accuracy_score(y_test, y_pred)
             acc_scores.append(acc_score)
             i += 1
         return acc_scores
 else:
     from sklearn.model_selection import cross_val_score
+
+
+def warn_not_gpu_support(alg):
+    if NVIDIA_RAPIDS_ENABLED:
+        print(alg.name + " not supported on GPU!")
+
 
 # -------------------------------------------------------------
 # Get data from the propagated variables
@@ -128,6 +143,7 @@ if alg.is_supervised:
             scoring=alg.scoring,
             verbosity=alg.verbosity
         )
+        warn_not_gpu_support(alg)
     elif alg.name == 'AutoSklearn_Classifier':
         from autosklearn import classification
         if alg.sampling:
@@ -142,34 +158,58 @@ if alg.is_supervised:
                 time_left_for_this_task=alg.task_time,
                 per_run_time_limit=alg.run_time
             )
+        warn_not_gpu_support(alg)
     elif alg.name == 'SupportVectorMachines':
-        from sklearn.svm import SVC
+        if NVIDIA_RAPIDS_ENABLED:
+            from cuml.svm import SVC
+        else:
+            from sklearn.svm import SVC
         model = SVC(**alg.input_variables.__dict__)
     elif alg.name == 'GaussianNaiveBayes':
         from sklearn.naive_bayes import GaussianNB
         model = GaussianNB(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'LogisticRegression':
-        from sklearn.linear_model import LogisticRegression
+        if NVIDIA_RAPIDS_ENABLED:
+            # nvidia rapids version should be higher than v0.13
+            # if version.parse(cuml.__version__) > version.parse("0.13"):
+            from cuml.linear_model import LogisticRegression
+        else:
+            from sklearn.linear_model import LogisticRegression
         model = LogisticRegression(**alg.input_variables.__dict__)
     elif alg.name == 'AdaBoost' and alg.type == 'classification':
         from sklearn.ensemble import AdaBoostClassifier
         model = AdaBoostClassifier(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'GradientBoosting' and alg.type == 'classification':
         from sklearn.ensemble import GradientBoostingClassifier
         model = GradientBoostingClassifier(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'RandomForest' and alg.type == 'classification':
         if NVIDIA_RAPIDS_ENABLED:
             from cuml.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(**alg.input_variables.__dict__)
         else:
             from sklearn.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(**alg.input_variables.__dict__)
+        model = RandomForestClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'XGBoost' and alg.type == 'classification':
         from xgboost.sklearn import XGBClassifier
-        model = XGBClassifier(**alg.input_variables.__dict__)
+        """
+        Note from NVIDIA RAPIDS >= 0.17 (no error for == 0.13)
+        ValueError: The option use_label_encoder=True is incompatible with inputs of type cuDF or cuPy. 
+        Please set use_label_encoder=False when constructing XGBClassifier object. 
+        NOTE: The use of label encoder in XGBClassifier is deprecated and will be removed in a future release. 
+        To remove this warning, do the following: 
+        1) Pass option use_label_encoder=False when constructing XGBClassifier object; and 
+        2) Encode your labels (y) as integers starting with 0, i.e. 0, 1, 2, ..., [num_class - 1]
+        """
+        if NVIDIA_RAPIDS_ENABLED:
+            model = XGBClassifier(**alg.input_variables.__dict__, use_label_encoder=False, tree_method="gpu_hist")
+        else:
+            model = XGBClassifier(**alg.input_variables.__dict__)
     elif alg.name == 'CatBoost' and alg.type == 'classification':
         from catboost import CatBoostClassifier
         model = CatBoostClassifier(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
 
     # -------------------------------------------------------------
     # Regression algorithms
@@ -182,6 +222,7 @@ if alg.is_supervised:
             scoring=alg.scoring,
             verbosity=alg.verbosity
         )
+        warn_not_gpu_support(alg)
     elif alg.name == 'AutoSklearn_Regressor':
         from autosklearn import regression
         if alg.sampling:
@@ -196,6 +237,7 @@ if alg.is_supervised:
                 time_left_for_this_task=alg.task_time,
                 per_run_time_limit=alg.run_time
             )
+        warn_not_gpu_support(alg)
     elif alg.name == 'LinearRegression':
         if NVIDIA_RAPIDS_ENABLED:
             from cuml.linear_model import LinearRegression
@@ -206,24 +248,30 @@ if alg.is_supervised:
     elif alg.name == 'SupportVectorRegression':
         from sklearn.svm import SVR
         model = SVR(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'BayesianRidgeRegression':
         from sklearn.linear_model import BayesianRidge
         model = BayesianRidge(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'AdaBoost' and alg.type == 'regression':
         from sklearn.ensemble import AdaBoostRegressor
         model = AdaBoostRegressor(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'GradientBoosting' and alg.type == 'regression':
         from sklearn.ensemble import GradientBoostingRegressor
         model = GradientBoostingRegressor(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'RandomForest' and alg.type == 'regression':
         from sklearn.ensemble import RandomForestRegressor
         model = RandomForestRegressor(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'XGBoost' and alg.type == 'regression':
         from xgboost.sklearn import XGBRegressor
         model = XGBRegressor(**alg.input_variables.__dict__)
     elif alg.name == 'CatBoost' and alg.type == 'regression':
         from catboost import CatBoostRegressor
         model = CatBoostRegressor(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
 else:
     # -------------------------------------------------------------
     # Anomaly detection algorithms
@@ -231,15 +279,18 @@ else:
     if alg.name == 'OneClassSVM':
         from sklearn import svm
         model = svm.OneClassSVM(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'IsolationForest':
         from sklearn.ensemble import IsolationForest
         model = IsolationForest(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     # -------------------------------------------------------------
     # Clustering algorithms
     #
     elif alg.name == 'MeanShift':
         from sklearn.cluster import MeanShift
         model = MeanShift(**alg.input_variables.__dict__)
+        warn_not_gpu_support(alg)
     elif alg.name == 'KMeans':
         if NVIDIA_RAPIDS_ENABLED:
             from cuml.cluster import KMeans
@@ -252,50 +303,62 @@ dataframe_label = None
 model_explainer = None
 loss = 0
 if model is not None:
+    print('-' * 30)
+    print(model)
+    print('-' * 30)
+
     if is_labeled_data:
-        columns = [LABEL_COLUMN]
-        dataframe_train = dataframe.drop(columns, axis=1)
+        dataframe_train = dataframe.drop([LABEL_COLUMN], axis=1)
         dataframe_label = dataframe[LABEL_COLUMN]
     else:
         dataframe_train = dataframe
+
+    if NVIDIA_RAPIDS_ENABLED:
+        for colname in dataframe_train.columns:
+            dataframe_train[colname] = dataframe_train[colname].astype('float32')
+        dataframe_label = dataframe_label.astype('float32') if dataframe_label is not None else None
+    #     X_train = dataframe_train.as_gpu_matrix()
+    #     X_label = cp.asarray(dataframe_label) if dataframe_label is not None else None
+    # else:
+    #     X_train = dataframe_train.values
+    #     X_label = dataframe_label.values.ravel() if dataframe_label is not None else None
 
     if alg.is_supervised:
         # -------------------------------------------------------------
         # Supervised algorithms
         #
-        if NVIDIA_RAPIDS_ENABLED:
-            for colname in dataframe_train.columns:
-                dataframe_train[colname] = dataframe_train[colname].astype('float32')
-            model.fit(dataframe_train, dataframe_label.astype('float32'))
-            dataframe_train = dataframe_train.to_pandas()
-            dataframe_label = dataframe_label.to_pandas()
-        else:
-            model.fit(dataframe_train.values, dataframe_label.values.ravel())
-
+        try:
+            model.fit(dataframe_train, dataframe_label, convert_dtype=True)
+        except:
+            model.fit(dataframe_train, dataframe_label)
         # -------------------------------------------------------------
         # Check if cv score should be calculated for the AutoML workflow
         #
         if alg.automl:
-            if alg.type == 'classification':
-                scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
-                                         cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+            CV = int(variables.get("N_SPLITS")) if variables.get("N_SPLITS") is not None else 5
+            scores = cross_val_score(model, dataframe_train, dataframe_label, cv=CV, scoring=alg.scoring)
+            if alg.type == 'classification' or alg.type == 'anomaly':
                 loss = 1 - np.mean(scores)
-                if (not alg.name.startswith("TPOT") and not alg.name.startswith("AutoSklearn")):
-                    model_explainer = shap.KernelExplainer(model.predict_proba, dataframe_train)  # feature importance
-            if alg.type == 'anomaly':
-                scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
-                                         cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-                loss = 1 - np.mean(scores)
-                model_explainer = shap.KernelExplainer(model.predict, dataframe_train)  # feature importance
             if alg.type == 'regression':
-                scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
-                                         cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
                 loss = np.abs(np.mean(scores))
-                if alg.name == 'BayesianRidgeRegression' or alg.name == 'LinearRegression':
-                    model_explainer = shap.LinearExplainer(model, dataframe_train)
-                else:
-                    if (not alg.name.startswith("TPOT") and not alg.name.startswith("AutoSklearn")):
+        # -------------------------------------------------------------
+        # Check if model explainer can be used
+        #
+        if not NVIDIA_RAPIDS_ENABLED:
+            if alg.name == 'BayesianRidgeRegression' or alg.name == 'LinearRegression':
+                model_explainer = shap.LinearExplainer(model, dataframe_train)
+            else:
+                if (not alg.name.startswith("TPOT") and
+                    not alg.name.startswith("AutoSklearn") and
+                    not alg.name.startswith("XGBoost")):
+                    if alg.type == 'classification':
+                        model_explainer = shap.KernelExplainer(model.predict_proba, dataframe_train)
+                    if alg.type == 'regression' or alg.type == 'anomaly':
                         model_explainer = shap.KernelExplainer(model.predict, dataframe_train)
+                else:
+                    print("Model explainer not supported for the selected algorithm!")
+        else:
+            print("Model explainer not supported on GPU!")
         # -------------------------------------------------------------
         # Check if sampling is enabled for AutoSklearn
         #
@@ -311,18 +374,14 @@ if model is not None:
         # Non-supervised algorithms
         #
         if NVIDIA_RAPIDS_ENABLED:
-            for colname in dataframe_train.columns:
-                dataframe_train[colname] = dataframe_train[colname].astype('float32')
             model.fit(dataframe_train)
-            dataframe_train = dataframe_train.to_pandas()
-            dataframe_label = dataframe_label.to_pandas() if dataframe_label is not None else None
         else:
             model.fit(dataframe_train.values)
             model_explainer = shap.KernelExplainer(model.predict, dataframe_train)
-        if is_labeled_data and alg.automl:
-            scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
-                                     cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
-            loss = 1 - np.mean(scores)
+        # if is_labeled_data and alg.automl:
+        #    scores = cross_val_score(model, dataframe_train.values, dataframe_label.values.ravel(),
+        #                             cv=int(variables.get("N_SPLITS")), scoring=alg.scoring)
+        #    loss = 1 - np.mean(scores)
     # -------------------------------------------------------------
     # Dumps and compress the model
     #
@@ -340,15 +399,16 @@ else:
 # -----------------------------------------------------------------
 # Data drift measures
 #
+if NVIDIA_RAPIDS_ENABLED:
+    dataframe = dataframe.to_pandas()
+    dataframe_train = dataframe_train.to_pandas()
+    dataframe_label = dataframe_label.to_pandas() if dataframe_label is not None else None
+
 mean_df_train = dataframe_train.mean(axis=0)  # mean
 std_df_train = dataframe_train.std(axis=0)  # standard deviation
 dataframe_model_metadata = pd.DataFrame({0: mean_df_train, 1: std_df_train}).T
 
-dataframe = dataframe.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe
-dataframe_model_metadata = dataframe_model_metadata.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe_model_metadata
-
 dataframe_json = dataframe.to_json(orient='split').encode()
-# dataframe_model_meta_json = dataframe_model_metadata.to_json(orient='split').encode()
 dataframe_model_meta_json = dataframe_model_metadata.to_json(orient='values').encode()
 
 compressed_data = bz2.compress(dataframe_json)
