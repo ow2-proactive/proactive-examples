@@ -25,6 +25,18 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 def serviceId = variables.get("SERVICE_ID")
 def instanceName = variables.get("INSTANCE_NAME")
 
+def publishService = false
+if (binding.variables["args"]) {
+    if (args.length > 0) {
+        try {
+            publishService = Boolean.parseBoolean(args[0])
+        } catch (Exception e) {
+            println "Invalid first argument, expected boolean, received " + args[0]
+        }
+    }
+}
+
+
 //Check that the provided serviceId belongs to the existing Service Activation list
 def catalogRestApi = new CatalogRestApi(apiClient)
 if(!catalogRestApi.listAllWorkflowsByServiceIdUsingGET(sessionId).keySet().contains(serviceId)){
@@ -52,6 +64,9 @@ for (ServiceInstanceData serviceInstanceData : service_instances) {
             println("ENDPOINT:    " + endpoint)
             variables.put("INSTANCE_ID_" + instanceName, instanceId)
             variables.put("ENDPOINT_" + instanceName, endpoint)
+            if (publishService) {
+                schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int)
+            }
             result = endpoint
             break
         }
@@ -76,7 +91,9 @@ if (!instance_exists){
     // Retrieve and update workflow variables
     if (binding.variables["args"]){
         for (String var: args){
-            serviceVariables.put(var, variables.get(var))
+            if (variables.containsKey(var)) {
+                serviceVariables.put(var, variables.get(var))
+            }
         }
     }
 

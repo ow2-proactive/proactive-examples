@@ -106,10 +106,10 @@ baseline_data_file = open(baseline_data_path, 'r')
 files = {'model_file': model_file, 'baseline_data' : baseline_data_file }
 data = {'api_token': token}
 
-model_metadata_json = variables.get("MODEL_METADATA") if variables.get(
-    "MODEL_METADATA") else None
-if model_metadata_json is not None:
-    data['model_metadata_json'] = unquote(model_metadata_json)
+# model_metadata_json = variables.get("MODEL_METADATA") if variables.get(
+#     "MODEL_METADATA") else None
+# if model_metadata_json is not None:
+#     data['model_metadata_json'] = unquote(model_metadata_json)
 
 deviation_detection = variables.get("DEVIATION_DETECTION")
 if deviation_detection is not None and deviation_detection.lower() == "true":
@@ -119,10 +119,10 @@ else:
     data['drift_enabled'] = False
     data['drift_notification'] = False
 
-deviation_treshold = variables.get("DEVIATION_TRESHOLD")
-deviation_treshold = float(
-    deviation_treshold) if deviation_treshold is not None else 0
-data['drift_threshold'] = deviation_treshold
+# deviation_treshold = variables.get("DEVIATION_TRESHOLD")
+# deviation_treshold = float(
+#     deviation_treshold) if deviation_treshold is not None else 0
+# data['drift_threshold'] = deviation_treshold
 
 logging_prediction = variables.get("LOGGING_PREDICTION")
 if logging_prediction is not None and logging_prediction.lower() == "true":
