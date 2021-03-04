@@ -67,9 +67,9 @@ INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not 
 APP_BASE_DIR = ""
 UPLOAD_MODELS_FOLDER = INSTANCE_PATH
 MODEL_FILE_EXT = '.model'
-META_FILE_EXT = '.meta'
+#META_FILE_EXT = '.meta'
 CURRENT_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + MODEL_FILE_EXT)  # default model path
-CURRENT_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + META_FILE_EXT)    # default meta path
+#CURRENT_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + META_FILE_EXT)    # default meta path
 CURRENT_BASELINE_DATA = join(UPLOAD_MODELS_FOLDER, 'baseline_data' + '.csv') # baseline data path
 TRACE_FILE = join(UPLOAD_MODELS_FOLDER, 'trace.txt')  # default trace file
 CONFIG_FILE = join(UPLOAD_MODELS_FOLDER, 'config.json')  # default config file
@@ -83,7 +83,7 @@ TOKENS = {
 DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
 TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
 DRIFT_ENABLED = True if (os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
-DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_THRESHOLD') is not None else None
+#DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_THRESHOLD') is not None else None
 DRIFT_NOTIFICATION = True if (os.getenv('DRIFT_NOTIFICATION') is not None and os.getenv('DRIFT_NOTIFICATION').lower() == "true") else False
 LOG_PREDICTIONS = True if (os.getenv('LOG_PREDICTIONS') is not None and os.getenv('LOG_PREDICTIONS').lower() == "true") else False
 HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
@@ -114,7 +114,7 @@ if not isfile(CONFIG_FILE):
         'DEBUG_ENABLED': DEBUG_ENABLED,
         'TRACE_ENABLED': TRACE_ENABLED,
         'DRIFT_ENABLED': DRIFT_ENABLED,
-        'DRIFT_THRESHOLD': DRIFT_THRESHOLD,
+        #'DRIFT_THRESHOLD': DRIFT_THRESHOLD,
         'DRIFT_NOTIFICATION': DRIFT_NOTIFICATION,
         'LOG_PREDICTIONS': LOG_PREDICTIONS,
         'HTTPS_ENABLED': HTTPS_ENABLED
@@ -160,7 +160,6 @@ def log(message, token=""):
         print(datetime_str, token, message)
     return message
     
- 
 def dumper(obj):
     try:
         return obj.toJSON()
@@ -222,6 +221,13 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
             log("Data drift detected in feature: " + feature)
             log("The drifted rows are: " + str(detected_drifts_indices))
             drifts[feature] = detected_drifts_indices
+            if get_config('DRIFT_NOTIFICATION'):
+                log("Sending a web notification", token)
+                message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
+                if submit_web_notification(message, token):
+                    log("Web notification sent!")
+                else:
+                    log("Error occurred while sending a web notification")
     return(json.dumps(drifts))
     
     #this code is commented in case needed in future for drift detection
@@ -308,10 +314,10 @@ def backup_previous_deployed_model():
         PREVIOUS_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_' + datetime_str + MODEL_FILE_EXT)
         move(CURRENT_MODEL_FILE, PREVIOUS_MODEL_FILE)
         log("Current model file was moved to:\n" + PREVIOUS_MODEL_FILE)
-    if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
-        PREVIOUS_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_' + datetime_str + META_FILE_EXT)
-        move(CURRENT_META_FILE, PREVIOUS_META_FILE)
-        log("Current model metadata file was moved to:\n" + PREVIOUS_META_FILE)
+    # if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
+    #     PREVIOUS_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_' + datetime_str + META_FILE_EXT)
+    #     move(CURRENT_META_FILE, PREVIOUS_META_FILE)
+    #     log("Current model metadata file was moved to:\n" + PREVIOUS_META_FILE)
 
 
 def auth_token(token):
@@ -413,16 +419,16 @@ def deploy_api() -> str:
         	baseline_data.save(CURRENT_BASELINE_DATA)
             #log("The new baseline data file was deployed successfully at:\n" + CURRENT_BASELINE_DATA)
         # Check if model metadata exists and save it
-        if "model_metadata_json" in connexion.request.form:
-            log("Adding model metadata")
-            model_metadata_json = connexion.request.form['model_metadata_json']
-            log("model_metadata_json:\n" + str(model_metadata_json), api_token)
-            model_metadata = pd.read_json(model_metadata_json, orient='values')
-            # model_metadata = pd.read_json(model_metadata_json, orient='split')
-            # print(model_metadata.head())
-            log("model_metadata:\n" + str(model_metadata), api_token)
-            model_metadata.to_pickle(CURRENT_META_FILE)
-            log("The new model metadata file was saved successfully at:\n" + CURRENT_META_FILE)
+        # if "model_metadata_json" in connexion.request.form:
+        #     log("Adding model metadata")
+        #     model_metadata_json = connexion.request.form['model_metadata_json']
+        #     log("model_metadata_json:\n" + str(model_metadata_json), api_token)
+        #     model_metadata = pd.read_json(model_metadata_json, orient='values')
+        #     # model_metadata = pd.read_json(model_metadata_json, orient='split')
+        #     # print(model_metadata.head())
+        #     log("model_metadata:\n" + str(model_metadata), api_token)
+        #     model_metadata.to_pickle(CURRENT_META_FILE)
+        #     log("The new model metadata file was saved successfully at:\n" + CURRENT_META_FILE)
 
         # Check if debug is enabled
         if "debug_enabled" in connexion.request.form:
@@ -440,10 +446,10 @@ def deploy_api() -> str:
             log("Updating DRIFT_ENABLED to " + drift_enabled)
             set_config('DRIFT_ENABLED', bool(strtobool(drift_enabled)))
         # Check if the drift threshold is set
-        if "drift_threshold" in connexion.request.form:
-            drift_threshold = connexion.request.form['drift_threshold']
-            log("Updating DRIFT_THRESHOLD to " + drift_threshold)
-            set_config('DRIFT_THRESHOLD', float(drift_threshold))
+        # if "drift_threshold" in connexion.request.form:
+        #     drift_threshold = connexion.request.form['drift_threshold']
+        #     log("Updating DRIFT_THRESHOLD to " + drift_threshold)
+        #     set_config('DRIFT_THRESHOLD', float(drift_threshold))
         # Check if the drift notification is enabled
         if "drift_notification" in connexion.request.form:
             drift_notification = connexion.request.form['drift_notification']
@@ -475,13 +481,13 @@ def undeploy_api() -> str:
     log("calling undeploy_api", api_token)
     if auth_token(api_token):
         model_file = connexion.request.form["model_file"]
-        if exists(model_file) and isfile(model_file):
-            os.remove(model_file)
-            # Check if the model has an associated metadata
-            meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
-            if exists(meta_file) and isfile(meta_file):
-                log("The model has an associated metadata")
-                os.remove(meta_file)
+        # if exists(model_file) and isfile(model_file):
+        #     os.remove(model_file)
+        #     # Check if the model has an associated metadata
+        #     meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
+        #     if exists(meta_file) and isfile(meta_file):
+        #         log("The model has an associated metadata")
+        #         os.remove(meta_file)
         log("Model removed:\n" + str(model_file))
         return log("Model removed", api_token)
     else:
@@ -497,10 +503,10 @@ def redeploy_api() -> str:
         if exists(model_file) and isfile(model_file):
             move(model_file, CURRENT_MODEL_FILE)
             # Check if the model has an associated metadata
-            meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
-            if exists(meta_file) and isfile(meta_file):
-                log("The model has an associated metadata")
-                move(meta_file, CURRENT_META_FILE)
+            # meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
+            # if exists(meta_file) and isfile(meta_file):
+            #     log("The model has an associated metadata")
+            #     move(meta_file, CURRENT_META_FILE)
             # Done
             log("Model deployed successfully:\n" + str(model_file))
             log("From:\n" + str(model_file) + "\nTo:\n" + CURRENT_MODEL_FILE)
@@ -528,9 +534,9 @@ def update_api() -> str:
         log("Updating DRIFT_ENABLED to " + drift_enabled)
         set_config('DRIFT_ENABLED', bool(strtobool(drift_enabled)))
         # Update the drift threshold parameter
-        drift_threshold = connexion.request.form['drift_threshold']
-        log("Updating DRIFT_THRESHOLD to " + drift_threshold)
-        set_config('DRIFT_THRESHOLD', float(drift_threshold))
+        #drift_threshold = connexion.request.form['drift_threshold']
+        #log("Updating DRIFT_THRESHOLD to " + drift_threshold)
+        #set_config('DRIFT_THRESHOLD', float(drift_threshold))
         # Update the drift notification parameter
         drift_notification = connexion.request.form['drift_notification']
         log("Updating DRIFT_NOTIFICATION to " + drift_notification)
@@ -539,6 +545,10 @@ def update_api() -> str:
         log_predictions = connexion.request.form['log_predictions']
         log("Updating LOG_PREDICTIONS to " + log_predictions)
         set_config('LOG_PREDICTIONS', bool(strtobool(log_predictions)))
+        if "baseline_data" in connexion.request.files:
+            #log("Updating baseline data")
+         	baseline_data_updated = connexion.request.files['baseline_data']
+         	baseline_data_updated.save(CURRENT_BASELINE_DATA)
         return log("Service parameters updated", api_token)
     else:
         return log("Invalid token", api_token)
