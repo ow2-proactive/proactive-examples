@@ -67,23 +67,22 @@ INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not 
 APP_BASE_DIR = ""
 UPLOAD_MODELS_FOLDER = INSTANCE_PATH
 MODEL_FILE_EXT = '.model'
-META_FILE_EXT = '.meta'
+# META_FILE_EXT = '.meta'
 CURRENT_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + MODEL_FILE_EXT)  # default model path
-CURRENT_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + META_FILE_EXT)    # default meta path
+# CURRENT_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + META_FILE_EXT)    # default meta path
 CURRENT_BASELINE_DATA = join(UPLOAD_MODELS_FOLDER, 'baseline_data' + '.csv') # baseline data path
 TRACE_FILE = join(UPLOAD_MODELS_FOLDER, 'trace.txt')  # default trace file
 CONFIG_FILE = join(UPLOAD_MODELS_FOLDER, 'config.json')  # default config file
 PREDICTIONS_FILE = join(UPLOAD_MODELS_FOLDER, 'predictions.csv')  # default predictions file
-TOKENS = {
+TOKENS = { # user api tokens
     'user': hexlify(os.urandom(16)).decode(),  # api key
     'test': hexlify(os.urandom(16)).decode()
-}  # user tokens
-
+}
 
 DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
 TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
 DRIFT_ENABLED = True if (os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
-DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_THRESHOLD') is not None else None
+# DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_THRESHOLD') is not None else None
 DRIFT_NOTIFICATION = True if (os.getenv('DRIFT_NOTIFICATION') is not None and os.getenv('DRIFT_NOTIFICATION').lower() == "true") else False
 LOG_PREDICTIONS = True if (os.getenv('LOG_PREDICTIONS') is not None and os.getenv('LOG_PREDICTIONS').lower() == "true") else False
 HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
@@ -114,7 +113,7 @@ if not isfile(CONFIG_FILE):
         'DEBUG_ENABLED': DEBUG_ENABLED,
         'TRACE_ENABLED': TRACE_ENABLED,
         'DRIFT_ENABLED': DRIFT_ENABLED,
-        'DRIFT_THRESHOLD': DRIFT_THRESHOLD,
+        # 'DRIFT_THRESHOLD': DRIFT_THRESHOLD,
         'DRIFT_NOTIFICATION': DRIFT_NOTIFICATION,
         'LOG_PREDICTIONS': LOG_PREDICTIONS,
         'HTTPS_ENABLED': HTTPS_ENABLED
@@ -160,7 +159,6 @@ def log(message, token=""):
         print(datetime_str, token, message)
     return message
     
- 
 def dumper(obj):
     try:
         return obj.toJSON()
@@ -169,92 +167,46 @@ def dumper(obj):
 
 
 def perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, token="") -> str :
-
     log("calling perform_drift_detection", token)
     log("data drift detection method: " + detector)
-    
-    baseline_data=dataframe.values.tolist()
-    predict_data=predict_dataframe.values.tolist()
-    
-    overall_data=list()
+    baseline_data = dataframe.values.tolist()
+    predict_data = predict_dataframe.values.tolist()
+    overall_data = list()
     for a in baseline_data:
         overall_data.append(a)
     for b in predict_data:
         overall_data.append(b)
-
-    
-    
     overall_dataframe = pd.DataFrame(overall_data, columns=feature_names)
-    drifts=dict()
-    window=len(baseline_data)
+    drifts = dict()
+    window = len(baseline_data)
     for feature in feature_names:
-        
-        detected_drifts_indices=list()
-
-        if(detector=="HDDM"):
+        detected_drifts_indices = list()
+        # HDDM
+        if detector == "HDDM":
             hddm_w = HDDM_W()
             for i in range(len(overall_dataframe[feature])):
                 hddm_w.add_element(float(overall_dataframe[feature][i]))
-                if hddm_w.detected_change():
-                    if(i>=window):
-                    	detected_drifts_indices.append(i-window)
-        
-        if(detector=="Page Hinkley"):
+                if hddm_w.detected_change() and i >= window:
+                    detected_drifts_indices.append(i-window)
+        # Page Hinkley
+        if detector == "Page Hinkley":
             ph = PageHinkley()
             for i in range(len(overall_dataframe[feature])):
                 ph.add_element(float(overall_dataframe[feature][i]))
-                if ph.detected_change():
-                    if(i>=window):
-                    	detected_drifts_indices.append(i-window)
-
-
-        if(detector=="ADWIN"):
+                if ph.detected_change() and i >= window:
+                    detected_drifts_indices.append(i-window)
+        # ADWIN
+        if detector == "ADWIN":
             adwin = ADWIN()
             for i in range(len(overall_dataframe[feature])):
                 adwin.add_element(float(overall_dataframe[feature][i]))
-                if adwin.detected_change():
-                    if(i>=window):
-                    	detected_drifts_indices.append(i-window)
-
-                    
-        
-        if(len(detected_drifts_indices) != 0):
+                if adwin.detected_change() and i >= window:
+                    detected_drifts_indices.append(i-window)
+        # Check for detected drifts
+        if len(detected_drifts_indices) != 0:
             log("Data drift detected in feature: " + feature)
             log("The drifted rows are: " + str(detected_drifts_indices))
             drifts[feature] = detected_drifts_indices
-    return(json.dumps(drifts))
-    
-    #this code is commented in case needed in future for drift detection
-    """
-    log("calling perform_drift_detection", token)
-    if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
-        # log("The model has an associated metadata")
-        model_metadata = pd.read_pickle(CURRENT_META_FILE)
-        log("model_metadata:\n" + str(model_metadata), token)
-        # log("Calculating data drift measures", token)
-        predict_mean = predict_dataframe.mean(axis=0)  # mean
-        predict_std = predict_dataframe.std(axis=0)    # standard deviation
-        # predict_metadata = pd.DataFrame({'Mean': predict_mean, 'Std': predict_std}).T
-        predict_metadata = pd.DataFrame({0: predict_mean, 1: predict_std}).T
-        log("predict_metadata:\n" + str(predict_metadata), token)
-        size_data = len(model_metadata.columns)
-        model_metadata_normal = norm.rvs(
-            size=size_data,
-            loc=model_metadata.iloc[0],    # mean
-            scale=model_metadata.iloc[1])  # std
-        predict_metadata_normal = norm.rvs(
-            size=size_data,
-            loc=predict_metadata.iloc[0],    # mean
-            scale=predict_metadata.iloc[1])  # std
-        # Wasserstein distance
-        score = wasserstein_distance(model_metadata_normal, predict_metadata_normal)
-        log("Wasserstein distance: " + str(score), token)
-        # Data drift detection
-        DRIFT_THRESHOLD = get_config('DRIFT_THRESHOLD')
-        log("Drift threshold was set to: " + str(DRIFT_THRESHOLD), token)
-        # Send web notification alerts
-        if DRIFT_THRESHOLD is not None and score > DRIFT_THRESHOLD:
-            log("Data drift detected!", token)
             if get_config('DRIFT_NOTIFICATION'):
                 log("Sending a web notification", token)
                 message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
@@ -262,9 +214,48 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
                     log("Web notification sent!")
                 else:
                     log("Error occurred while sending a web notification")
-    else:
-        log("Model metadata not found")
-    """
+    return json.dumps(drifts)
+    
+    # This code is commented in case needed in future for drift detection
+    # log("calling perform_drift_detection", token)
+    # if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
+    #     # log("The model has an associated metadata")
+    #     model_metadata = pd.read_pickle(CURRENT_META_FILE)
+    #     log("model_metadata:\n" + str(model_metadata), token)
+    #     # log("Calculating data drift measures", token)
+    #     predict_mean = predict_dataframe.mean(axis=0)  # mean
+    #     predict_std = predict_dataframe.std(axis=0)    # standard deviation
+    #     # predict_metadata = pd.DataFrame({'Mean': predict_mean, 'Std': predict_std}).T
+    #     predict_metadata = pd.DataFrame({0: predict_mean, 1: predict_std}).T
+    #     log("predict_metadata:\n" + str(predict_metadata), token)
+    #     size_data = len(model_metadata.columns)
+    #     model_metadata_normal = norm.rvs(
+    #         size=size_data,
+    #         loc=model_metadata.iloc[0],    # mean
+    #         scale=model_metadata.iloc[1])  # std
+    #     predict_metadata_normal = norm.rvs(
+    #         size=size_data,
+    #         loc=predict_metadata.iloc[0],    # mean
+    #         scale=predict_metadata.iloc[1])  # std
+    #     # Wasserstein distance
+    #     score = wasserstein_distance(model_metadata_normal, predict_metadata_normal)
+    #     log("Wasserstein distance: " + str(score), token)
+    #     # Data drift detection
+    #     DRIFT_THRESHOLD = get_config('DRIFT_THRESHOLD')
+    #     log("Drift threshold was set to: " + str(DRIFT_THRESHOLD), token)
+    #     # Send web notification alerts
+    #     if DRIFT_THRESHOLD is not None and score > DRIFT_THRESHOLD:
+    #         log("Data drift detected!", token)
+    #         if get_config('DRIFT_NOTIFICATION'):
+    #             log("Sending a web notification", token)
+    #             message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
+    #             if submit_web_notification(message, token):
+    #                 log("Web notification sent!")
+    #             else:
+    #                 log("Error occurred while sending a web notification")
+    # else:
+    #     log("Model metadata not found")
+
 
 def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables={}, token=""):
     result = False
@@ -308,14 +299,14 @@ def backup_previous_deployed_model():
         PREVIOUS_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_' + datetime_str + MODEL_FILE_EXT)
         move(CURRENT_MODEL_FILE, PREVIOUS_MODEL_FILE)
         log("Current model file was moved to:\n" + PREVIOUS_MODEL_FILE)
-    if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
-        PREVIOUS_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_' + datetime_str + META_FILE_EXT)
-        move(CURRENT_META_FILE, PREVIOUS_META_FILE)
-        log("Current model metadata file was moved to:\n" + PREVIOUS_META_FILE)
+    # if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
+    #     PREVIOUS_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_' + datetime_str + META_FILE_EXT)
+    #     move(CURRENT_META_FILE, PREVIOUS_META_FILE)
+    #     log("Current model metadata file was moved to:\n" + PREVIOUS_META_FILE)
 
 
 def auth_token(token):
-    for user, key in TOKENS.items():
+    for _, key in TOKENS.items():
         if key == token:
             return True
     return False
@@ -360,25 +351,21 @@ def predict_api(data: str) -> str:
     detector = data['detector']
     dataframe = pd.DataFrame()
     feature_names = list()
-    if exists(CURRENT_BASELINE_DATA): #and isfile(CURRENT_BASELINE_DATA):
-    	dataframe = pd.read_csv(CURRENT_BASELINE_DATA)
-    if(dataframe.empty == False):
-    	feature_names=dataframe.columns
-
+    if exists(CURRENT_BASELINE_DATA): # and isfile(CURRENT_BASELINE_DATA):
+        dataframe = pd.read_csv(CURRENT_BASELINE_DATA)
+    if not dataframe.empty:
+        feature_names = dataframe.columns
     if auth_token(api_token):
         if exists(CURRENT_MODEL_FILE) and isfile(CURRENT_MODEL_FILE):
             try:
-                #dataframe_json = data['dataframe_json']
-                #dataframe = pd.read_json(dataframe_json, orient='values')
+                # dataframe_json = data['dataframe_json']
+                # dataframe = pd.read_json(dataframe_json, orient='values')
                 predict_dataframe_json = data['predict_dataframe_json']
                 predict_dataframe = pd.read_json(predict_dataframe_json, orient='values')
-                
-                if get_config('DRIFT_ENABLED'):
-                    if(dataframe.empty == False):
-                    	drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, api_token)
+                if get_config('DRIFT_ENABLED') and dataframe.empty == False:
+                    drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, api_token)
                 else:
-                    drifts_json="Drift detection is not enabled."
-                    
+                    drifts_json = "Drift detection is not enabled."
                 model = load(CURRENT_MODEL_FILE)
                 log("model:\n" + str(model))
                 log("dataframe:\n" + str(dataframe.head()))
@@ -409,21 +396,21 @@ def deploy_api() -> str:
         model_file.save(CURRENT_MODEL_FILE)
         log("The new model file was deployed successfully at:\n" + CURRENT_MODEL_FILE)
         if "baseline_data" in connexion.request.files:
-        	baseline_data = connexion.request.files['baseline_data']
-        	baseline_data.save(CURRENT_BASELINE_DATA)
-            #log("The new baseline data file was deployed successfully at:\n" + CURRENT_BASELINE_DATA)
+            baseline_data = connexion.request.files['baseline_data']
+            baseline_data.save(CURRENT_BASELINE_DATA)
+            # log("The new baseline data file was deployed successfully at:\n" + CURRENT_BASELINE_DATA)
         # Check if model metadata exists and save it
-        if "model_metadata_json" in connexion.request.form:
-            log("Adding model metadata")
-            model_metadata_json = connexion.request.form['model_metadata_json']
-            log("model_metadata_json:\n" + str(model_metadata_json), api_token)
-            model_metadata = pd.read_json(model_metadata_json, orient='values')
-            # model_metadata = pd.read_json(model_metadata_json, orient='split')
-            # print(model_metadata.head())
-            log("model_metadata:\n" + str(model_metadata), api_token)
-            model_metadata.to_pickle(CURRENT_META_FILE)
-            log("The new model metadata file was saved successfully at:\n" + CURRENT_META_FILE)
-
+        # if "model_metadata_json" in connexion.request.form:
+        #     log("Adding model metadata")
+        #     model_metadata_json = connexion.request.form['model_metadata_json']
+        #     log("model_metadata_json:\n" + str(model_metadata_json), api_token)
+        #     model_metadata = pd.read_json(model_metadata_json, orient='values')
+        #     # model_metadata = pd.read_json(model_metadata_json, orient='split')
+        #     # print(model_metadata.head())
+        #     log("model_metadata:\n" + str(model_metadata), api_token)
+        #     model_metadata.to_pickle(CURRENT_META_FILE)
+        #     log("The new model metadata file was saved successfully at:\n" + CURRENT_META_FILE)
+        #
         # Check if debug is enabled
         if "debug_enabled" in connexion.request.form:
             debug_enabled = connexion.request.form['debug_enabled']
@@ -440,10 +427,10 @@ def deploy_api() -> str:
             log("Updating DRIFT_ENABLED to " + drift_enabled)
             set_config('DRIFT_ENABLED', bool(strtobool(drift_enabled)))
         # Check if the drift threshold is set
-        if "drift_threshold" in connexion.request.form:
-            drift_threshold = connexion.request.form['drift_threshold']
-            log("Updating DRIFT_THRESHOLD to " + drift_threshold)
-            set_config('DRIFT_THRESHOLD', float(drift_threshold))
+        # if "drift_threshold" in connexion.request.form:
+        #     drift_threshold = connexion.request.form['drift_threshold']
+        #     log("Updating DRIFT_THRESHOLD to " + drift_threshold)
+        #     set_config('DRIFT_THRESHOLD', float(drift_threshold))
         # Check if the drift notification is enabled
         if "drift_notification" in connexion.request.form:
             drift_notification = connexion.request.form['drift_notification']
@@ -475,13 +462,13 @@ def undeploy_api() -> str:
     log("calling undeploy_api", api_token)
     if auth_token(api_token):
         model_file = connexion.request.form["model_file"]
-        if exists(model_file) and isfile(model_file):
-            os.remove(model_file)
-            # Check if the model has an associated metadata
-            meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
-            if exists(meta_file) and isfile(meta_file):
-                log("The model has an associated metadata")
-                os.remove(meta_file)
+        # if exists(model_file) and isfile(model_file):
+        #     os.remove(model_file)
+        #     # Check if the model has an associated metadata
+        #     meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
+        #     if exists(meta_file) and isfile(meta_file):
+        #         log("The model has an associated metadata")
+        #         os.remove(meta_file)
         log("Model removed:\n" + str(model_file))
         return log("Model removed", api_token)
     else:
@@ -497,10 +484,10 @@ def redeploy_api() -> str:
         if exists(model_file) and isfile(model_file):
             move(model_file, CURRENT_MODEL_FILE)
             # Check if the model has an associated metadata
-            meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
-            if exists(meta_file) and isfile(meta_file):
-                log("The model has an associated metadata")
-                move(meta_file, CURRENT_META_FILE)
+            # meta_file = model_file.replace(MODEL_FILE_EXT, META_FILE_EXT)
+            # if exists(meta_file) and isfile(meta_file):
+            #     log("The model has an associated metadata")
+            #     move(meta_file, CURRENT_META_FILE)
             # Done
             log("Model deployed successfully:\n" + str(model_file))
             log("From:\n" + str(model_file) + "\nTo:\n" + CURRENT_MODEL_FILE)
@@ -528,9 +515,9 @@ def update_api() -> str:
         log("Updating DRIFT_ENABLED to " + drift_enabled)
         set_config('DRIFT_ENABLED', bool(strtobool(drift_enabled)))
         # Update the drift threshold parameter
-        drift_threshold = connexion.request.form['drift_threshold']
-        log("Updating DRIFT_THRESHOLD to " + drift_threshold)
-        set_config('DRIFT_THRESHOLD', float(drift_threshold))
+        # drift_threshold = connexion.request.form['drift_threshold']
+        # log("Updating DRIFT_THRESHOLD to " + drift_threshold)
+        # set_config('DRIFT_THRESHOLD', float(drift_threshold))
         # Update the drift notification parameter
         drift_notification = connexion.request.form['drift_notification']
         log("Updating DRIFT_NOTIFICATION to " + drift_notification)
@@ -539,6 +526,10 @@ def update_api() -> str:
         log_predictions = connexion.request.form['log_predictions']
         log("Updating LOG_PREDICTIONS to " + log_predictions)
         set_config('LOG_PREDICTIONS', bool(strtobool(log_predictions)))
+        if "baseline_data" in connexion.request.files:
+            #log("Updating baseline data")
+            baseline_data_updated = connexion.request.files['baseline_data']
+            baseline_data_updated.save(CURRENT_BASELINE_DATA)
         return log("Service parameters updated", api_token)
     else:
         return log("Invalid token", api_token)
@@ -558,7 +549,7 @@ def trace_preview_api(key) -> str:
                 t.seek(0)
                 trace_dataframe = pd.read_csv(t, sep='|', names=header, engine='python')
                 trace_dataframe.fillna('', inplace=True)
-                #result = (trace_dataframe.style.hide_index()
+                # result = (trace_dataframe.style.hide_index()
                 #          .applymap(color_drift_detection)
                 #          .apply(highlight_drift_detection)
                 #          .set_properties(subset=['Date Time'], **{'width': '150px'})
@@ -569,17 +560,15 @@ def trace_preview_api(key) -> str:
                 config = json.load(f)
             # result = json2html.convert(json=config) + result
             dataframe_config = pd.DataFrame.from_records([config])
-            #result = dataframe_config.style.hide_index().render() + "<br/>" + result
+            # result = dataframe_config.style.hide_index().render() + "<br/>" + result
             # .set_table_styles([{'selector': '', 'props': [('border', '4px solid #7a7')]}])
             config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center', index=False)
             trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
-    
-            css_style="""
+            css_style = """
             div {
             weight: 100%;
             }
-                        """
-        
+            """
             result = """
             <!DOCTYPE html>
             <html>
@@ -625,7 +614,7 @@ def predictions_preview_api(key) -> str:
             predictions_dataframe = pd.read_csv(PREDICTIONS_FILE, header=None)
             predictions_dataframe.columns = [*predictions_dataframe.columns[:-1], 'predictions']
             predictions_dataframe.fillna('', inplace=True)
-            #result = (predictions_dataframe.style.hide_index()
+            # result = (predictions_dataframe.style.hide_index()
             #          .render(table_title="Predictions"))
             result = predictions_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
             result = """
@@ -678,7 +667,6 @@ if __name__ == '__main__':
     app = connexion.FlaskApp(__name__, port=args.port, specification_dir=APP_BASE_DIR)
     CORS(app.app)
     app.add_api('ml_service-api.yaml', arguments={'title': 'Machine Learning Model Service'})
-    
     if HTTPS_ENABLED:
         # from OpenSSL import SSL
         # context = SSL.Context(SSL.SSLv23_METHOD)
