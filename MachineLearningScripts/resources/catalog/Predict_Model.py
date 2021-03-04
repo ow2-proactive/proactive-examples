@@ -1,11 +1,10 @@
-__file__ = variables.get("PA_TASK_NAME")
+# -*- coding: utf-8 -*-
+"""Proactive Predict Model for Machine Learning
 
-if str(variables.get("TASK_ENABLED")).lower() == 'false':
-    print("Task " + __file__ + " disabled")
-    quit()
-
-print("BEGIN " + __file__)
-
+This module contains the Python script for the Predict Model task.
+"""
+import ssl
+import urllib.request
 import bz2
 import json
 import pickle
@@ -28,33 +27,39 @@ from sklearn.metrics.cluster import completeness_score
 from sklearn.metrics.cluster import homogeneity_score
 from sklearn.metrics.cluster import v_measure_score
 
-from distutils.util import strtobool
+global variables, resultMetadata, resultMap
 
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
 
-class obj(object):
-  def __init__(self, d):
-    for a, b in d.items():
-      if isinstance(b, (list, tuple)):
-        setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
-      else:
-        setattr(self, a, obj(b) if isinstance(b, dict) else b)
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+else:
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, preview_dataframe_in_task_result
+global is_nvidia_rapids_enabled, is_not_none_not_empty
+global raiser, get_input_variables, dict_to_obj
+global get_and_decompress_json_dataframe
 
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
 
 # -------------------------------------------------------------
 # Check if NVIDIA RAPIDS is enabled
 # https://rapids.ai/
 #
-NVIDIA_RAPIDS_ENABLED = False
-if variables.get("USE_NVIDIA_RAPIDS") is not None:
-    NVIDIA_RAPIDS_ENABLED = bool(strtobool(variables.get("USE_NVIDIA_RAPIDS")))
-if NVIDIA_RAPIDS_ENABLED:
-    try:
-        import cudf
-    except ImportError:
-        print("NVIDIA RAPIDS is not available")
-        NVIDIA_RAPIDS_ENABLED = False
-        pass
+NVIDIA_RAPIDS_ENABLED = is_nvidia_rapids_enabled()
 print('NVIDIA_RAPIDS_ENABLED: ', NVIDIA_RAPIDS_ENABLED)
+if NVIDIA_RAPIDS_ENABLED:
+    from cudf import read_json
+else:
+    from pandas import read_json
 
 # -------------------------------------------------------------
 # Get data from the propagated variables
@@ -66,12 +71,7 @@ input_variables = {
     'task.label_column': None,
     'task.model_id': None
 }
-for key in input_variables.keys():
-    for res in results:
-        value = res.getMetadata().get(key)
-        if value is not None:
-            input_variables[key] = value
-            break
+get_input_variables(input_variables)
 
 dataframe_id = None
 if input_variables['task.dataframe_id'] is not None:
@@ -80,22 +80,16 @@ if input_variables['task.dataframe_id_test'] is not None:
     dataframe_id = input_variables['task.dataframe_id_test']
 print("dataframe id (in): ", dataframe_id)
 
-dataframe_json = variables.get(dataframe_id)
-assert dataframe_json is not None
-dataframe_json = bz2.decompress(dataframe_json).decode()
-
-if NVIDIA_RAPIDS_ENABLED:
-    dataframe = cudf.read_json(dataframe_json, orient='split')
-else:
-    dataframe = pd.read_json(dataframe_json, orient='split')
+dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
+dataframe = read_json(dataframe_json, orient='split')
 
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
-if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+if is_not_none_not_empty(LABEL_COLUMN):
     is_labeled_data = True
 else:
     LABEL_COLUMN = input_variables['task.label_column']
-    if LABEL_COLUMN is not None and LABEL_COLUMN is not "":
+    if is_not_none_not_empty(LABEL_COLUMN):
         is_labeled_data = True
 
 model_id = input_variables['task.model_id']
@@ -110,26 +104,35 @@ algorithm_json = input_variables['task.algorithm_json']
 assert algorithm_json is not None
 algorithm = json.loads(algorithm_json)
 print("algorithm:\n", algorithm)
-alg = obj(algorithm)
+alg = dict_to_obj(algorithm)
 
-loaded_model = pickle.loads(model_bin)
 dataframe_predictions = None
+loaded_model = pickle.loads(model_bin)
+if loaded_model is not None:
+    print('-' * 30)
+    print(loaded_model)
+    print('-' * 30)
 
 if is_labeled_data:
-    columns = [LABEL_COLUMN]
-    dataframe_test = dataframe.drop(columns, axis=1)
+    dataframe_test = dataframe.drop([LABEL_COLUMN], axis=1)
+    dataframe_label = dataframe[LABEL_COLUMN]
     # -------------------------------------------------------------
     # Perform predictions
     #
     if NVIDIA_RAPIDS_ENABLED:
         for colname in dataframe_test.columns:
             dataframe_test[colname] = dataframe_test[colname].astype('float32')
-        dataframe_label = dataframe[LABEL_COLUMN].astype('float32')
+        dataframe_label = dataframe_label.astype('float32')
+    try:
         predictions = list(loaded_model.predict(dataframe_test))
-        dataframe = dataframe.to_pandas()
-    else:
-        dataframe_label = dataframe.filter(columns, axis=1)
-        predictions = list(loaded_model.predict(dataframe_test.values))
+    except:
+        predictions = list(loaded_model.predict(dataframe_test).to_pandas())
+    # -------------------------------------------------------------
+    # Convert to Pandas if NVIDIA_RAPIDS_ENABLED = True
+    #
+    dataframe = dataframe.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe
+    dataframe_test = dataframe_test.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe_test
+    dataframe_label = dataframe_label.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe_label
     # -------------------------------------------------------------
     # Store predictions on pandas dataframe
     #
@@ -145,12 +148,9 @@ if is_labeled_data:
     # -------------------------------------------------------------
     # Score model if not clustering and not anomaly
     #
-    if alg.type != 'clustering' and alg.type != 'anomaly':
-        if NVIDIA_RAPIDS_ENABLED:
-            score = 1  # TODO: check how to do it with rapids
-        else:
-            score = loaded_model.score(dataframe_test.values, dataframe_label.values.ravel())
-        print("MODEL SCORE: %.2f" % score)
+    # if alg.type != 'clustering' and alg.type != 'anomaly':
+    #     score = loaded_model.score(dataframe_test, dataframe_label)
+    #     print("MODEL SCORE: %.2f" % score)
     # -------------------------------------------------------------
     # CLASSIFICATION AND ANOMALY DETECTION SCORE
     #
@@ -174,10 +174,7 @@ if is_labeled_data:
         dataframe['absolute_error'] = dataframe[LABEL_COLUMN] - dataframe['predictions']
         mean_squared_error_result = mean_squared_error(dataframe_label.values.ravel(), predictions)
         mean_absolute_error_result = mean_absolute_error(dataframe_label.values.ravel(), predictions)
-        if NVIDIA_RAPIDS_ENABLED:
-            r2_score_result = 1  # TODO: check how to do this with rapids
-        else:
-            r2_score_result = r2_score(dataframe_label.values.ravel(), predictions)
+        r2_score_result = r2_score(dataframe_label.values.ravel(), predictions)
         print("********************** REGRESSION SCORES **********************")
         print("MEAN SQUARED ERROR: %.2f" % mean_squared_error_result)
         print("MEAN ABSOLUTE ERROR: %.2f" % mean_absolute_error_result)
@@ -203,11 +200,9 @@ else:
     if NVIDIA_RAPIDS_ENABLED:
         for colname in dataframe:
             dataframe[colname] = dataframe[colname].astype('float32')
-        predictions = list(loaded_model.predict(dataframe))
-        dataframe = dataframe.to_pandas()
-    else:
-        predictions = list(loaded_model.predict(dataframe.values))
+    predictions = list(loaded_model.predict(dataframe))
     dataframe_predictions = pd.DataFrame(predictions)
+    dataframe = dataframe.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe
     dataframe = dataframe.assign(predictions=dataframe_predictions)
 
 dataframe_json = dataframe.to_json(orient='split').encode()
@@ -229,31 +224,7 @@ resultMetadata.put("task.label_column", LABEL_COLUMN)
 # -------------------------------------------------------------
 # Preview results
 #
-LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
-LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
-if LIMIT_OUTPUT_VIEW > 0:
-    print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
-    dataframe = dataframe.head(LIMIT_OUTPUT_VIEW).copy()
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-    result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
-result = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Machine Learning Preview</title>
-<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" 
-integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
-</head>
-<body class="container">
-<h1 class="text-center my-4" style="color:#003050;">Data Preview</h1>
-<div style="text-align:center">{0}</div>
-</body></html>""".format(result)
-result = result.encode('utf-8')
-resultMetadata.put("file.extension", ".html")
-resultMetadata.put("file.name", "output.html")
-resultMetadata.put("content.type", "text/html")
-# -------------------------------------------------------------
+preview_dataframe_in_task_result(dataframe)
 
+# -------------------------------------------------------------
 print("END " + __file__)
