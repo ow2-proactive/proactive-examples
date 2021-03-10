@@ -30,6 +30,9 @@ def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
 
+def raiser_ex(msg): raise Exception(msg)
+
+
 def raiser(msg=None):
     """
     Raise an AssertionError with the given message.
@@ -482,16 +485,17 @@ def export_dataframe_csv(dataframe, filename="dataframe.csv"):
     resultMetadata.put("content.type", "text/csv")
 
 
-def export_dataframe_json(dataframe, filename="dataframe.json"):
+def export_dataframe_json(dataframe, filename="dataframe.json", orient='split'):
     """
     Export a Pandas dataframe to a JSON file.
 
     :param dataframe: Pandas dataframe.
     :param filename: Python string.
+    :param orient: Format of the JSON string.
     :return: None.
     """
     global result
-    dataframe.to_json(filename, orient='split')
+    dataframe.to_json(filename, orient=orient)
     with open(filename, "rb") as binary_file:
         file_bin = binary_file.read()
     assert file_bin is not None
@@ -523,14 +527,166 @@ def export_dataframe_tableau(dataframe, filename="dataframe.hyper"):
     resultMetadata.put("content.type", "application/octet-stream")
 
 
-def transfer_dataframe_in_dataspace(dataframe, dataspace="user"):
+def export_data_for_download(data, file_name, file_extension, content_type="application/octet-stream"):
+    """
+    Export data to be downloaded.
+
+    :param data: Data.
+    :param file_name: File name (string).
+    :param file_extension: File extension (string).
+    :param content_type: Content type (string).
+    :return: None.
+    """
+    import pickle
+    global result
+    data_dumped = pickle.dumps(data)
+    result = data_dumped
+    resultMetadata.put("file.name", file_name)
+    resultMetadata.put("file.extension", file_extension)
+    resultMetadata.put("content.type", content_type)
+
+
+def export_model_for_download(model, file_name="myModel.model"):
+    """
+    Export a machine learning model to be downloaded.
+
+    :param model: Model object.
+    :param file_name: Python string.
+    :return: None.
+    """
+    assert model is not None
+    export_data_for_download(model, file_name, ".model")
+
+
+def export_file_to_dataspace(file_path, export_to=None):
+    """
+    Export file to the data space.
+
+    :param file_path: File path.
+    :param export_to: Define where data goes to (PA:USER_FILE/user, PA:GLOBAL_FILE/global).
+    :return: Boolean.
+    """
+    from os.path import isfile, getsize
+
+    global userspaceapi, globalspaceapi, gateway
+
+    if export_to is None or export_to not in ["PA:USER_FILE", "user", "PA:GLOBAL_FILE", "global"]:
+        export_to = "user"
+
+    assert isfile(file_path)
+    print('File size in KB: ', getsize(file_path) / 1024)
+    java_file = gateway.jvm.java.io.File(file_path)
+
+    if export_to.upper() == "PA:USER_FILE" or export_to.lower() == "user":
+        # $PA_SCHEDULER_HOME/data/defaultuser/
+        print("Transferring file to the user space")
+        userspaceapi.connect()
+        userspaceapi.pushFile(java_file, file_path)
+
+    if export_to.upper() == "PA:GLOBAL_FILE" or export_to.lower() == "global":
+        # $PA_SCHEDULER_HOME/data/defaultglobal/
+        print("Transferring file to the global space")
+        globalspaceapi.connect()
+        globalspaceapi.pushFile(java_file, file_path)
+
+    return True
+
+
+def import_csv_file(file_path, file_delimiter, import_from):
+    """
+    Import a CSV file from the data space to a Pandas dataframe.
+
+    :param file_path: CSV file path.
+    :param file_delimiter: CSV file delimiter.
+    :param import_from: Define where data comes from (PA:USER_FILE, PA:GLOBAL_FILE, PA:URL, PA:URI).
+    :return: Pandas dataframe.
+    """
+    import pandas as pd
+
+    if import_from.upper() == "PA:USER_FILE":
+        print("Importing file from the user space")
+        userspaceapi.connect()
+        out_file = gateway.jvm.java.io.File(file_path)
+        userspaceapi.pullFile(file_path, out_file)
+
+    if import_from.upper() == "PA:GLOBAL_FILE":
+        print("Importing file from the global space")
+        globalspaceapi.connect()
+        out_file = gateway.jvm.java.io.File(file_path)
+        globalspaceapi.pullFile(file_path, out_file)
+
+    dataframe = pd.read_csv(file_path, file_delimiter)
+    return dataframe
+
+
+def import_file_from_dataspace(file_path, import_from=None):
+    """
+    Import file from the data space.
+
+    :param file_path: File path.
+    :param import_from: Define where data comes from (PA:USER_FILE/user, PA:GLOBAL_FILE/global).
+    :return: Boolean.
+    """
+    from os.path import isfile, getsize
+
+    global userspaceapi, globalspaceapi, gateway
+
+    if import_from is None or import_from not in ["PA:USER_FILE", "user", "PA:GLOBAL_FILE", "global"]:
+        import_from = "user"
+
+    out_file = gateway.jvm.java.io.File(file_path)
+
+    if import_from.upper() == "PA:USER_FILE" or import_from.lower() == "user":
+        print("Importing file from the user space")
+        userspaceapi.connect()
+        userspaceapi.pullFile(file_path, out_file)
+
+    if import_from.upper() == "PA:GLOBAL_FILE" or import_from.lower() == "global":
+        print("Importing file from the global space")
+        globalspaceapi.connect()
+        globalspaceapi.pullFile(file_path, out_file)
+
+    assert isfile(file_path)
+    print('File size in KB: ', getsize(file_path) / 1024)
+    return True
+
+
+def save_data(data, file_path):
+    """
+    Save data in a file path.
+
+    :param data: Data (object/variable).
+    :param file_path: File path (string).
+    :return: None.
+    """
+    import pickle
+    data_dumped = pickle.dumps(data)
+    with open(file_path, "wb") as f:
+        f.write(data_dumped)
+
+
+def save_model(model, file_path="myModel.model"):
+    """
+    Save a machine learning model in a file path.
+
+    :param model: Model (object).
+    :param file_path: File path (string).
+    :return: None.
+    """
+    save_data(model, file_path)
+
+
+def compress_and_transfer_dataframe_in_dataspace(dataframe, orient, dataspace="user"):
     """
     Transfer a Pandas dataframe to the user space.
 
     :param dataframe: Pandas dataframe.
+    :param orient: Format of the JSON string.
     :param dataspace: Data space to be used [user, global]
-    :return: None.
+    :return: ID of the dataframe (a.k.a. dataspace file path).
     """
+    import uuid, bz2
+
     global variables, userspaceapi, globalspaceapi, gateway
 
     if dataspace is None or dataspace not in ["user", "global"]:
@@ -539,9 +695,11 @@ def transfer_dataframe_in_dataspace(dataframe, dataspace="user"):
     job_id = variables.get("PA_JOB_ID")
     task_id = variables.get("PA_TASK_ID")
 
-    dataframe_id = 'task_id_' + task_id
-    dataframe_file_path = dataframe_id + '.csv.gz'
-    dataframe.to_csv(dataframe_file_path, compression='gzip')
+    dataframe_file_name = 'task_id_' + task_id + '_df_out_' + str(uuid.uuid4())
+    dataframe_file_path = dataframe_file_name + '.json.bz2'
+    dataframe_json = dataframe.to_json(orient=orient).encode()
+    with bz2.open(dataframe_file_path, 'w') as f:
+        f.write(dataframe_json)
     destination_path = os.path.join('job_id_' + job_id, dataframe_file_path)
 
     print("Transferring dataframe to the " + dataspace + " space")
@@ -559,23 +717,191 @@ def transfer_dataframe_in_dataspace(dataframe, dataspace="user"):
         globalspaceapi.connect()
         globalspaceapi.pushFile(java_file, destination_path)
 
+    dataframe_id = destination_path
+    return dataframe_id
 
-def compress_and_transfer_dataframe_in_variables(dataframe):
+
+def compress_and_transfer_dataframe_in_variables(dataframe, orient):
     """
     Compress and transfer a Pandas dataframe to the Proactive variables.
 
     :param dataframe: Pandas dataframe.
+    :param orient: Format of the JSON string.
     :return: ID of the dataframe.
     """
     import uuid, bz2
-    dataframe_json = dataframe.to_json(orient='split').encode()
+    dataframe_json = dataframe.to_json(orient=orient).encode()
     compressed_data = bz2.compress(dataframe_json)
     dataframe_id = str(uuid.uuid4())
     variables.put(dataframe_id, compressed_data)
+    print("dataframe id: ", dataframe_id)
+    print('dataframe size (original):   ', sys.getsizeof(dataframe), " bytes")
+    print('dataframe size (encoded):    ', sys.getsizeof(dataframe_json), " bytes")
+    print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
     return dataframe_id
 
 
-def get_and_decompress_json_dataframe(dataframe_id):
+def compress_and_transfer_dataframe(dataframe, orient='split', mechanism=None):
+    """
+    Compress and transfer a Pandas dataframe to the selected mechanism.
+
+    :param dataframe: Pandas dataframe.
+    :param orient: Format of the JSON string.
+    :param mechanism: Data transfer mechanism.
+    :return: ID of the dataframe.
+    """
+    if mechanism is None or mechanism not in ["variables", "dataspace", "sharedfolder"]:
+        mechanism = "dataspace"
+
+    if mechanism == "variables":
+        dataframe_id = compress_and_transfer_dataframe_in_variables(dataframe, orient)
+
+    if mechanism == "dataspace":
+        dataframe_id = compress_and_transfer_dataframe_in_dataspace(dataframe, orient)
+
+    if mechanism == "sharedfolder":
+        raise NotImplementedError("sharedfolder mechanism not implemented")
+
+    return dataframe_id
+
+
+def compress_and_transfer_data_in_variables(data, data_label="data"):
+    """
+    Compress and transfer data to the Proactive variables.
+
+    :param data: Data (object/variable).
+    :param data_label: Data label (string).
+    :return: ID of the data (string).
+    """
+    import sys, bz2, uuid, pickle
+    data_id = str(uuid.uuid4())
+    data_dumped = pickle.dumps(data)
+    data_compressed = bz2.compress(data_dumped)
+    variables.put(data_id, data_compressed)
+    print(data_label + ' id: ', data_id)
+    print(data_label + ' size (original):   ', sys.getsizeof(data), " bytes")
+    print(data_label + ' size (dumped):     ', sys.getsizeof(data_dumped), " bytes")
+    print(data_label + ' size (compressed): ', sys.getsizeof(data_compressed), " bytes")
+    return data_id
+
+
+def compress_and_transfer_data(data, data_label="data", mechanism=None):
+    """
+    Compress and transfer data to the selected mechanism.
+
+    :param data: Data (object/variable).
+    :param data_label: Data label (string).
+    :param mechanism: Data transfer mechanism.
+    :return: ID of the data.
+    """
+    if mechanism is None or mechanism not in ["variables", "dataspace", "sharedfolder"]:
+        mechanism = "variables"
+
+    if mechanism == "variables":
+        data_id = compress_and_transfer_data_in_variables(data, data_label)
+
+    if mechanism == "dataspace":
+        raise NotImplementedError("dataspace mechanism not implemented")
+
+    if mechanism == "sharedfolder":
+        raise NotImplementedError("sharedfolder mechanism not implemented")
+
+    return data_id
+
+
+def compress_and_transfer_model_in_variables(model):
+    """
+    Compress and transfer a machine learning model to the Proactive variables.
+
+    :param model: Model object.
+    :return: ID of the model.
+    """
+    model_id = compress_and_transfer_data_in_variables(model, "model")
+    return model_id
+
+
+def compress_and_transfer_model(model, mechanism=None):
+    """
+    Compress and transfer a machine learning model to the selected mechanism.
+
+    :param model: Binary model.
+    :param mechanism: Data transfer mechanism.
+    :return: ID of the model.
+    """
+    model_id = compress_and_transfer_data(model, "model", mechanism)
+    return model_id
+
+
+def get_and_decompress_data_from_variables(data_id, data_label="data"):
+    """
+    Get data from the Proactive variables by using its ID.
+
+    :param data_id: Data id (uuid).
+    :param data_label: Data label (string).
+    :return: Data (object/variable).
+    """
+    import sys, bz2, pickle
+    data_compressed = variables.get(data_id)
+    data_dumped = bz2.decompress(data_compressed)
+    data = pickle.loads(data_dumped)
+    print(data_label + ' id: ', data_id)
+    print(data_label + ' size (original):   ', sys.getsizeof(data), " bytes")
+    print(data_label + ' size (dumped):     ', sys.getsizeof(data_dumped), " bytes")
+    print(data_label + ' size (compressed): ', sys.getsizeof(data_compressed), " bytes")
+    return data
+
+
+def get_and_decompress_data(data_id, data_label="data", mechanism=None):
+    """
+    Get data from Proactive by using its ID.
+
+    :param data_id: Data id (uuid).
+    :param data_label: Data label (string).
+    :param mechanism: Data transfer mechanism.
+    :return: Data (object/string).
+    """
+    data = None
+    assert data_id is not None
+
+    if mechanism is None or mechanism not in ["variables", "dataspace", "sharedfolder"]:
+        mechanism = "variables"
+
+    if mechanism == "variables":
+        data = get_and_decompress_data_from_variables(data_id, data_label)
+
+    if mechanism == "dataspace":
+        raise NotImplementedError("dataspace mechanism not implemented")
+
+    if mechanism == "sharedfolder":
+        raise NotImplementedError("sharedfolder mechanism not implemented")
+
+    return data
+
+
+def get_and_decompress_model_from_variables(model_id):
+    """
+    Get a machine learning model from the Proactive variables by using its ID.
+
+    :param model_id: Model id (uuid).
+    :return: Model object.
+    """
+    model = get_and_decompress_data_from_variables(model_id, "model")
+    return model
+
+
+def get_and_decompress_model(model_id, mechanism=None):
+    """
+    Get a machine learning model from Proactive by using its ID.
+
+    :param model_id: Model id (uuid).
+    :param mechanism: Data transfer mechanism.
+    :return: Binary model.
+    """
+    model = get_and_decompress_data(model_id, "model", mechanism)
+    return model
+
+
+def get_and_decompress_dataframe_from_variables(dataframe_id):
     """
     Get a Pandas dataframe in JSON format from Proactive variables by using its ID.
 
@@ -589,16 +915,87 @@ def get_and_decompress_json_dataframe(dataframe_id):
     return dataframe_json
 
 
-def get_and_decompress_dataframe(dataframe_id):
+def get_and_decompress_dataframe_from_dataspace(dataframe_id, dataspace=None):
     """
-    Get a Pandas dataframe from Proactive variables by using its ID.
+    Get a Pandas dataframe in JSON format from Proactive variables by using its ID.
+
+    :param dataframe_id: Pandas dataframe id (a.k.a. dataspace file path).
+    :param dataspace: Data space to be used [user, global]
+    :return: JSON dataframe.
+    """
+    import uuid, bz2
+    from os.path import isfile, getsize
+
+    global variables, userspaceapi, globalspaceapi, gateway
+
+    if dataspace is None or dataspace not in ["user", "global"]:
+        dataspace = "user"
+
+    task_id = variables.get("PA_TASK_ID")
+    dataframe_file_name = 'task_id_' + task_id + '_df_in_' + str(uuid.uuid4())
+    dataframe_file_path = dataframe_file_name + '.json.bz2'
+    origin_path = dataframe_id
+
+    print("Transferring dataframe from the " + dataspace + " space")
+    print('Origin path: ', origin_path)
+    java_file = gateway.jvm.java.io.File(dataframe_file_path)
+
+    # connect to the data space api
+    if dataspace == "user":
+        # $PA_SCHEDULER_HOME/data/defaultuser/
+        userspaceapi.connect()
+        userspaceapi.pullFile(origin_path, java_file)
+    else:
+        # $PA_SCHEDULER_HOME/data/defaultglobal/
+        globalspaceapi.connect()
+        globalspaceapi.pullFile(origin_path, java_file)
+
+    assert isfile(dataframe_file_path)
+    print('File size in KB: ', getsize(dataframe_file_path) / 1024)
+    with bz2.open(dataframe_file_path, 'rb') as f:
+        uncompressed_data = f.read()
+    dataframe_json = uncompressed_data.decode()
+    return dataframe_json
+
+
+def get_and_decompress_json_dataframe(dataframe_id, mechanism=None):
+    """
+    Get a Pandas dataframe from Proactive by using its ID.
 
     :param dataframe_id: Pandas dataframe id (uuid).
+    :param mechanism: Data transfer mechanism.
+    :return: Pandas dataframe.
+    """
+    dataframe_json = None
+
+    if mechanism is None or mechanism not in ["variables", "dataspace", "sharedfolder"]:
+        mechanism = "dataspace"
+
+    if mechanism == "variables":
+        dataframe_json = get_and_decompress_dataframe_from_variables(dataframe_id)
+
+    if mechanism == "dataspace":
+        dataframe_json = get_and_decompress_dataframe_from_dataspace(dataframe_id)
+
+    if mechanism == "sharedfolder":
+        raise NotImplementedError("sharedfolder mechanism not implemented")
+
+    assert dataframe_json is not None
+    return dataframe_json
+
+
+def get_and_decompress_dataframe(dataframe_id, orient='split', mechanism=None):
+    """
+    Get a Pandas dataframe from Proactive by using its ID.
+
+    :param dataframe_id: Pandas dataframe id (uuid).
+    :param orient: Format of the JSON string.
+    :param mechanism: Data transfer mechanism.
     :return: Pandas dataframe.
     """
     import pandas as pd
-    dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
-    dataframe = pd.read_json(dataframe_json, orient='split')
+    dataframe_json = get_and_decompress_json_dataframe(dataframe_id, mechanism)
+    dataframe = pd.read_json(dataframe_json, orient=orient)
     return dataframe
 
 

@@ -1,11 +1,9 @@
-import os
 import math
 import numpy as np
 import urllib3
 
 from io import BytesIO
 from PIL import Image
-from argparse import ArgumentParser
 from visdom import Visdom
 
 visdom_endpoint = variables.get("ENDPOINT_VISDOM") if variables.get("ENDPOINT_VISDOM") else results[0].__str__()
@@ -23,8 +21,8 @@ assert vis.check_connection()
 
 # text plot
 textwindow = vis.text('Hello World!')
-#updatetextwindow = vis.text('Hello World! More text should be here')
-#vis.text('And here it is', win=updatetextwindow, append=True)
+# updatetextwindow = vis.text('Hello World! More text should be here')
+# vis.text('And here it is', win=updatetextwindow, append=True)
 
 # show ActiveEon logo
 url_image = 'http://s3.eu-west-2.amazonaws.com/activeeon-public/images/logo.jpg'
@@ -55,7 +53,7 @@ vis.quiver(X=U,Y=V,opts=dict(normalize=0.9))
 
 # pie chart
 X = np.asarray([19, 26, 55])
-vis.pie(X=X,opts=dict(legend=['Residential', 'Non-Residential', 'Utility']))
+vis.pie(X=X, opts=dict(legend=['Residential', 'Non-Residential', 'Utility']))
 
 # mesh plot
 x = [0, 0, 1, 1, 0, 0, 1, 1]
@@ -126,10 +124,10 @@ vis.scatter(X=np.random.rand(100, 3),Y=(Y + 1.5).astype(int),
 )
 
 # image demo
-#vis.image(
+# vis.image(
 #    np.random.rand(3, 512, 256),
 #    opts=dict(title='Random!', caption='How random.'),
-#)
+# )
 
 # grid of images
 vis.images(np.random.randn(20, 3, 64, 64),

@@ -23,10 +23,9 @@ if PA_PYTHON_UTILS_URL.startswith('https'):
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe_in_variables
+global get_and_decompress_dataframe, compress_and_transfer_dataframe
 global assert_not_none_not_empty, assert_valid_float
 global assert_between, get_input_variables
-global get_and_decompress_dataframe
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -43,7 +42,8 @@ test_size = 1 - TRAIN_SIZE
 
 input_variables = {
     'task.dataframe_id': None,
-    'task.label_column': None
+    'task.label_column': None,
+    'task.feature_names': None
 }
 get_input_variables(input_variables)
 
@@ -58,8 +58,8 @@ X_train, X_test = train_test_split(dataframe, test_size=test_size)
 dataframe1 = X_train.reset_index(drop=True)
 dataframe2 = X_test.reset_index(drop=True)
 
-dataframe_id1 = compress_and_transfer_dataframe_in_variables(dataframe1)
-dataframe_id2 = compress_and_transfer_dataframe_in_variables(dataframe2)
+dataframe_id1 = compress_and_transfer_dataframe(dataframe1)
+dataframe_id2 = compress_and_transfer_dataframe(dataframe2)
 
 print("dataframe id1 (out) [train set]: ", dataframe_id1)
 print("dataframe id2 (out) [test set]:  ", dataframe_id2)
@@ -68,6 +68,7 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id_train", dataframe_id1)
 resultMetadata.put("task.dataframe_id_test", dataframe_id2)
 resultMetadata.put("task.label_column", input_variables['task.label_column'])
+resultMetadata.put("task.feature_names", input_variables['task.feature_names'])
 
 # -------------------------------------------------------------
 # Preview results

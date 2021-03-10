@@ -7,7 +7,6 @@ import ssl
 import pickle
 import pandas as pd
 import urllib.request
-from os.path import join
 from numpy import sort, array
 from sklearn.preprocessing import scale
 from tensorflow.keras.models import load_model
@@ -28,7 +27,7 @@ if PA_PYTHON_UTILS_URL.startswith('https'):
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe_in_variables
+global import_csv_file, compress_and_transfer_dataframe
 global assert_not_none_not_empty, str_to_bool
 
 # -------------------------------------------------------------
@@ -50,29 +49,19 @@ assert_not_none_not_empty(FILE_DELIMITER, "FILE_DELIMITER should be defined!")
 # -------------------------------------------------------------
 # Load file
 #
-if IMPORT_FROM.upper() == "PA:USER_FILE":
-    print("Importing file from the user space")
-    userspaceapi.connect()
-    out_file = gateway.jvm.java.io.File(FILE_PATH)
-    userspaceapi.pullFile(FILE_PATH, out_file)
-
-if IMPORT_FROM.upper() == "PA:GLOBAL_FILE":
-    print("Importing file from the global space")
-    globalspaceapi.connect()
-    out_file = gateway.jvm.java.io.File(FILE_PATH)
-    globalspaceapi.pullFile(FILE_PATH, out_file)
-
-dataframe = pd.read_csv(FILE_PATH, FILE_DELIMITER)
+dataframe = import_csv_file(FILE_PATH, FILE_DELIMITER, IMPORT_FROM)
+feature_names = dataframe.columns
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
 #
-dataframe_id = compress_and_transfer_dataframe_in_variables(dataframe)
+dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
+resultMetadata.put("task.feature_names", feature_names)
 
 # -------------------------------------------------------------
 # Preview results
@@ -97,24 +86,24 @@ if data_type_identification_enabled:
             self.__mappings = mappings
 
         def keep_initial_data_types(self, original_data):
-            # Render immuable the data type of every feature that was set before the data was imported
+            # Render immutable the data type of every feature that was set before the data was imported
             # through avoiding having integers being transformed into float
             data = original_data.copy(deep=True)
             for column in data.columns:
-                try:    
+                try:
                     data = data.astype({column: pd.Int64Dtype()})
                 except TypeError:
-                    pass     
+                    pass
             return data
 
         def build_final_set(self, original_correctly_typed_data, target_variable=None):
-           # Create is_float and unique_values features to help predict if a feature is numerical or categorical 
+            # Create is_float and unique_values features to help predict if a feature is numerical or categorical
             correctly_typed_data = original_correctly_typed_data.copy(deep=True)
             correctly_typed_data.dropna(inplace=True) 
             new_features_list = []
             for feature_name in correctly_typed_data:
                 feature = correctly_typed_data[feature_name]
-            	# Check feature data type
+                # Check feature data type
                 is_float = 0 
                 if feature.dtype == float:
                     is_float = 1
@@ -181,22 +170,22 @@ if data_type_identification_enabled:
                 loaded_variable = pickle.load(file)
             return loaded_variable
 
-    # Use LabelEncoder to keep a certain order of modalities 
+    # Use LabelEncoder to keep a certain order of modalities
     data_type_identifier = DataTypeIdentifier(LabelEncoder)
-    
-	# -------------------------------------------------------------
-	# Load the model and the mappings
+
+    # -------------------------------------------------------------
+    # Load the model and the mappings
     data_type_identifier_model = load_model("data_type_identifier/data_type_identifier.h5")
     mappings = data_type_identifier.load_variables("data_type_identifier/mappings.pickle")
 
-	# -------------------------------------------------------------
-	# Predict the columns data type 
+    # -------------------------------------------------------------
+    # Predict the columns data type
     data_type_predictions = data_type_identifier.predict(dataframe, mappings, data_type_identifier_model)
-    
-	# -------------------------------------------------------------
-	# Transfer data to the next tasks
-	#    
-    data_type_dataframe_id = compress_and_transfer_dataframe_in_variables(data_type_predictions)
+
+    # -------------------------------------------------------------
+    # Transfer data to the next tasks
+    #
+    data_type_dataframe_id = compress_and_transfer_dataframe(data_type_predictions)
     print("data type dataframe id (out): ", data_type_dataframe_id)
     resultMetadata.put("task.data_type_dataframe_id", data_type_dataframe_id)
 

@@ -12,7 +12,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from torchvision import datasets, transforms
-from torch.autograd import Variable
 from visdom import Visdom
 
 visdom_endpoint = variables.get("ENDPOINT_VISDOM") if variables.get("ENDPOINT_VISDOM") else results[0].__str__()

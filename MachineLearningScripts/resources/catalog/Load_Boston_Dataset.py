@@ -24,7 +24,7 @@ if PA_PYTHON_UTILS_URL.startswith('https'):
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe_in_variables
+global compress_and_transfer_dataframe
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -33,23 +33,24 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-LABEL_COLUMN = variables.get("LABEL_COLUMN")
-
 boston = load_boston()
 dataframe_load = pd.DataFrame(boston.data)
 dataframe_load.columns = boston.feature_names
 data_label = boston.target
+label_column = "LABEL"
 dataframe = dataframe_load.assign(LABEL=data_label)
+feature_names = dataframe.columns
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
 #
-dataframe_id = compress_and_transfer_dataframe_in_variables(dataframe)
+dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
-resultMetadata.put("task.label_column", LABEL_COLUMN)
+resultMetadata.put("task.label_column", label_column)
+resultMetadata.put("task.feature_names", feature_names)
 
 # -------------------------------------------------------------
 # Preview results

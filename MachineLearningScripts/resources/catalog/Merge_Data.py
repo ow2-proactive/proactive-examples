@@ -22,9 +22,8 @@ if PA_PYTHON_UTILS_URL.startswith('https'):
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe_in_variables
+global get_and_decompress_dataframe, compress_and_transfer_dataframe
 global get_input_variables, get_input_variables_from_key
-global get_and_decompress_dataframe
 global assert_not_none_not_empty
 
 # -------------------------------------------------------------
@@ -64,7 +63,7 @@ dataframe = pd.merge(dataframe1, dataframe2, on=[REF_COLUMN], how='outer')
 # -------------------------------------------------------------
 # Transfer data to the next tasks
 #
-dataframe_id = compress_and_transfer_dataframe_in_variables(dataframe)
+dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
 
 resultMetadata.put("task.name", __file__)

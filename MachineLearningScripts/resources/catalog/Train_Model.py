@@ -5,11 +5,7 @@ This module contains the Python script for the Train Model task.
 """
 import ssl
 import urllib.request
-import bz2
 import json
-import pickle
-import sys
-import uuid
 import shap
 
 import numpy as np
@@ -31,10 +27,10 @@ if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
-global check_task_is_enabled, preview_dataframe_in_task_result
-global is_nvidia_rapids_enabled, is_not_none_not_empty
-global raiser, get_input_variables, dict_to_obj
-global get_and_decompress_json_dataframe
+global check_task_is_enabled, is_nvidia_rapids_enabled
+global raiser, get_input_variables, dict_to_obj, is_not_none_not_empty
+global get_and_decompress_json_dataframe, preview_dataframe_in_task_result
+global compress_and_transfer_dataframe, compress_and_transfer_data
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -301,6 +297,7 @@ else:
             from sklearn.cluster import KMeans
             model = KMeans(**alg.input_variables.__dict__)
 # -------------------------------------------------------------
+dataframe_train = None
 dataframe_label = None
 model_explainer = None
 loss = 0
@@ -391,71 +388,57 @@ if model is not None:
     # -------------------------------------------------------------
     # Dumps and compress the model
     #
-    model_bin = pickle.dumps(model)
-    model_compressed = bz2.compress(model_bin)
-    model_id = str(uuid.uuid4())
-    variables.put(model_id, model_compressed)
-    print("model id: ", model_id)
-    print('model size (original):   ', sys.getsizeof(model_bin), " bytes")
-    print('model size (compressed): ', sys.getsizeof(model_compressed), " bytes")
+    model_id = compress_and_transfer_data(model, "model")
     resultMetadata.put("task.model_id", model_id)
 else:
     raiser("Algorithm not found!")
 
-# -----------------------------------------------------------------
-# Data drift measures
+# -------------------------------------------------------------
+# Transfer data to the next tasks
 #
 if NVIDIA_RAPIDS_ENABLED:
     dataframe = dataframe.to_pandas()
-    dataframe_train = dataframe_train.to_pandas()
+    dataframe_train = dataframe_train.to_pandas() if dataframe_train is not None else None
     dataframe_label = dataframe_label.to_pandas() if dataframe_label is not None else None
 
-mean_df_train = dataframe_train.mean(axis=0)  # mean
-std_df_train = dataframe_train.std(axis=0)  # standard deviation
-dataframe_model_metadata = pd.DataFrame({0: mean_df_train, 1: std_df_train}).T
-
-dataframe_json = dataframe.to_json(orient='split').encode()
-dataframe_model_meta_json = dataframe_model_metadata.to_json(orient='values').encode()
-
-compressed_data = bz2.compress(dataframe_json)
-compressed_model_metadata = bz2.compress(dataframe_model_meta_json)
-
-dataframe_id = str(uuid.uuid4())
-variables.put(dataframe_id, compressed_data)
-
-model_metadata_id = str(uuid.uuid4())
-variables.put(model_metadata_id, compressed_model_metadata)
-
+dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
-print("model metadata id (out): ", model_metadata_id)
+
+# -----------------------------------------------------------------
+# Data drift measures
+#
+# [deprecated]
+# import warnings
+# warnings.warn("model_metadata is deprecated", DeprecationWarning)
+# mean_df_train = dataframe_train.mean(axis=0)  # mean
+# std_df_train = dataframe_train.std(axis=0)  # standard deviation
+# dataframe_model_metadata = pd.DataFrame({0: mean_df_train, 1: std_df_train}).T
+# model_metadata_id = compress_and_transfer_dataframe(dataframe_model_metadata, orient='values')
+# print("model metadata id (out): ", model_metadata_id)
+# resultMetadata.put("task.model_metadata_id", model_metadata_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.algorithm_json", algorithm_json)
-resultMetadata.put("task.label_column", LABEL_COLUMN)
-resultMetadata.put("task.model_metadata_id", model_metadata_id)
 resultMetadata.put("task.dataframe_id", dataframe_id)
+resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.feature_names", input_variables['task.feature_names'])
+
 # -----------------------------------------------------------------
-# Explainer shap
+# Model Explainer
 #
 if model_explainer:
-    model_explainer_bin = pickle.dumps(model_explainer)
-    model_explainer_compressed = bz2.compress(model_explainer_bin)  # explainer object
-    model_explainer_id = str(uuid.uuid4())
-    variables.put(model_explainer_id, model_explainer_compressed)
+    model_explainer_id = compress_and_transfer_data(model, "model_explainer")
     resultMetadata.put("task.model_explainer_id", model_explainer_id)
+
 # -----------------------------------------------------------------
-
+# For AutoML
+#
 token = variables.get("TOKEN")
-# Convert from JSON to dict
 token = json.loads(token)
-
-# return the loss value
 result_map = {
     'token': token,
     'loss': loss
 }
-
 result_map = json.dumps(result_map)
 resultMap.put("RESULT_JSON", result_map)
 print('result_map: ', result_map)
