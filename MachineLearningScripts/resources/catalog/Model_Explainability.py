@@ -1,15 +1,15 @@
-__file__ = variables.get("PA_TASK_NAME")
+# -*- coding: utf-8 -*-
+"""Proactive Model Explainability for Machine Learning
 
-if str(variables.get("TASK_ENABLED")).lower() == 'false':
-    print("Task " + __file__ + " disabled")
-    quit()
-
-print("BEGIN " + __file__)
+This module contains the Python script for the Model Explainability task.
+"""
 
 import matplotlib as mpl
 mpl.use('Agg')
-
 import matplotlib.pyplot as plt
+
+import ssl
+import urllib.request
 import io
 import eli5
 import base64
@@ -22,6 +22,22 @@ import shap
 from eli5.sklearn import PermutationImportance
 from pdpbox import pdp
 
+global variables, resultMetadata
+
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+else:
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, get_input_variables, get_and_decompress_dataframe
+
 
 def fig_to_base64(fig):
     img = io.BytesIO()
@@ -29,6 +45,10 @@ def fig_to_base64(fig):
     img.seek(0)
     return base64.b64encode(img.getvalue())
 
+
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
 
 # -------------------------------------------------------------
 # Get data from the propagated variables
@@ -39,12 +59,7 @@ input_variables = {
     'task.label_column': None,
     'task.model_id': None
 }
-for key in input_variables.keys():
-    for res in results:
-        value = res.getMetadata().get(key)
-        if value is not None:
-            input_variables[key] = value
-            break
+get_input_variables(input_variables)
 
 dataframe_id = None
 if input_variables['task.dataframe_id'] is not None:
@@ -53,11 +68,7 @@ if input_variables['task.dataframe_id_test'] is not None:
     dataframe_id = input_variables['task.dataframe_id_test']
 print("dataframe id (in): ", dataframe_id)
 
-dataframe_json = variables.get(dataframe_id)
-assert dataframe_json is not None
-dataframe_json = bz2.decompress(dataframe_json).decode()
-
-dataframe = pd.read_json(dataframe_json, orient='split')
+dataframe = get_and_decompress_dataframe(dataframe_id)
 
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")

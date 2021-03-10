@@ -1,26 +1,47 @@
-__file__ = variables.get("PA_TASK_NAME")
+# -*- coding: utf-8 -*-
+"""Proactive Visdom_Visualize_Results for Machine Learning
 
-if str(variables.get("TASK_ENABLED")).lower() != 'true':
-    print("Task " + __file__ + " disabled")
-    quit()
-
-print("BEGIN " + __file__)
-
-import sys, bz2, uuid, json
-import pandas as pd
+This module contains the Python script for the Visdom_Visualize_Results task.
+"""
+import ssl
+import urllib.request
+import json
 import numpy as np
 
 from visdom import Visdom
 from sklearn.metrics import *
 from pandas.api.types import is_string_dtype
 
+global variables, resultMetadata
+
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+else:
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, get_input_variables, preview_dataframe_in_task_result
+global get_and_decompress_dataframe, compress_and_transfer_dataframe, dict_to_obj
+
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
+
+# -------------------------------------------------------------
+# Get Visdom endpoint
 visdom_endpoint = variables.get("ENDPOINT_VISDOM") if variables.get("ENDPOINT_VISDOM") else results[0].__str__()
 print("ENDPOINT_VISDOM: ", visdom_endpoint)
 assert visdom_endpoint is not None
 visdom_endpoint = visdom_endpoint.replace("http://", "")
 (VISDOM_HOST, VISDOM_PORT) = visdom_endpoint.split(":")
 print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
-vis = Visdom(server="http://"+VISDOM_HOST,port=int(VISDOM_PORT))
+vis = Visdom(server="http://"+VISDOM_HOST, port=int(VISDOM_PORT))
 assert vis.check_connection()
 
 input_variables = {
@@ -29,12 +50,7 @@ input_variables = {
     'task.algorithm_json': None,
     'task.label_column': None,
 }
-for key in input_variables.keys():
-    for res in results:
-        value = res.getMetadata().get(key)
-        if value is not None:
-            input_variables[key] = value
-            break
+get_input_variables(input_variables)
 
 dataframe_id = None
 if input_variables['task.dataframe_id'] is not None:
@@ -43,11 +59,7 @@ if input_variables['task.dataframe_id_test'] is not None:
     dataframe_id = input_variables['task.dataframe_id_test']
 print("dataframe id (in): ", dataframe_id)
 
-dataframe_json = variables.get(dataframe_id)
-assert dataframe_json is not None
-dataframe_json = bz2.decompress(dataframe_json).decode()
-
-dataframe = pd.read_json(dataframe_json, orient='split')
+dataframe = get_and_decompress_dataframe(dataframe_id)
 
 is_labeled_data = False
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
@@ -65,16 +77,8 @@ TARGET_CLASS = str(TARGET_CLASS)
 algorithm_json = input_variables['task.algorithm_json']
 assert algorithm_json is not None
 algorithm = json.loads(algorithm_json)
-#-------------------------------------------------------------
-class obj(object):
-    def __init__(self, d):
-        for a, b in d.items():
-            if isinstance(b, (list, tuple)):
-                setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
-            else:
-                setattr(self, a, obj(b) if isinstance(b, dict) else b)
-#-------------------------------------------------------------
-alg = obj(algorithm)
+print("algorithm:\n", algorithm)
+alg = dict_to_obj(algorithm)
 
 columns = []
 if alg.type == 'classification' and is_labeled_data:
@@ -131,9 +135,9 @@ if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'
     if len(classes) == 2 and not is_string_dtype(dataframe[LABEL_COLUMN]):
         model_fpr, model_tpr, _ = roc_curve(dataframe_labels_values, dataframe_predictions_values)
 
-#-------------------------------------------------------------
+# -------------------------------------------------------------
 # VISDOM PLOTS
-#-------------------------------------------------------------
+# -------------------------------------------------------------
 
 list_detected_samples_text = vis.text("List of detected samples in class " + TARGET_CLASS, opts=dict(title='List of indexes'))
 
@@ -160,7 +164,7 @@ features_line = vis.line(
 if alg.type == 'classification' or alg.type == 'clustering':
     statistic_pie = vis.pie(X=classes_stats, opts=dict(legend=classes, title='Classification results'))
 
-#-------------------------------------------------------------
+# -------------------------------------------------------------
 count = 0
 for x in range(nb_rows):
     vis.line(
@@ -193,7 +197,7 @@ for x in range(nb_rows):
                     vis.line(Y=np.array([0]), X=np.array([count]), win=target_class_line, update='append')
                 count += 1
 
-#-------------------------------------------------------------
+# -------------------------------------------------------------
 
 score_text = vis.text("Model scoring")
 if is_labeled_data and (alg.type == 'classification' or alg.type == 'clustering'):
@@ -217,4 +221,5 @@ if is_labeled_data and alg.type == 'regression':
     vis.text("Coefficient of determination:", win=score_text, append=True)
     vis.text(str(model_r2s), win=score_text, append=True)
 
+# -------------------------------------------------------------
 print("END " + __file__)

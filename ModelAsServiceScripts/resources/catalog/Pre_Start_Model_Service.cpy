@@ -2,9 +2,14 @@ import ssl
 import subprocess
 import sys
 import json
+from cryptography.fernet import Fernet
+
+global schedulerapi
+
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
 
 # Install required Python libraries if they are not already installed
 try:
@@ -41,7 +46,6 @@ user_credentials = {
 user_credentials_json = json.dumps(user_credentials)
 
 # Encrypt user data into a binary file
-from cryptography.fernet import Fernet
 key = Fernet.generate_key()
 f = Fernet(key)
 message = user_credentials_json.encode()

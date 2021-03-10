@@ -31,9 +31,8 @@ if PA_PYTHON_UTILS_URL.startswith('https'):
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe_in_variables
-global assert_not_none_not_empty, get_input_variables
-global get_and_decompress_dataframe, encode_columns
+global get_and_decompress_dataframe, compress_and_transfer_dataframe
+global assert_not_none_not_empty, get_input_variables, encode_columns
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -64,7 +63,7 @@ print("Encode map: ", encode_map)
 # -------------------------------------------------------------
 # Transfer data to the next tasks
 #
-dataframe_id = compress_and_transfer_dataframe_in_variables(dataframe)
+dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
 
 encode_map_json = json.dumps(encode_map, default=default)

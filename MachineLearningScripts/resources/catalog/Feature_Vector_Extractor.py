@@ -1,24 +1,40 @@
-__file__ = variables.get("PA_TASK_NAME")
+# -*- coding: utf-8 -*-
+"""Proactive Feature_Vector_Extractor for Machine Learning
 
-if str(variables.get("TASK_ENABLED")).lower() == 'false':
-    print("Task " + __file__ + " disabled")
-    quit()
-
-print("BEGIN " + __file__)
-
-import bz2
-import sys
-import uuid
+This module contains the Python script for the Feature_Vector_Extractor task.
+"""
+import ssl
+import urllib.request
 
 import pandas as pd
+
+global variables, resultMetadata
+
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+else:
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, get_input_variables
+global get_and_decompress_dataframe, compress_and_transfer_dataframe
+global preview_dataframe_in_task_result
 
 
 # Useful when there is multiple identifiers in a single row
 def id_extraction(session_col=None):
-    session_col = str(session_col)
-    ids_list = session_col.split(' ')
-    return ids_list
+    return str(session_col).split(' ')
 
+
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
 
 # -------------------------------------------------------------
 # Get data from the propagated variables
@@ -34,18 +50,12 @@ input_variables = {
     'task.dataframe_id': None,
     'task.label_column': None
 }
-for key in input_variables.keys():
-    for res in results:
-        value = res.getMetadata().get(key)
-        if value is not None:
-            input_variables[key] = value
-            break
+get_input_variables(input_variables)
 
 dataframe_id = input_variables['task.dataframe_id']
 print("dataframe id (in): ", dataframe_id)
 
-dataframe_json = variables.get(dataframe_id)
-assert dataframe_json is not None
+dataframe = get_and_decompress_dataframe(dataframe_id)
 
 # -------------------------------------------------------------
 # Extract variables
@@ -61,8 +71,7 @@ df_pattern_features = pd.DataFrame.empty
 df_state_features = pd.DataFrame.empty
 df_count_features = pd.DataFrame.empty
 
-DATAFRAME_JSON = bz2.decompress(dataframe_json).decode()
-df_structured_logs = pd.read_json(DATAFRAME_JSON, orient='split')
+df_structured_logs = dataframe
 pattern_number = int(df_structured_logs[PATTERN_COLUMN].max())
 
 feature_vector = []
@@ -173,15 +182,12 @@ if not frames:
 else:
     df_features = pd.concat(frames, axis=1)
 
-dataframe_json = df_features.to_json(orient='split').encode()
-compressed_data = bz2.compress(dataframe_json)
-
-dataframe_id = str(uuid.uuid4())
-variables.put(dataframe_id, compressed_data)
-
+# -------------------------------------------------------------
+# Transfer data to the next tasks
+#
+dataframe = df_features
+dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
-print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
-print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
@@ -190,31 +196,7 @@ resultMetadata.put("task.label_column", input_variables['task.label_column'])
 # -------------------------------------------------------------
 # Preview results
 #
-LIMIT_OUTPUT_VIEW = variables.get("LIMIT_OUTPUT_VIEW")
-LIMIT_OUTPUT_VIEW = 5 if LIMIT_OUTPUT_VIEW is None else int(LIMIT_OUTPUT_VIEW)
-if LIMIT_OUTPUT_VIEW > 0:
-    print("task result limited to: ", LIMIT_OUTPUT_VIEW, " rows")
-    dataframe = df_features.head(LIMIT_OUTPUT_VIEW).copy()
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-    result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
-result = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Machine Learning Preview</title>
-<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" 
-integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
-</head>
-<body class="container">
-<h1 class="text-center my-4" style="color:#003050;">Data Preview</h1>
-<div style="text-align:center">{0}</div>
-</body></html>""".format(result)
-result = result.encode('utf-8')
-resultMetadata.put("file.extension", ".html")
-resultMetadata.put("file.name", "output.html")
-resultMetadata.put("content.type", "text/html")
+preview_dataframe_in_task_result(dataframe)
 
 # -------------------------------------------------------------
 # Save the linked variables

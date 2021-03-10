@@ -1,22 +1,38 @@
-__file__ = variables.get("PA_TASK_NAME")
+# -*- coding: utf-8 -*-
+"""Proactive Log_Parser for Machine Learning
 
-if str(variables.get("TASK_ENABLED")).lower() == 'false':
-    print("Task " + __file__ + " disabled")
-    quit()
-
-print("BEGIN " + __file__)
-
-import bz2
-import re
-import sys
-import time as clock
-import uuid
-from collections import OrderedDict
-from datetime import datetime
-
+This module contains the Python script for the Log_Parser task.
+"""
+import ssl
+import urllib.request
 import numpy as np
 import pandas as pd
 import wget
+import re
+import time as clock
+
+from collections import OrderedDict
+from datetime import datetime
+
+global variables, resultMetadata
+
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+else:
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+global check_task_is_enabled, compress_and_transfer_dataframe
+
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
 
 # -------------------------------------------------------------
 # Get data from the propagated variables
@@ -141,21 +157,14 @@ else:
     print('Your data is empty')
 
 # -------------------------------------------------------------
-# Save the linked variables
+# Transfer data to the next tasks
 #
-df_json_logs = df_structured_logs.to_json(orient='split').encode()
-compressed_data = bz2.compress(df_json_logs)
-
-dataframe_id = str(uuid.uuid4())
-variables.put(dataframe_id, compressed_data)
-
-print("dataframe id: ", dataframe_id)
-print('dataframe size (original):   ', sys.getsizeof(df_json_logs), " bytes")
-print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
+dataframe = df_structured_logs
+dataframe_id = compress_and_transfer_dataframe(dataframe)
+print("dataframe id (out): ", dataframe_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 
-print("Finished " + LOG_FILE + " PARSING")
 # -------------------------------------------------------------
 print("END " + __file__)

@@ -1,5 +1,7 @@
-import os, sys, bz2, uuid, json, time
+import os, sys
 import subprocess
+
+global variables
 
 
 def install(package):
@@ -64,8 +66,7 @@ file.write(instance_name)
 file.close()
 
 # Get variables
-user_name = variables.get("USER_NAME") if variables.get(
-    "USER_NAME") else failure("USER_NAME must be defined!")
+user_name = variables.get("USER_NAME") if variables.get("USER_NAME") else failure("USER_NAME must be defined!")
 api_endpoint = variables.get("API_ENDPOINT")
 api_token_endpoint = api_endpoint + api_token
 api_deploy_endpoint = api_endpoint + api_deploy
@@ -96,16 +97,17 @@ except Exception as e:
 baseline_data_url = variables.get("BASELINE_DATA_URL") if variables.get("BASELINE_DATA_URL") else failure("Baseline data is not defined!")
 baseline_data_url = unquote(baseline_data_url)
 try:
-	wget.download(baseline_data_url, baseline_data_path)
+    wget.download(baseline_data_url, baseline_data_path)
 except Exception as e:
     failure(e)
 
 # Deploy the downloaded model
 model_file = open(model_path, 'rb')
 baseline_data_file = open(baseline_data_path, 'r')
-files = {'model_file': model_file, 'baseline_data' : baseline_data_file }
+files = {'model_file': model_file, 'baseline_data': baseline_data_file }
 data = {'api_token': token}
 
+# [deprecated]
 # model_metadata_json = variables.get("MODEL_METADATA") if variables.get(
 #     "MODEL_METADATA") else None
 # if model_metadata_json is not None:
@@ -119,6 +121,7 @@ else:
     data['drift_enabled'] = False
     data['drift_notification'] = False
 
+# [deprecated]
 # deviation_treshold = variables.get("DEVIATION_TRESHOLD")
 # deviation_treshold = float(
 #     deviation_treshold) if deviation_treshold is not None else 0
@@ -131,8 +134,7 @@ else:
     data['log_predictions'] = False
 
 try:
-    req = requests.post(
-        api_deploy_endpoint, files=files, data=data, verify=False)
+    req = requests.post(api_deploy_endpoint, files=files, data=data, verify=False)
     model_deployment_status = req.text
     if model_deployment_status.lower() != "Model deployed".lower():
         current_status = "ERROR"
@@ -142,5 +144,5 @@ except Exception as e:
 finally:
     model_file.close()
 
-# Propagate the status of the deployment to the Post_Scrpit
+# Propagate the status of the deployment to the Post_Script
 variables.put("CURRENT_STATUS", current_status)

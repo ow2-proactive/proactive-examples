@@ -44,7 +44,7 @@ else:
 global check_task_is_enabled, preview_dataframe_in_task_result
 global is_nvidia_rapids_enabled, is_not_none_not_empty
 global raiser, get_input_variables, dict_to_obj
-global get_and_decompress_json_dataframe
+global get_and_decompress_json_dataframe, compress_and_transfer_dataframe
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -205,16 +205,12 @@ else:
     dataframe = dataframe.to_pandas() if NVIDIA_RAPIDS_ENABLED else dataframe
     dataframe = dataframe.assign(predictions=dataframe_predictions)
 
-dataframe_json = dataframe.to_json(orient='split').encode()
-compressed_data = bz2.compress(dataframe_json)
 
-dataframe_id = str(uuid.uuid4())
-variables.put(dataframe_id, compressed_data)
-
+# -------------------------------------------------------------
+# Transfer data to the next tasks
+#
+dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
-print('dataframe size (original):   ', sys.getsizeof(dataframe_json), " bytes")
-print('dataframe size (compressed): ', sys.getsizeof(compressed_data), " bytes")
-print(dataframe.head())
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
