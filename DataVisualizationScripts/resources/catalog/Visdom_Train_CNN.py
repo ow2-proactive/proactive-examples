@@ -1,8 +1,11 @@
-# solve mnist download issue, fix from: https://github.com/pytorch/vision/issues/1938
-from six.moves import urllib
-opener = urllib.request.build_opener()
-opener.addheaders = [('User-agent', 'Mozilla/5.0')]
-urllib.request.install_opener(opener)
+# [deprecated] solve mnist download issue, fix from: https://github.com/pytorch/vision/issues/1938
+# from six.moves import urllib
+# opener = urllib.request.build_opener()
+# opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+# urllib.request.install_opener(opener)
+
+# new fix: https://twitter.com/marc_lelarge/status/1370340616215859203
+# check task pre-script
 
 import argparse
 import numpy as np
@@ -92,7 +95,7 @@ torch.manual_seed(args.seed)
 kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
 train_loader = torch.utils.data.DataLoader(
-  datasets.MNIST('data', train=True, download=True,
+  datasets.MNIST('./', train=True, download=False,
                  transform=transforms.Compose([
                      transforms.ToTensor(),
                      transforms.Normalize((0.1307,), (0.3081,))
@@ -100,7 +103,7 @@ train_loader = torch.utils.data.DataLoader(
   batch_size=args.batch_size, shuffle=True, **kwargs)
 
 test_loader = torch.utils.data.DataLoader(
-  datasets.MNIST('data', train=False, transform=transforms.Compose([
+  datasets.MNIST('./', train=False, transform=transforms.Compose([
                      transforms.ToTensor(),
                      transforms.Normalize((0.1307,), (0.3081,))
                  ])),
