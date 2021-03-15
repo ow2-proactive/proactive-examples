@@ -64,7 +64,9 @@ if OUTPUT_FILE:
     print('OUTPUT_FILE=' + OUTPUT_FILE)
 
 # Please refer to SQLAlchemy doc for more info about database urls.
-# http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urlsdatabase_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(DBMS_PROTOCOL,DBMS_DRIVER,USER,PASSWORD,HOST,PORT,DATABASE)
+# http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls
+if DBMS_NAME == "greenplum":
+    DBMS_NAME = "postgresql"
 database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(DBMS_NAME,DBMS_DRIVER,USER,PASSWORD,HOST,PORT,DATABASE)
 engine = create_engine(database_url)
 
