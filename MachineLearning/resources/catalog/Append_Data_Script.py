@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Proactive Filter Columns for Machine Learning
+"""Proactive Append Data for Machine Learning
 
-This module contains the Python script for the Filter Columns task.
+This module contains the Python script for the Append Data task.
 """
 import ssl
 import urllib.request
@@ -15,14 +15,15 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
 if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe, get_and_decompress_dataframe
-global assert_not_none_not_empty, get_input_variables
+global get_and_decompress_dataframe, compress_and_transfer_dataframe
+global get_input_variables, get_input_variables_from_key
+global assert_not_none_not_empty
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -31,23 +32,29 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-COLUMNS_NAME = variables.get("COLUMNS_NAME")
-assert_not_none_not_empty(COLUMNS_NAME, "COLUMNS_NAME should be defined!")
-
 input_variables = {
-    'task.dataframe_id': None,
     'task.label_column': None
 }
 get_input_variables(input_variables)
 
-dataframe_id = input_variables['task.dataframe_id']
-print("dataframe id (in): ", dataframe_id)
+input_dataframes = {
+    'dataframe_id1': None,
+    'dataframe_id2': None
+}
+get_input_variables_from_key(input_dataframes, key='task.dataframe_id')
+dataframe_id1 = input_dataframes['dataframe_id1']
+dataframe_id2 = input_dataframes['dataframe_id2']
 
-dataframe = get_and_decompress_dataframe(dataframe_id)
+assert_not_none_not_empty(dataframe_id1, __file__ + " need two dataframes!")
+assert_not_none_not_empty(dataframe_id2, __file__ + " need two dataframes!")
 
-# Get only a specific set of columns from the DataFrame
-columns = [x.strip() for x in COLUMNS_NAME.split(',')]
-dataframe = dataframe.filter(columns, axis=1)
+print("dataframe id1 (in): ", dataframe_id1)
+print("dataframe id2 (in): ", dataframe_id2)
+
+dataframe1 = get_and_decompress_dataframe(dataframe_id1)
+dataframe2 = get_and_decompress_dataframe(dataframe_id2)
+
+dataframe = dataframe1.append(dataframe2, ignore_index=True)
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks

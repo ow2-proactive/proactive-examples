@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Proactive Load Iris Dataset for Machine Learning
+"""Proactive Fill Nans for Machine Learning
 
-This module contains the Python script for the Load Iris Dataset task.
+This module contains the Python script for the Fill Nans task.
 """
 import ssl
+import json
 import urllib.request
+import numpy as np
 
 global variables, resultMetadata
 
@@ -15,14 +17,14 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
 if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global import_csv_file, compress_and_transfer_dataframe
-global assert_not_none_not_empty
+global get_and_decompress_dataframe, compress_and_transfer_dataframe
+global assert_not_none_not_empty, get_input_variables
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -31,20 +33,27 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-IMPORT_FROM = variables.get("IMPORT_FROM")
-FILE_PATH = variables.get("FILE_PATH")
-FILE_DELIMITER = variables.get("FILE_DELIMITER")
-LABEL_COLUMN = variables.get("LABEL_COLUMN")
+input_variables = {
+    'task.dataframe_id': None,
+    'task.label_column': None
+}
+get_input_variables(input_variables)
 
-assert_not_none_not_empty(IMPORT_FROM, "IMPORT_FROM should be defined!")
-assert_not_none_not_empty(FILE_PATH, "FILE_PATH should be defined!")
-assert_not_none_not_empty(FILE_DELIMITER, "FILE_DELIMITER should be defined!")
+dataframe_id = input_variables['task.dataframe_id']
+print("dataframe id (in): ", dataframe_id)
 
-# -------------------------------------------------------------
-# Load file
-#
-dataframe = import_csv_file(FILE_PATH, FILE_DELIMITER, IMPORT_FROM)
-feature_names = dataframe.columns
+dataframe = get_and_decompress_dataframe(dataframe_id)
+
+# Replace `inf` and `-inf` with `nan`
+dataframe.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+# Replace `nan` by `zeros` or by using a `fill map`
+FILL_MAP = variables.get("FILL_MAP")
+if FILL_MAP is not None and FILL_MAP is not "":
+    fill_map = json.loads(FILL_MAP)
+    dataframe.fillna(value=fill_map, inplace=True)
+else:
+    dataframe.fillna(0, inplace=True)
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
@@ -54,8 +63,7 @@ print("dataframe id (out): ", dataframe_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
-resultMetadata.put("task.label_column", LABEL_COLUMN)
-resultMetadata.put("task.feature_names", feature_names)
+resultMetadata.put("task.label_column", input_variables['task.label_column'])
 
 # -------------------------------------------------------------
 # Preview results

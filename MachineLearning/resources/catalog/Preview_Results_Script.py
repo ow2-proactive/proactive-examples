@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Proactive Download_Model for Machine Learning
+"""Proactive Preview Results for Machine Learning
 
-This module contains the Python script for the Download_Model task.
+This module contains the Python script for the Preview Results task.
 """
 import ssl
 import urllib.request
@@ -15,13 +15,14 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
 if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
-global check_task_is_enabled, get_input_variables
-global get_and_decompress_model, export_model_for_download
+global check_task_is_enabled, assert_not_none_not_empty
+global get_input_variables, get_and_decompress_dataframe
+global preview_dataframe_in_task_result
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -30,16 +31,24 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-input_variables = {'task.model_id': None}
+OUTPUT_TYPE = variables.get("OUTPUT_TYPE")
+assert_not_none_not_empty(OUTPUT_TYPE, "OUTPUT_TYPE should be defined!")
+
+input_variables = {
+    'task.dataframe_id': None,
+    'task.label_column': None
+}
 get_input_variables(input_variables)
 
-model_id = input_variables['task.model_id']
-model = get_and_decompress_model(model_id)
+dataframe_id = input_variables['task.dataframe_id']
+print("dataframe id (in): ", dataframe_id)
+
+dataframe = get_and_decompress_dataframe(dataframe_id)
 
 # -------------------------------------------------------------
-# Expose model for download
+# Preview results
 #
-export_model_for_download(model)
+preview_dataframe_in_task_result(dataframe, output_type=OUTPUT_TYPE)
 
 # -------------------------------------------------------------
 print("END " + __file__)
