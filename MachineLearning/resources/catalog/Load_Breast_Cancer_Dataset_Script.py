@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Proactive Load Boston Dataset for Machine Learning
+"""Proactive Load_Breast_Cancer_Dataset for Machine Learning
 
-This module contains the Python script for the Load Boston Dataset task.
+This module contains the Python script for the Load_Breast_Cancer_Dataset task.
 """
 import ssl
 import urllib.request
+import sys, bz2, uuid
 import pandas as pd
+import numpy as np
 
-from sklearn.datasets import load_boston
+from sklearn.datasets import load_breast_cancer
 
 global variables, resultMetadata
 
@@ -18,13 +20,12 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
 if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
-global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe
+global check_task_is_enabled, preview_dataframe_in_task_result, compress_and_transfer_dataframe
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -33,10 +34,10 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-boston = load_boston()
-dataframe_load = pd.DataFrame(boston.data)
-dataframe_load.columns = boston.feature_names
-data_label = boston.target
+cancer = load_breast_cancer()
+dataframe_load = pd.DataFrame(cancer.data)
+dataframe_load.columns = cancer.feature_names 
+data_label = cancer.target
 label_column = "LABEL"
 dataframe = dataframe_load.assign(LABEL=data_label)
 feature_names = dataframe.columns

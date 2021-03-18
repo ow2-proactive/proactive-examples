@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Proactive Query Data for Machine Learning
+"""Proactive Load_Californa_Housing_Dataset for Machine Learning
 
-This module contains the Python script for the Query Data task.
+This module contains the Python script for the Load_Californa_Housing_Dataset task.
 """
 import ssl
 import urllib.request
+import sys, bz2, uuid
+import pandas as pd
+import numpy as np
+
+from sklearn.datasets import fetch_california_housing
+from sklearn.model_selection import train_test_split
 
 global variables, resultMetadata
 
@@ -15,14 +21,13 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
 if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe, get_and_decompress_dataframe
-global assert_not_none_not_empty, get_input_variables
+global compress_and_transfer_dataframe
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -31,22 +36,14 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-QUERY = variables.get("QUERY")
-assert_not_none_not_empty(QUERY, "QUERY should be defined!")
-
-input_variables = {
-    'task.dataframe_id': None,
-    'task.label_column': None
-}
-get_input_variables(input_variables)
-
-dataframe_id = input_variables['task.dataframe_id']
-print("dataframe id (in): ", dataframe_id)
-
-dataframe = get_and_decompress_dataframe(dataframe_id)
-
-# Perform some query in the DataFrame
-dataframe.query(QUERY, inplace=True)
+california_housing = fetch_california_housing()
+dataframe_load = pd.DataFrame(california_housing.data)
+dataframe_load.columns = california_housing.feature_names 
+data_label = california_housing.target
+label_column = "LABEL"
+dataframe = dataframe_load.assign(LABEL=data_label)
+dataframe, neglected = train_test_split(dataframe, test_size=0.98)
+feature_names = dataframe.columns
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
@@ -56,7 +53,8 @@ print("dataframe id (out): ", dataframe_id)
 
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
-resultMetadata.put("task.label_column", input_variables['task.label_column'])
+resultMetadata.put("task.label_column", label_column)
+resultMetadata.put("task.feature_names", feature_names)
 
 # -------------------------------------------------------------
 # Preview results

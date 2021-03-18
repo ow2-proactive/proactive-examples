@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Proactive Fill Nans for Machine Learning
+"""Proactive Drop Nans for Machine Learning
 
-This module contains the Python script for the Fill Nans task.
+This module contains the Python script for the Drop Nans task.
 """
 import ssl
-import json
 import urllib.request
 import numpy as np
 
@@ -17,7 +16,7 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
 if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
@@ -44,16 +43,9 @@ print("dataframe id (in): ", dataframe_id)
 
 dataframe = get_and_decompress_dataframe(dataframe_id)
 
-# Replace `inf` and `-inf` with `nan`
+# Remove nans from the DataFrame
 dataframe.replace([np.inf, -np.inf], np.nan, inplace=True)
-
-# Replace `nan` by `zeros` or by using a `fill map`
-FILL_MAP = variables.get("FILL_MAP")
-if FILL_MAP is not None and FILL_MAP is not "":
-    fill_map = json.loads(FILL_MAP)
-    dataframe.fillna(value=fill_map, inplace=True)
-else:
-    dataframe.fillna(0, inplace=True)
+dataframe.dropna(inplace=True)
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks

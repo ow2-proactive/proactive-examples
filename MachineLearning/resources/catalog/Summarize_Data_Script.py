@@ -5,9 +5,7 @@ This module contains the Python script for the Summarize Data task.
 """
 import ssl
 import urllib.request
-
-from tsfresh import extract_features
-from tsfresh.feature_extraction import MinimalFCParameters
+import pandas as pd
 
 global variables, resultMetadata
 
@@ -18,15 +16,15 @@ print("BEGIN " + __file__)
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning-scripts/resources/Utils/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
 if PA_PYTHON_UTILS_URL.startswith('https'):
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
 else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
-global get_and_decompress_dataframe, compress_and_transfer_dataframe
+global get_input_variables, get_and_decompress_dataframe
+global compress_and_transfer_dataframe, compute_global_model, get_summary
 global assert_not_none_not_empty, is_not_none_not_empty
-global get_input_variables, compute_global_model, get_summary, is_true
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -35,13 +33,15 @@ check_task_is_enabled()
 # -------------------------------------------------------------
 # Get data from the propagated variables
 #
-TIME_COLUMN = variables.get("TIME_COLUMN")
 REF_COLUMN = variables.get("REF_COLUMN")
-ALL_FEATURES = variables.get("ALL_FEATURES")
-
-assert_not_none_not_empty(TIME_COLUMN, "TIME_COLUMN should be defined!")
 assert_not_none_not_empty(REF_COLUMN, "REF_COLUMN should be defined!")
-assert_not_none_not_empty(ALL_FEATURES, "ALL_FEATURES should be defined!")
+IGNORE_COLUMNS = [REF_COLUMN]
+
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+is_labelled_data = False
+if is_not_none_not_empty(LABEL_COLUMN):
+    IGNORE_COLUMNS.append(LABEL_COLUMN)
+    is_labelled_data = True
 
 input_variables = {
     'task.dataframe_id': None,
@@ -54,31 +54,31 @@ print("dataframe id (in): ", dataframe_id)
 
 dataframe = get_and_decompress_dataframe(dataframe_id)
 
-# Add the list of features that need to be extracted 
-# Check the full list of features on this link:
-# http://tsfresh.readthedocs.io/en/latest/text/list_of_features.html
-if is_true(ALL_FEATURES):
-    extraction_settings = {
-        "length": None,
-        "absolute_sum_of_changes": None,
-        "abs_energy": None,
-        # "sample_entropy": None,
-        "number_peaks": [{"n": 2}],
-        "number_cwt_peaks": [{"n": 2}, {"n": 3}],
-        "autocorrelation": [{"lag": 2}, {"lag": 3}]
-        # "value_count": #"large_standard_deviation": [{"r": 0.05}, {"r": 0.1}]
-    }
-# For convenience, three dictionaries are predefined and can be used right away
-# ComprehensiveFCParameters, MinimalFCParameters, EfficientFCParameters
-# MinimalFCParameters is used by default
-else:
-    extraction_settings = MinimalFCParameters()
+# Perform dataframe summarization
+columns = dataframe.drop(IGNORE_COLUMNS, axis=1, inplace=False).columns.values
+ncolumns = columns.shape[0]
+bins = [10] * ncolumns
+print(columns, ncolumns, bins)
 
-extracted_features = extract_features(dataframe,
-                                      column_id=REF_COLUMN,
-                                      column_sort=TIME_COLUMN,
-                                      default_fc_parameters=extraction_settings)
-extracted_features[REF_COLUMN] = extracted_features.index
+model = None
+GLOBAL_MODEL_TYPE = variables.get("GLOBAL_MODEL_TYPE")
+if is_not_none_not_empty(GLOBAL_MODEL_TYPE):
+    print('Computing the global model using ', GLOBAL_MODEL_TYPE)
+    model = compute_global_model(dataframe, columns, bins, GLOBAL_MODEL_TYPE)
+    print('Finished')
+
+print('Summarizing data...')
+data = get_summary(dataframe, columns, bins, model, GLOBAL_MODEL_TYPE, REF_COLUMN, LABEL_COLUMN)
+print('Finished')
+
+dataframe = pd.DataFrame.from_dict(data, orient='index')
+cols_len = len(dataframe.columns)
+dataframe.columns = list(range(0, cols_len))
+
+COLUMNS_NAME = {0: REF_COLUMN}
+if is_labelled_data:
+    COLUMNS_NAME = {0: REF_COLUMN, cols_len - 1: LABEL_COLUMN}
+dataframe.rename(index=str, columns=COLUMNS_NAME, inplace=True)
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
