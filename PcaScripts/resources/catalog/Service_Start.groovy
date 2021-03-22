@@ -124,6 +124,10 @@ if (!instance_exists){
     def instanceId = serviceInstanceData.getInstanceId()
     endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
 
+    if (publishService) {
+        schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)
+    }
+
     println("INSTANCE_ID: " + instanceId)
     println("ENDPOINT: " + endpoint)
 
