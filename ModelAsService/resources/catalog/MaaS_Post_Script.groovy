@@ -106,7 +106,7 @@ if (proxyfied.toLowerCase()=="true"){
 serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
 println(serviceInstanceData)
 
-schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int)
+schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)
 
 // Inform other platforms that service is running through Synchronization API
 channel = "Service_Instance_" + instanceId
