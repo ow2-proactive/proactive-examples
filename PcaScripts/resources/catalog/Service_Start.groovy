@@ -65,7 +65,7 @@ for (ServiceInstanceData serviceInstanceData : service_instances) {
             variables.put("INSTANCE_ID_" + instanceName, instanceId)
             variables.put("ENDPOINT_" + instanceName, endpoint)
             if (publishService) {
-                schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int)
+                schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)
             }
             result = endpoint
             break
