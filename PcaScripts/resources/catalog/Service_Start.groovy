@@ -34,6 +34,8 @@ if (binding.variables["args"]) {
         } catch (Exception e) {
             println "Invalid first argument, expected boolean, received " + args[0]
         }
+    }
+    if (args.length > 1) {
         try {
             enableServiceActions = Boolean.parseBoolean(args[1])
         } catch (Exception e) {
