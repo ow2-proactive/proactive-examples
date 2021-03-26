@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-# import os, sys, bz2, uuid, pickle, json, connexion, wget
 import numpy
 import os
 import sys
@@ -23,16 +22,16 @@ from flask import jsonify
 from tempfile import TemporaryFile
 from json import JSONEncoder
 
-from scipy.stats import norm
-from scipy.stats import wasserstein_distance
 from urllib.parse import quote
 from distutils.util import strtobool
+
 
 class NumpyArrayEncoder(JSONEncoder):
     def default(self, obj):
         if isinstance(obj, numpy.ndarray):
             return obj.tolist()
         return JSONEncoder.default(self, obj)
+
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -44,11 +43,6 @@ try:
 except ImportError:
     install('proactive')
     import proactive
-# try:
-#     from json2html import *
-# except ImportError:
-#     install('json2html')
-#     from json2html import *
 
 try:
     from skmultiflow.drift_detection.hddm_w import HDDM_W
