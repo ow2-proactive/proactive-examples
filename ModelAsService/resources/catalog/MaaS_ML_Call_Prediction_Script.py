@@ -1,7 +1,8 @@
 import json
 import requests
-import pandas as pd
 import urllib.request
+import ssl
+import pandas as pd
 
 global variables
 
@@ -10,7 +11,10 @@ global variables
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
-exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+else:
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global get_input_variables, get_and_decompress_dataframe, preview_dataframe_in_task_result
 global raiser_ex
 

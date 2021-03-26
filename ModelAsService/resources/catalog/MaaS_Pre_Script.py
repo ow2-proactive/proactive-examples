@@ -4,7 +4,7 @@ import sys
 import json
 from cryptography.fernet import Fernet
 
-global schedulerapi
+global schedulerapi, variables
 
 
 def install(package):
