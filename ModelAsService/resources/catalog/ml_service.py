@@ -53,7 +53,6 @@ except ImportError:
 from skmultiflow.drift_detection import PageHinkley
 from skmultiflow.drift_detection.adwin import ADWIN
 
-
 # Environment variables
 INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not None else None
 
@@ -64,26 +63,31 @@ MODEL_FILE_EXT = '.model'
 # META_FILE_EXT = '.meta'
 CURRENT_MODEL_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + MODEL_FILE_EXT)  # default model path
 # CURRENT_META_FILE = join(UPLOAD_MODELS_FOLDER, 'model_last' + META_FILE_EXT)    # default meta path
-CURRENT_BASELINE_DATA = join(UPLOAD_MODELS_FOLDER, 'baseline_data' + '.csv') # baseline data path
+CURRENT_BASELINE_DATA = join(UPLOAD_MODELS_FOLDER, 'baseline_data' + '.csv')  # baseline data path
 TRACE_FILE = join(UPLOAD_MODELS_FOLDER, 'trace.txt')  # default trace file
 CONFIG_FILE = join(UPLOAD_MODELS_FOLDER, 'config.json')  # default config file
 PREDICTIONS_FILE = join(UPLOAD_MODELS_FOLDER, 'predictions.csv')  # default predictions file
-TOKENS = { # user api tokens
+TOKENS = {  # user api tokens
     'user': hexlify(os.urandom(16)).decode(),  # api key
     'test': hexlify(os.urandom(16)).decode()
 }
 
-DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
-TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
-DRIFT_ENABLED = True if (os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
+DEBUG_ENABLED = True if (
+        os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
+TRACE_ENABLED = True if (
+        os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
+DRIFT_ENABLED = True if (
+        os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
 # DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_THRESHOLD') is not None else None
-DRIFT_NOTIFICATION = True if (os.getenv('DRIFT_NOTIFICATION') is not None and os.getenv('DRIFT_NOTIFICATION').lower() == "true") else False
-LOG_PREDICTIONS = True if (os.getenv('LOG_PREDICTIONS') is not None and os.getenv('LOG_PREDICTIONS').lower() == "true") else False
-HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
+DRIFT_NOTIFICATION = True if (os.getenv('DRIFT_NOTIFICATION') is not None and os.getenv(
+    'DRIFT_NOTIFICATION').lower() == "true") else False
+LOG_PREDICTIONS = True if (
+        os.getenv('LOG_PREDICTIONS') is not None and os.getenv('LOG_PREDICTIONS').lower() == "true") else False
+HTTPS_ENABLED = True if (
+        os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
 USER_KEY = os.getenv('USER_KEY')
 assert USER_KEY is not None, "USER_KEY is required!"
 USER_KEY = str(USER_KEY).encode()
-
 
 # Decrypt user credentials
 USER_DATA_FILE = join(APP_BASE_DIR, 'user_data.enc')
@@ -94,11 +98,9 @@ decrypted_data = fernet.decrypt(encrypted_data)
 message = decrypted_data.decode()
 user_credentials = json.loads(message)
 
-
 # Get proactive server url
 proactive_rest = user_credentials['ciUrl']
 proactive_url = proactive_rest[:-5]
-
 
 # Check if there is already a configuration file
 if not isfile(CONFIG_FILE):
@@ -152,7 +154,8 @@ def log(message, token=""):
         datetime_str = dt.today().strftime('%Y-%m-%d %H:%M:%S')
         print(datetime_str, token, message)
     return message
-    
+
+
 def dumper(obj):
     try:
         return obj.toJSON()
@@ -160,7 +163,7 @@ def dumper(obj):
         return obj.__dict__
 
 
-def perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, token="") -> str :
+def perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, token="") -> str:
     log("calling perform_drift_detection", token)
     log("data drift detection method: " + detector)
     baseline_data = dataframe.values.tolist()
@@ -181,21 +184,21 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
             for i in range(len(overall_dataframe[feature])):
                 hddm_w.add_element(float(overall_dataframe[feature][i]))
                 if hddm_w.detected_change() and i >= window:
-                    detected_drifts_indices.append(i-window)
+                    detected_drifts_indices.append(i - window)
         # Page Hinkley
         if detector == "Page Hinkley":
             ph = PageHinkley()
             for i in range(len(overall_dataframe[feature])):
                 ph.add_element(float(overall_dataframe[feature][i]))
                 if ph.detected_change() and i >= window:
-                    detected_drifts_indices.append(i-window)
+                    detected_drifts_indices.append(i - window)
         # ADWIN
         if detector == "ADWIN":
             adwin = ADWIN()
             for i in range(len(overall_dataframe[feature])):
                 adwin.add_element(float(overall_dataframe[feature][i]))
                 if adwin.detected_change() and i >= window:
-                    detected_drifts_indices.append(i-window)
+                    detected_drifts_indices.append(i - window)
         # Check for detected drifts
         if len(detected_drifts_indices) != 0:
             log("Data drift detected in feature: " + feature)
@@ -203,13 +206,13 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
             drifts[feature] = detected_drifts_indices
             if get_config('DRIFT_NOTIFICATION'):
                 log("Sending a web notification", token)
-                message = "MaaS data drift detected from " + get_token_user(token) + " (" + token + ")"
+                message = "MaaS_ML data drift detected from " + get_token_user(token) + " (" + token + ")"
                 if submit_web_notification(message, token):
                     log("Web notification sent!")
                 else:
                     log("Error occurred while sending a web notification")
     return json.dumps(drifts)
-    
+
     # This code is commented in case needed in future for drift detection
     # log("calling perform_drift_detection", token)
     # if exists(CURRENT_META_FILE) and isfile(CURRENT_META_FILE):
@@ -345,7 +348,7 @@ def predict_api(data: str) -> str:
     detector = data['detector']
     dataframe = pd.DataFrame()
     feature_names = list()
-    if exists(CURRENT_BASELINE_DATA): # and isfile(CURRENT_BASELINE_DATA):
+    if exists(CURRENT_BASELINE_DATA):  # and isfile(CURRENT_BASELINE_DATA):
         dataframe = pd.read_csv(CURRENT_BASELINE_DATA)
     if not dataframe.empty:
         feature_names = dataframe.columns
@@ -357,7 +360,8 @@ def predict_api(data: str) -> str:
                 predict_dataframe_json = data['predict_dataframe_json']
                 predict_dataframe = pd.read_json(predict_dataframe_json, orient='values')
                 if get_config('DRIFT_ENABLED') and dataframe.empty == False:
-                    drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, api_token)
+                    drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector,
+                                                          api_token)
                 else:
                     drifts_json = "Drift detection is not enabled."
                 model = load(CURRENT_MODEL_FILE)
@@ -372,7 +376,7 @@ def predict_api(data: str) -> str:
                 log("Model predictions done", api_token)
                 predict_drifts['predictions'] = list(predictions)
                 predict_drifts['drifts'] = drifts_json
-                return json.dumps(predict_drifts) 
+                return json.dumps(predict_drifts)
             except Exception as e:
                 return log(str(e), api_token)
         else:
@@ -521,7 +525,7 @@ def update_api() -> str:
         log("Updating LOG_PREDICTIONS to " + log_predictions)
         set_config('LOG_PREDICTIONS', bool(strtobool(log_predictions)))
         if "baseline_data" in connexion.request.files:
-            #log("Updating baseline data")
+            # log("Updating baseline data")
             baseline_data_updated = connexion.request.files['baseline_data']
             baseline_data_updated.save(CURRENT_BASELINE_DATA)
         return log("Service parameters updated", api_token)
@@ -556,8 +560,10 @@ def trace_preview_api(key) -> str:
             dataframe_config = pd.DataFrame.from_records([config])
             # result = dataframe_config.style.hide_index().render() + "<br/>" + result
             # .set_table_styles([{'selector': '', 'props': [('border', '4px solid #7a7')]}])
-            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center', index=False)
-            trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
+            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center',
+                                                     index=False)
+            trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped',
+                                                   justify='center', index=False)
             css_style = """
             div {
             weight: 100%;
@@ -583,7 +589,8 @@ def trace_preview_api(key) -> str:
                 </body></html>""".format(config_result, trace_result)
             # Add link to log predictions if enabled
             if get_config('LOG_PREDICTIONS'):
-                result = "<p><a href='predictions_preview?key="+quote(key)+"' target='_blank'>Click here to visualize the predictions</a></p>" + result
+                result = "<p><a href='predictions_preview?key=" + quote(
+                    key) + "' target='_blank'>Click here to visualize the predictions</a></p>" + result
             return result
         else:
             return log("Trace file is empty", key)
@@ -610,7 +617,8 @@ def predictions_preview_api(key) -> str:
             predictions_dataframe.fillna('', inplace=True)
             # result = (predictions_dataframe.style.hide_index()
             #          .render(table_title="Predictions"))
-            result = predictions_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
+            result = predictions_dataframe.to_html(escape=False, classes='table table-bordered table-striped',
+                                                   justify='center', index=False)
             result = """
             <!DOCTYPE html>
             <html>
