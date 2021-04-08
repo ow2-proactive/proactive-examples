@@ -81,7 +81,10 @@ if ((new File("/.dockerenv")).exists() && ! (new File("/var/run/docker.sock")).e
 }
 if (CONTAINER_ENABLED) {
     try {
-        Runtime.getRuntime().exec(CONTAINER_PLATFORM + " --help")
+        def sout = new StringBuffer(), serr = new StringBuffer()
+        def proc = (CONTAINER_PLATFORM + ' --help').execute()
+        proc.consumeProcessOutput(sout, serr)
+        proc.waitForOrKill(10000)
     } catch (Exception e) {
         println CONTAINER_PLATFORM + " does not exists : " + e.getMessage()
         CONTAINER_ENABLED = false
@@ -175,7 +178,7 @@ if (CONTAINER_ENABLED && (
                 def sout = new StringBuffer(), serr = new StringBuffer()
                 def proc = 'docker version -f "{{.Server.Version}}"'.execute()
                 proc.consumeProcessOutput(sout, serr)
-                proc.waitForOrKill(1000)
+                proc.waitForOrKill(10000)
                 docker_version = sout.toString()
                 docker_version = docker_version.substring(1, docker_version.length()-2)
                 docker_version_major = docker_version.split("\\.")[0].toInteger()
