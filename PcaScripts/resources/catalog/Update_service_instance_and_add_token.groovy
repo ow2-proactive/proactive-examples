@@ -15,14 +15,14 @@ if (new File(localspace, "arguments.txt").exists()) {
 }
 
 def i = 0
-endpoint_id = arguments_array[i++]
-endpoint_url = arguments_array[i++]
-container_id = arguments_array[i++]
-container_name = arguments_array[i++]
-proxyfied_url = arguments_array[i++]
-service_instance_status = arguments_array[i++]
-register_service = arguments_array[i++]
-token_name = arguments_array[i++]
+endpoint_id = arguments_array[i++].trim()
+endpoint_url = arguments_array[i++].trim()
+container_id = arguments_array[i++].trim()
+container_name = arguments_array[i++].trim()
+proxyfied_url = arguments_array[i++].trim()
+service_instance_status = arguments_array[i++].trim()
+register_service = arguments_array[i++].trim()
+token_name = arguments_array[i++].trim()
 
 println "From Update_service_instance_and_add_token"
 println "endpoint_id " + endpoint_id

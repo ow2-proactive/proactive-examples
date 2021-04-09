@@ -1,15 +1,21 @@
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 
-// Arguments must be var0 var1 ...
-if (args.length < 1) {
-    println("[ERROR] Number of arguments must be > 0")
+// Arguments must be <service_id> <var0_name_to_store> <var0_to_retrieve> <var1_name_to_store> <var1_to_retrieve> ...
+if (args.length < 3) {
+    println("[ERROR] Number of arguments must be >= 3")
     System.exit(1)
+}
+
+try {
+    service_instance_id = args[0] as long
+} catch (java.lang.NumberFormatException e) {
+    println("[ERROR] NumberFormatException: Invalid service_instance_id: " + args[0])
+    return
 }
 
 // Retrieve variables
 def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
-def service_instance_id = variables.get("service_instance_id") as long
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()
@@ -20,6 +26,6 @@ def service_instance_rest_api = new ServiceInstanceRestApi(new ApiClient().setBa
 
 // Retrieve service variables
 def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(session_id, service_instance_id)
-for  (i = 0; i < args.length; i++) {
-    variables.put(args[i], service_instance_data.getVariables().get(args[i]))
+for  (i = 1; i < args.length; i = i + 2) {
+    variables.put(args[i], service_instance_data.getVariables().get(args[i+1]))
 }

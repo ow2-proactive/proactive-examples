@@ -10,8 +10,8 @@ if (new File(localspace, "arguments.txt").exists()) {
 }
 
 def i = 0
-service_instance_status = arguments_array[i++]
-token_name = arguments_array[i++]
+service_instance_status = arguments_array[i++].trim()
+token_name = arguments_array[i++].trim()
 
 println "From Update_service_instance_and_remove_token"
 println "service_instance_status " + service_instance_status
