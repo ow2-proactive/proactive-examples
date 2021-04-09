@@ -356,10 +356,12 @@ def predict_api(data: str) -> str:
                 # dataframe = pd.read_json(dataframe_json, orient='values')
                 predict_dataframe_json = data['predict_dataframe_json']
                 predict_dataframe = pd.read_json(predict_dataframe_json, orient='values')
-                if get_config('DRIFT_ENABLED') and dataframe.empty == False:
+                if get_config('DRIFT_ENABLED') and not dataframe.empty:
                     drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, api_token)
+                elif get_config('DRIFT_ENABLED') and dataframe.empty:
+                    drifts_json = "Drift detection can not be enacted without baseline data!"
                 else:
-                    drifts_json = "Drift detection is not enabled."
+                    drifts_json = "Drift detection is not enabled!"
                 model = load(CURRENT_MODEL_FILE)
                 log("model:\n" + str(model))
                 log("dataframe:\n" + str(dataframe.head()))
