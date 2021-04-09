@@ -1,8 +1,9 @@
 import os
-import requests
 import sys
 import wget
+import requests
 import urllib.request
+import ssl
 
 global variables, resultMetadata
 
@@ -11,7 +12,10 @@ global variables, resultMetadata
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
-exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+else:
+    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global get_input_variables, compress_and_transfer_dataframe
 global get_and_decompress_dataframe, get_and_decompress_json_dataframe
 global get_and_decompress_model, save_model, raiser_ex

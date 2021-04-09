@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from sqlalchemy import create_engine
 import sys
 
@@ -19,15 +18,13 @@ DBMS_DRIVER, DBMS_DEFAULT_PORT = DBMS_DATA
 
 print("BEGIN exporting data to " + DBMS_NAME + " database using " + DBMS_DRIVER + " driver")
 
-CREDENTIALS_KEY_MSG = DBMS_NAME + "://<username>@<host>:<port>"
-
 HOST = variables.get("HOST")
 PORT = variables.get("PORT")
 DATABASE = variables.get("DATABASE")
 USER = variables.get("USER")
 
+CREDENTIALS_KEY = DBMS_NAME + "://" + USER + "@" + HOST + ":" + str(PORT)
 # This key is used for getting the password from 3rd party credentials.
-CREDENTIALS_KEY = variables.get("CREDENTIALS_KEY")
 PASSWORD=credentials.get(CREDENTIALS_KEY)
 
 SQL_TABLE = variables.get("TABLE")
@@ -47,7 +44,7 @@ if not USER:
     print("ERROR: USER variable is not provided by the user.")
     sys.exit(1)
 if not PASSWORD:
-    print('ERROR: Please add your database password to 3rd-party credentials in the scheduler-portal under the key :"{0}"'.format(CREDENTIALS_KEY_MSG))
+    print('ERROR: Please add your database password to 3rd-party credentials in the scheduler-portal under the key :"{0}"'.format(CREDENTIALS_KEY))
     sys.exit(1)
 if not INPUT_FILE:
     print("ERROR: INPUT_FILE variable is not provided by the user.")

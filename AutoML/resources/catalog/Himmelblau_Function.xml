@@ -6,7 +6,7 @@
     <variable name="NODE_SOURCE_NAME" value=""/>
     <variable name="NODE_ACCESS_TOKEN" value=""/>
     <variable model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
-    <variable model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda)" name="CONTAINER_IMAGE" value="docker://activeeon/dlm3"/>
+    <variable model="PA:LIST(,docker://activeeon/dlm3)" name="CONTAINER_IMAGE" value="docker://activeeon/dlm3"/>
     <variable model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="False"/>
     <variable model="PA:Boolean" name="CONTAINER_ROOTLESS_ENABLED" value="False"/>
     <variable model="PA:JSON" name="INPUT_VARIABLES" value="{&quot;x&quot;: 3.5976705887960527, &quot;y&quot;: -1.8471754188451843}"/>
@@ -45,7 +45,7 @@
       <forkEnvironment javaHome="/usr">
         <envScript>
           <script>
-            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_cuda_universal/raw"/>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
           </script>
         </envScript>
       </forkEnvironment>
@@ -59,15 +59,16 @@
           <code language="cpython">
             <![CDATA[
 # 
-# Himmelblau's function is multimodal with 4 defined minimums in [-6, 6]^2, used to test the performance of optimization algorithms.
+# Himmelblau's function is multimodal with 4 defined minimums in [-6, 6]^2,
+# used to test the performance of optimization algorithms.
 # https://en.wikipedia.org/wiki/Himmelblau%27s_function
 #
 import json
 import numpy as np
 
-# Get token and input variables
-token = variables.get('TOKEN')
-input_variables = variables.get('INPUT_VARIABLES')
+# Get task name
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
 
 # Get current job ID
 PA_JOB_ID = int(variables.get("PA_JOB_ID"))
@@ -76,10 +77,22 @@ PA_JOB_ID_LOG = "job_ID_" + str(PA_JOB_ID)
 # Check parent job ID
 PARENT_JOB_ID = genericInformation.get('PARENT_JOB_ID')
 
+############################ INPUT FROM AUTOML ############################
+"""
+SEARCH_SPACE:
+{"x": {"uniform": [-6, 6]}, "y": {"uniform": [-6, 6]}}
+
+INPUT_VARIABLES:
+{"x": 3.5976705887960527, "y": -1.8471754188451843}
+"""
+# Get token and input variables
+token = variables.get('TOKEN')
+input_variables = variables.get('INPUT_VARIABLES')
+
 # Convert from JSON to dict
 token = json.loads(token)
 input_variables = json.loads(input_variables)
-#print("token: ", token, ", input_variables: ", input_variables)
+###########################################################################
 
 # Himmelblau's function
 def objective_function(x, y):
@@ -93,93 +106,91 @@ print('y: ', y)
 loss = objective_function(**input_variables)
 print('loss: ', loss)
 
-### BEGIN TENSORBOARD ###
+############################### TENSORBOARD ###############################
 TENSORBOARD_ENABLED = variables.get("TENSORBOARD_ENABLED")
 if TENSORBOARD_ENABLED is not None and TENSORBOARD_ENABLED.lower() == "true":
-    from tensorboardX import SummaryWriter
-    CONTAINER_LOG_PATH = variables.get("CONTAINER_LOG_PATH")
-    assert CONTAINER_LOG_PATH is not None
-    
-    PATH = os.path.join(CONTAINER_LOG_PATH, PA_JOB_ID_LOG)
-    print('PATH: ', PATH)
-    if os.path.isdir(PATH):
-        try:
-            print('Removing existing path')
-            shutil.rmtree(PATH)
-        except:
-            print('Error while deleting directory')
-    os.mkdir(PATH)
-    writer = SummaryWriter(PATH)
-    token_id = token['_chocolate_id'] # 0
-    writer.add_text('Text/parent_job', 'text logged at job: ' + PA_JOB_ID_LOG, loss)
-    # writer.add_scalar('Loss', loss, token_id)  # plot loss by token id
-    writer.add_scalar('Loss', loss, PA_JOB_ID)  # plot loss by job id
-    writer.close()
-### END TENSORBOARD ###
+    try:
+        from tensorboardX import SummaryWriter
+        CONTAINER_LOG_PATH = variables.get("CONTAINER_LOG_PATH")
+        assert CONTAINER_LOG_PATH is not None
+        PATH = os.path.join(CONTAINER_LOG_PATH, PA_JOB_ID_LOG)
+        print('PATH: ', PATH)
+        if os.path.isdir(PATH):
+            try:
+                print('Removing existing path')
+                shutil.rmtree(PATH)
+            except:
+                print('Error while deleting directory')
+        os.mkdir(PATH)
+        writer = SummaryWriter(PATH)
+        token_id = token['_chocolate_id'] # 0
+        writer.add_text('Text/parent_job', 'text logged at job: ' + PA_JOB_ID_LOG, loss)
+        # writer.add_scalar('Loss', loss, token_id)  # plot loss by token id
+        writer.add_scalar('Loss', loss, PA_JOB_ID)  # plot loss by job id
+        writer.close()
+    except Exception as err:
+        print("An exception occurred while plotting in Tensorboard")
+        print(err)
+###########################################################################
 
-### BEGIN VISDOM ###
+################################# VISDOM ##################################
 VISDOM_ENDPOINT = variables.get("VISDOM_ENDPOINT")
 if VISDOM_ENDPOINT is not None:
-    from visdom import Visdom
-    
-    VISDOM_ENDPOINT = VISDOM_ENDPOINT.replace("http://", "")
-    print("VISDOM_ENDPOINT: ", VISDOM_ENDPOINT)
-    (VISDOM_HOST, VISDOM_PORT) = VISDOM_ENDPOINT.split(":")
-    
-    print("VISDOM_HOST: ", VISDOM_HOST)
-    print("VISDOM_PORT: ", VISDOM_PORT)
-    
-    print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
-    vis = Visdom(server="http://"+VISDOM_HOST, port=int(VISDOM_PORT))
-    assert vis.check_connection()
-    
-    env = 'main'
-    if PARENT_JOB_ID is not None:
-        env = 'job_id_' + PARENT_JOB_ID
-    
-    win_params = 'win_params'
-    append = True if vis.win_exists(win_params, env=env) else False
-    if not append:
-        vis.text("List of hyperparameters:\n", append=append, env=env, win=win_params)
-        append = True
-    vis.text("Job ID: {}, x: {:.4f}, y: {:.4f}\n".format(PA_JOB_ID, x, y), append=append, env=env, win=win_params)
-    
-    # plot scatter
-    win_scatter = 'win_scatter'
-    update = 'append' if vis.win_exists(win_scatter, env=env) else None
-    vis.scatter(
-        X=[[x, y]],
-        Y=[1],
-        opts=dict(
-            #legend=['params'],
-            markersize=10,
-            markersymbol='cross-thin-open',
-            title='Hyperparameters value',
-            xlabel='X',
-            ylabel='Y',
-            markercolor=np.floor([255]),
-        ),
-        env=env,
-        win=win_scatter,
-        update=update
-    )
-    
-    # plot surface
-    X = np.linspace(-10, 10, 100)
-    X = np.tile(X, (100, 1))
-    Y = X.transpose()
-    Z = objective_function(X, Y)
+    try:
+        from visdom import Visdom
+        VISDOM_ENDPOINT = VISDOM_ENDPOINT.replace("http://", "")
+        print("VISDOM_ENDPOINT: ", VISDOM_ENDPOINT)
+        (VISDOM_HOST, VISDOM_PORT) = VISDOM_ENDPOINT.split(":")
+        print("VISDOM_HOST: ", VISDOM_HOST)
+        print("VISDOM_PORT: ", VISDOM_PORT)
+        print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
+        vis = Visdom(server="http://"+VISDOM_HOST, port=int(VISDOM_PORT))
+        assert vis.check_connection()
+        env = 'main'
+        if PARENT_JOB_ID is not None:
+            env = 'job_id_' + PARENT_JOB_ID
+        win_params = 'win_params'
+        append = True if vis.win_exists(win_params, env=env) else False
+        if not append:
+            vis.text("List of hyperparameters:\n", append=append, env=env, win=win_params)
+            append = True
+        vis.text("Job ID: {}, x: {:.4f}, y: {:.4f}\n".format(PA_JOB_ID, x, y), append=append, env=env, win=win_params)
+        # plot scatter
+        win_scatter = 'win_scatter'
+        update = 'append' if vis.win_exists(win_scatter, env=env) else None
+        vis.scatter(
+            X=[[x, y]],
+            Y=[1],
+            opts=dict(
+                #legend=['params'],
+                markersize=10,
+                markersymbol='cross-thin-open',
+                title='Hyperparameters value',
+                xlabel='X',
+                ylabel='Y',
+                markercolor=np.floor([255]),
+            ),
+            env=env,
+            win=win_scatter,
+            update=update
+        )
+        # plot surface
+        X = np.linspace(-10, 10, 100)
+        X = np.tile(X, (100, 1))
+        Y = X.transpose()
+        Z = objective_function(X, Y)
+        win_surface = 'win_surface'
+        if not vis.win_exists(win_surface, env=env):
+            vis.surf(X=Z, opts=dict(colormap='Hot'), env=env, win=win_surface)
+        else:
+            print('The surface plot is already done')
+    except Exception as err:
+        print("An exception occurred while plotting in Visdom")
+        print(err)
+###########################################################################
 
-    win_surface = 'win_surface'
-    if not vis.win_exists(win_surface, env=env):
-        vis.surf(X=Z, opts=dict(colormap='Hot'), env=env, win=win_surface)
-    else:
-        print('The surface plot is already done')
-### END VISDOM ###
-
+############################ OUTPUT FOR AUTOML ############################
 # to appear in Job Analytics
-#resultMap.put("X", str(x))
-#resultMap.put("Y", str(y))
 resultMap.put("LOSS", str(loss))
 
 # to be used by AutoML workflow
@@ -189,7 +200,9 @@ result = {
 }
 result = json.dumps(result)
 resultMap.put("RESULT_JSON", result)
-#print('result: ', result)
+###########################################################################
+
+print("END " + __file__)
 ]]>
           </code>
         </script>

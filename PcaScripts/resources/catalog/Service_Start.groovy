@@ -26,12 +26,20 @@ def serviceId = variables.get("SERVICE_ID")
 def instanceName = variables.get("INSTANCE_NAME")
 
 def publishService = false
+def enableServiceActions = true
 if (binding.variables["args"]) {
     if (args.length > 0) {
         try {
             publishService = Boolean.parseBoolean(args[0])
         } catch (Exception e) {
             println "Invalid first argument, expected boolean, received " + args[0]
+        }
+    }
+    if (args.length > 1) {
+        try {
+            enableServiceActions = Boolean.parseBoolean(args[1])
+        } catch (Exception e) {
+            println "Invalid second argument, expected boolean, received " + args[1]
         }
     }
 }
@@ -65,7 +73,7 @@ for (ServiceInstanceData serviceInstanceData : service_instances) {
             variables.put("INSTANCE_ID_" + instanceName, instanceId)
             variables.put("ENDPOINT_" + instanceName, endpoint)
             if (publishService) {
-                schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int)
+                schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
             }
             result = endpoint
             break
@@ -123,6 +131,10 @@ if (!instance_exists){
     serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
     def instanceId = serviceInstanceData.getInstanceId()
     endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
+
+    if (publishService) {
+        schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
+    }
 
     println("INSTANCE_ID: " + instanceId)
     println("ENDPOINT: " + endpoint)
