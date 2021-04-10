@@ -1,42 +1,43 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Iris_Classification" onTaskError="continueJobExecution" priority="normal" projectName="3.  Hyperparameter Optimization" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="180" name="Digits_Classification" onTaskError="continueJobExecution" priority="normal" projectName="3.  Hyperparameter Optimization" taskRetryDelay="10" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <variables>
     <variable name="NATIVE_SCHEDULER" value=""/>
     <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
     <variable name="NODE_ACCESS_TOKEN" value=""/>
     <variable name="NODE_SOURCE_NAME" value=""/>
     <variable model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
-    <variable model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/rapidsai,docker://activeeon/nvidia:rapidsai)" name="CONTAINER_IMAGE" value="docker://activeeon/dlm3"/>
+    <variable model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda,docker://activeeon/rapidsai,docker://activeeon/nvidia:rapidsai)" name="CONTAINER_IMAGE" value=""/>
     <variable model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="False"/>
     <variable model="PA:Boolean" name="CONTAINER_ROOTLESS_ENABLED" value="False"/>
-    <variable model="PA:JSON" name="INPUT_VARIABLES" value="{&quot;algo&quot; : &quot;SVC&quot;, &quot;kernel&quot; : &quot;rbf&quot;, &quot;C&quot; : 0.2, &quot;gamma&quot; : 0.1}"/>
-    <variable model="PA:JSON" name="SEARCH_SPACE" value="[{&quot;algo&quot; : &quot;SVC&quot;,                &quot;C&quot;: {&quot;log&quot;: [-2, 10, 10]},    &quot;degree&quot;: {&quot;quantized_uniform&quot;: [1, 5, 1]},        &quot;coef0&quot;: {&quot;uniform&quot;: [-1, 1]}},   {&quot;algo&quot; : &quot;LinearSVC&quot;,               &quot;C&quot;: {&quot;log&quot;: [2, 10, 10]}} ]"/>
+    <variable model="PA:Boolean" name="USE_NVIDIA_RAPIDS" value="False"/>
+    <variable model="PA:JSON" name="SEARCH_SPACE" value="[{&quot;algo&quot;:&quot;SVC&quot;,&quot;C&quot;:{&quot;uniform&quot;:[0.001,32768]},&quot;kernel&quot;:{&quot;choice&quot;:[&quot;rbf&quot;,&quot;linear&quot;,&quot;sigmoid&quot;]},&quot;gamma&quot;:{&quot;choice&quot;:[&quot;scale&quot;,&quot;auto&quot;]}},{&quot;algo&quot;:&quot;SGD&quot;,&quot;loss&quot;:{&quot;choice&quot;:[&quot;hinge&quot;,&quot;log&quot;]},&quot;penalty&quot;:{&quot;choice&quot;:[&quot;l2&quot;,&quot;l1&quot;,&quot;elasticnet&quot;]}}]"/>
+    <variable model="PA:JSON" name="INPUT_VARIABLES" value="{&quot;algo&quot;: &quot;SVC&quot;, &quot;C&quot;: 1.0, &quot;kernel&quot;: &quot;rbf&quot;, &quot;gamma&quot;: &quot;scale&quot;}"/>
   </variables>
   <description>
-    <![CDATA[ Python script illustrating an example of multiple SVM models optimization. ]]>
+    <![CDATA[ Python script illustrating an example of multiple machine learning models optimization. ]]>
   </description>
   <genericInformation>
 <info name="bucketName" value="auto-ml-optimization"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/scikit_learn.png"/>
 <info name="NODESOURCENAME" value="$NODE_SOURCE_NAME"/>
 <info name="NS" value="$NATIVE_SCHEDULER"/>
-<info name="Documentation" value="PML/PMLUserGuide.html#_objective_ml_examples"/>
+<info name="Documentation" value="PML/PMLUserGuide.html#_hyperparameter_optimization"/>
 <info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
 <info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
-    <task fork="true" name="Iris_Classification">
+    <task fork="true" name="Digits_Classification">
       <description>
         <![CDATA[ The simplest task, ran by a Python engine. ]]>
       </description>
-      <variables>
-        <variable inherited="true" name="TOKEN" value="{&quot;_token_id&quot;: 0}"/>
-      </variables>
       <genericInformation>
-        <info name="task.documentation" value="PML/PMLUserGuide.html#_objective_ml_examples"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_hyperparameter_optimization"/>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/scikit_learn.png"/>
       </genericInformation>
+      <depends>
+        <task ref="get_automl_variables"/>
+      </depends>
       <selection>
         <script type="static">
           <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw"/>
@@ -49,98 +50,184 @@
           </script>
         </envScript>
       </forkEnvironment>
-      <pre>
-        <script>
-          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/get_automl_variables/raw"/>
-        </script>
-      </pre>
       <scriptExecutable>
         <script>
           <code language="cpython">
             <![CDATA[
-from sklearn.metrics import f1_score
-from sklearn.model_selection import train_test_split
-from sklearn.datasets import make_classification, load_iris
-from sklearn.svm import SVC, LinearSVC
-
 import json
+from sklearn.datasets import load_digits
+
+# Get task name
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# Load data
+X, y = load_digits(return_X_y=True)
+
+# Check GPU support
+USE_NVIDIA_RAPIDS = variables.get("USE_NVIDIA_RAPIDS")
+if USE_NVIDIA_RAPIDS.lower() == 'true':
+    try:
+        import os
+        import GPUtil as GPU
+        from random import randint, uniform
+        # Set CUDA_DEVICE_ORDER so the IDs assigned by CUDA match those from nvidia-smi
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        # Show the utilization of all GPUs in a nice table
+        print("Current GPU utilization:")
+        GPU.showUtilization()
+        # Get the first available GPU
+        # order - The order in which the available GPU device ids are returned: first, last, random, load, memory
+        # limit - Limits the number of GPU device ids returned. Must be positive integer. (default = 1)
+        # maxLoad - Maximum current relative load for a GPU to be considered available. (default = 0.5)
+        # maxMemory - Maximum current relative memory usage for a GPU to be considered available. (default = 0.5)
+        # attempts - Number of attempts before giving up finding an available GPU. (default = 1)
+        # interval - Interval in seconds between each attempt to find an available GPU. (default = 900 --> 15 min)
+        # verbose - If True, prints the attempt number before each attempt and the GPU id if an available is found.
+        # NOTE: this step will fail if all GPUs are busy
+        # deviceIDs = GPUtil.getAvailable(order='first', limit=1, maxLoad=0.5, maxMemory=0.5)
+        maxMemory = 0.3  # round(uniform(0.2, 0.5), 2)
+        maxLoad = 0.3    # round(uniform(0.2, 0.5), 2)
+        attempts = 180   # internal attempts
+        interval = 10    # interval = randint(3, 30)  # 3sec to 30sec
+        print('Looking for available GPU id with memory < ' +
+              str(maxMemory * 100) + '%, and load < ' + str(maxLoad * 100) + '%)')
+        print('# of attempts: ' + str(attempts) + ', interval:' + str(interval))
+        DEVICE_ID_LIST = GPU.getFirstAvailable(
+            order='random', maxMemory=maxMemory, maxLoad=maxLoad, attempts=attempts, interval=interval
+        )
+        DEVICE_ID = DEVICE_ID_LIST[0]  # grab first element from list
+        print('First available GPU id (memory < ' +
+              str(maxMemory * 100) + '%, load < ' + str(maxLoad * 100) + '%):')
+        print(DEVICE_ID)
+        # Set CUDA_VISIBLE_DEVICES to mask out all other GPUs than the first available device id
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(DEVICE_ID)
+        # Import NVIDIA RAPIDS
+        import cudf
+        from cuml.preprocessing.model_selection import train_test_split
+        from cuml.metrics.accuracy import accuracy_score
+        from cuml.svm import SVC
+        from cuml.linear_model import MBSGDClassifier as SGD
+        # Convert data to the GPU model
+        X = cudf.DataFrame(X).astype("float32")
+        y = cudf.Series(y)
+    except RuntimeError as err:
+        # If no available GPU is found, an error is thrown
+        print("No GPUs currently available")
+        print(err)
+        raise
+else:
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score
+    from sklearn.svm import SVC
+    from sklearn.linear_model import SGDClassifier as SGD
+
 
 ############################ INPUT FROM AUTOML ############################
 """
 SEARCH_SPACE:
 [{
-	"algo": "SVC",
-	"C": {
-		"log": [-2, 10, 10]
-	},
-	"degree": {
-		"quantized_uniform": [1, 5, 1]
-	},
-	"coef0": {
-		"uniform": [-1, 1]
-	}
-}, {
-	"algo": "LinearSVC",
-	"C": {
-		"log": [2, 10, 10]
-	}
+    "algo": "SVC",
+    "C": {
+        "uniform": [0.001, 32768]
+    },
+    "kernel": {
+        "choice": ["rbf", "linear", "sigmoid"]
+    },
+    "gamma": {
+        "choice": ["scale", "auto"]
+    }
+},
+{
+    "algo": "SGD",
+    "loss": {
+        "choice": ["hinge", "log"]
+    },
+    "penalty": {
+        "choice": ["l2", "l1", "elasticnet"]
+    }
 }]
-
 INPUT_VARIABLES:
-{"algo" : "SVC", "kernel" : "rbf", "C" : 0.2, "gamma" : 0.1}
+{"algo": "SVC", "C": 1.0, "kernel": "rbf", "gamma": "scale"}
 """
 # Get token and input variables
 token = variables.get('TOKEN')
 input_variables = variables.get('INPUT_VARIABLES')
-
 # Convert from JSON to dict
 token = json.loads(token)
 input_variables = json.loads(input_variables)
 print("token: ", token, ", input_variables: ", input_variables)
 ###########################################################################
 
-# Load data
-# X, y = make_classification(n_samples=1000, random_state=1)
-X, y = load_iris(return_X_y=True)
 
-
-def score_svm(X, y, algo, **input_variables):
+def score_classifier(X, y, algo, **input_variables):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=0)
     if algo == "SVC":
         algo = SVC
-    if algo == "LinearSVC":
-        algo = LinearSVC
+    if algo == "SGD":
+        algo = SGD
     clf = algo(**input_variables)
     clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
-    # Calculate metrics globally by counting the total true positives, false negatives and false positives.
-    return 1-f1_score(y_test, y_pred, average='micro')
+    return accuracy_score(y_test, y_pred)
 
 
-# Calculate the loss for the sampled point (minimized)
-loss = score_svm(X, y, **input_variables)
-print('loss: ', loss)
+# Calculate the acc and the loss for the sampled point (minimized)
+try:
+    acc = score_classifier(X, y, **input_variables)
+    loss = 1 - acc
+except Exception as err:
+    print("An exception occurred while calculating the function loss")
+    print(err)
+    raise
+print('acc: ', acc, ', loss: ', loss)
+
 
 ############################ OUTPUT FOR AUTOML ############################
-# return the loss value
+# Return the loss value
 result = {
     'token': token,
     'loss': loss
 }
 result = json.dumps(result)
 resultMap.put("RESULT_JSON", result)
+resultMap.put("ACC", str(acc))
 resultMap.put("LOSS", str(loss))
 ###########################################################################
+print("END " + __file__)
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <metadata>
         <positionTop>
-            147.48265075683594
+            167.6736068725586
         </positionTop>
         <positionLeft>
-            29.16668701171875
+            184.42706298828125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" name="get_automl_variables">
+      <description>
+        <![CDATA[ The simplest task, ran by a Groovy engine. ]]>
+      </description>
+      <selection>
+        <script type="static">
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw"/>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/get_automl_variables/raw"/>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            58.99304962158203
+        </positionTop>
+        <positionLeft>
+            103.0555419921875
         </positionLeft>
       </metadata>
     </task>
@@ -154,13 +241,13 @@ resultMap.put("LOSS", str(loss))
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2350px;
-            height:3213px;
+            width:3150px;
+            height:3902px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-142.48265075683594px;left:-24.16668701171875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_109" style="top: 147.489px; left: 29.1734px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/automation-dashboard/styles/patterns/img/wf-icons/scikit_learn.png" width="20px">&nbsp;<span class="name">Iris_Classification</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 75.5px; top: 178px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-53.99304962158203px;left:-98.0555419921875px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_43" style="top: 167.677px; left: 184.441px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/automation-dashboard/styles/patterns/img/wf-icons/scikit_learn.png" width="20px">&nbsp;<span class="name">Digits_Classification</span></a></div><div class="task ui-draggable" id="jsPlumb_1_46" style="top: 59px; left: 103.059px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Groovy engine."><img src="images/Groovy.png" width="20px">&nbsp;<span class="name">get_automl_variables</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 236.441px; top: 197.677px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 158px; top: 89px; visibility: visible;" dragid="jsPlumb_1_50" elid="jsPlumb_1_46"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:157.5px;top:98.5px" width="99.44097900390625" height="69.67708587646484" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 78.44097900390625 68.67708587646484 C 88.44097900390625 18.677085876464844 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M72.78774775447083,46.7786581335125 L59.611675761662596,30.183745454009347 L60.94899140574563,39.30578397991411 L52.13880160806421,42.022501802734546 L72.78774775447083,46.7786581335125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 236.441px; top: 157.677px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>

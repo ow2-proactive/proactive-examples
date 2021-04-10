@@ -16,5 +16,11 @@ if ((params_encoded != null && params_encoded.length() > 0) &&
     token = new String(token_decoded)
     
     variables.put('INPUT_VARIABLES', input_variables)
-    variables.put('TOKEN', token)
 }
+else {
+    job_id = variables.get("PA_JOB_ID")
+    token = '{"_token_id": '+job_id+'}'
+}
+
+variables.put('TOKEN', token)
+resultMap.put("RESULT_JSON", '{"token": '+token+', "loss": Infinity}')
