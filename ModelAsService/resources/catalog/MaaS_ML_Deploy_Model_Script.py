@@ -26,6 +26,9 @@ global get_and_decompress_model, save_model, raiser_ex
 DRIFT_DETECTION_WINDOW_SIZE = variables.get("DRIFT_DETECTION_WINDOW_SIZE")
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
 API_DEPLOY = variables.get("API_EXTENSION") if variables.get("API_EXTENSION") else raiser_ex("API_EXTENSION is None")
+LOG_PREDICTIONS = variables.get("LOG_PREDICTIONS") if variables.get("LOG_PREDICTIONS") else raiser_ex("LOG_PREDICTIONS is None")
+DRIFT_ENABLED = variables.get("DRIFT_ENABLED") if variables.get("DRIFT_ENABLED") else raiser_ex("DRIFT_ENABLED is None")
+DRIFT_NOTIFICATION = variables.get("DRIFT_NOTIFICATION") if variables.get("DRIFT_NOTIFICATION") else raiser_ex("DRIFT_NOTIFICATION is None")
 SERVICE_TOKEN = variables.get("SERVICE_TOKEN") if variables.get("SERVICE_TOKEN") else variables.get(
     "SERVICE_TOKEN_PROPAGATED")
 API_ENDPOINT = variables.get("DEPLOY_MODEL_ENDPOINT") if variables.get("DEPLOY_MODEL_ENDPOINT") else variables.get(
@@ -71,11 +74,11 @@ else:
 print('model size (original):   ', sys.getsizeof(model_path), " bytes")
 
 sampled_data_path = os.path.join(os.getcwd(), "baseline_data.csv")
-ds.to_csv(sampled_data_path)
+ds.to_csv(sampled_data_path, index=False)
 model_file = open(model_path, 'rb')
 baseline_data = open(sampled_data_path, 'rb')
 files = {'model_file': model_file, 'baseline_data': baseline_data}
-data = {'api_token': SERVICE_TOKEN}
+data = {'api_token': SERVICE_TOKEN, 'log_predictions': LOG_PREDICTIONS}
 
 # [deprecated]
 # import warnings
