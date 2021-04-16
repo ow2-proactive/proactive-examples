@@ -10,8 +10,6 @@ import subprocess
 import numbers
 import pandas as pd
 import argparse
-import cudf #if enabled to add
-import cuml
 
 from cryptography.fernet import Fernet
 from datetime import datetime as dt
@@ -23,7 +21,6 @@ from joblib import load
 from flask import jsonify
 from tempfile import TemporaryFile
 from json import JSONEncoder
-from cudf import read_json, read_csv #if enabled to add
 
 from urllib.parse import quote
 from distutils.util import strtobool
@@ -87,6 +84,10 @@ USER_KEY = os.getenv('USER_KEY')
 assert USER_KEY is not None, "USER_KEY is required!"
 USER_KEY = str(USER_KEY).encode()
 
+#Required imports for Nvidia Rapids Usage
+if GPU_ENABLED:
+    import cudf
+    from cudf import read_json, read_csv 
 
 # Decrypt user credentials
 USER_DATA_FILE = join(APP_BASE_DIR, 'user_data.enc')
