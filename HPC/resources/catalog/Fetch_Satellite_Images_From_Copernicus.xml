@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Fetch_Satellite_Images_From_Copernicus" onTaskError="continueJobExecution" priority="normal" projectName="Satellite Imagery" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <description>
+    <![CDATA[ Load and return a Copernicus dataset including a 'metadata folder' with metadata files and 'images folder' containing satellite images according to the resolution & image band selected by user. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="satellite-imagery"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png"/>
+<info name="Documentation" value="PML/PMLUserGuide.html#_fetch_satellite_images_from_copernicus"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Fetch_Satellite_Images_From_Copernicus">
+      <description>
+        <![CDATA[ Load and return a Copernicus dataset including a 'metadata folder' with metadata files and 'images folder' containing satellite images according to the resolution & image band selected by user.
+
+Please access https://peps.cnes.fr/rocket/#/register to create a new user account from Peps website.
+
+Please add third party credentials (USER_NAME_COP and USER_PASS_COP) in the Scheduling & Orchestration interface → Manage Third-Party Credentials to connect to Copernicus. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" model="PA:LIST(Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5 Precursor, Sentinel-6)" name="PLATFORM_NAME" value="Sentinel-2"/>
+        <variable inherited="false" model="PA:LIST(SLC, GRD, OCN, S2MSI2A, S2MSI1C, S2MS2Ap)" name="PRODUCT_TYPE" value="S2MSI1C"/>
+        <variable inherited="false" name="FOOTPRINT" value="expected_search_footprints_s1"/>
+        <variable inherited="false" model="PA:DATETIME(yyyy-MM-dd)" name="START_DATE" value="2018-12-19"/>
+        <variable inherited="false" model="PA:DATETIME(yyyy-MM-dd)" name="END_DATE" value="2018-12-21"/>
+        <variable inherited="false" model="PA:Boolean" name="USE_START_AND_END_DATE" value="True"/>
+        <variable inherited="false" model="PA:LIST(10m, 20m, 60m)" name="SPATIAL_RESOLUTION" value="10m"/>
+        <variable inherited="false" model="PA:LIST(All, B01, B02, B03, B04, B05, B06, B07, B08, B8A, B09, B10, B11, B12, TCI)" name="IMAGE_BAND" value="All"/>
+        <variable inherited="false" name="OUTPUT_PATH" value="/tmp/"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_satellite_imagery_bucket"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import ssl, sys
+
+if sys.version_info[0] < 3:
+    try:
+        from urllib2 import urlopen
+    except ImportError:
+        import pip
+        pip.main(['install', 'request'])
+        from urllib2 import urlopen
+else:
+    try:
+        from urllib.request import urlopen
+    except ImportError:
+        import pip
+        pip.main(['install', 'request'])
+        from urllib.request import urlopen
+
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+FOOTPRINT = variables.get("FOOTPRINT")
+
+satellite_imagery_resources_url = PA_CATALOG_REST_URL +"/buckets/satellite-imagery/resources/"+FOOTPRINT+"/raw"
+print("satellite-imagery-resources-url: ", satellite_imagery_resources_url)
+
+# This restores the same behavior as before.
+context        = ssl._create_unverified_context()
+json_file      = urlopen(satellite_imagery_resources_url, context=context).read()
+json_content   = json_file.decode('utf-8')
+json_file_name = FOOTPRINT + ".geojson"
+
+f = open(json_file_name, "w")
+f.write(json_content)
+f.close()
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import os
+import sys
+import uuid
+import shutil
+import zipfile
+import datetime
+import subprocess
+import random as r
+from zipfile import ZipFile
+from os.path import join, exists, os, isfile
+
+try:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+except ImportError:
+    subprocess.call([sys.executable, "-m", "pip", "install", 'sentinelsat'])
+finally:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+
+
+if 'variables' in locals():
+  PLATFORM_NAME  = variables.get("PLATFORM_NAME")                        # Specific platform [Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5, Precursor, Sentinel-6]
+  PRODUCT_TYPE  = variables.get("PRODUCT_TYPE")                          # Used to perform a search based on the product type
+  FOOTPRINT      = variables.get("FOOTPRINT")                            # Geojson file search_footprints.geojson with footprints of the query result
+  FOOTPRINT      = FOOTPRINT + ".geojson"
+  FOOTPRINT_FILE = os.path.join(os.getcwd(), FOOTPRINT)
+  START_DATE     = variables.get("START_DATE")                           # Start date of the query in the format YYYYMMDD
+  END_DATE       = variables.get("END_DATE")                             # End date of the query in the format YYYYMMDD
+  USER_NAME      = credentials.get("USER_NAME_COP")                      # User email
+  USER_PASS      = credentials.get("USER_PASS_COP")                      # User password
+  OUTPUT_PATH    = variables.get("OUTPUT_PATH")                          # Folder output path 
+  USE_START_AND_END_DATE = bool(variables.get("USE_START_AND_END_DATE")) # True or False to use start and end data
+  SPATIAL_RESOLUTION = variables.get("SPATIAL_RESOLUTION")               # Spatial resolutions of 10m, 20m and 60m
+  IMAGE_BAND = variables.get("IMAGE_BAND")                               # Image band (TC1,  B01, B02, B03, 0B4, 0B5, 0B6,B07, B08, B8A, B09, B10, B11, B12)																
+    
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Define the current 'dataset_path'
+os.chdir(OUTPUT_PATH)
+
+dataset_path = join(OUTPUT_PATH, ID, 'dataset')
+output_path = join(OUTPUT_PATH, ID, 'copernicus')
+output_path_metadata = join(OUTPUT_PATH, ID, 'copernicus', 'metadata')
+
+# Create the folders
+os.makedirs(dataset_path, exist_ok=True)
+os.makedirs(output_path, exist_ok=True)
+os.makedirs(output_path_metadata, exist_ok=True)
+
+# Define path to download the dataset
+os.chdir(dataset_path)
+
+print('The path input Copernicus dataset', dataset_path)
+print('The path output Copernicus dataset', output_path)
+
+# Data format
+start_date_format = START_DATE.replace('-', '')
+end_date_format =  END_DATE.replace('-', '')
+
+#  SentinelAPI
+api = SentinelAPI(USER_NAME, USER_PASS)
+footprint = geojson_to_wkt(read_geojson(FOOTPRINT_FILE))
+
+if USE_START_AND_END_DATE == True:
+    products = api.query(footprint, producttype=PRODUCT_TYPE, date=(start_date_format, end_date_format), platformname=PLATFORM_NAME)
+else:
+    products = api.query(footprint, producttype=PRODUCT_TYPE, platformname=PLATFORM_NAME)
+    
+api.download_all(products)
+
+
+
+#print(os.listdir(dataset_path))
+
+# List all .zip folders
+folder_zip = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.zip')]
+
+# Unzip folders 
+print('**********************************************************************************************************')
+print('Extracting all the files...')
+print('**********************************************************************************************************')
+for file_name in folder_zip: 
+    with ZipFile(file_name, 'r') as zip: 
+        zip.printdir() 
+        print('Unzip file name: {} '.format(file_name))
+        zip.extractall(dataset_path) 
+                       
+# List all .safe folders
+folder_safe = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.SAFE')]
+
+# Rename SPATIAL_RESOLUTION variable
+spatial_resolution_check = 'R' + SPATIAL_RESOLUTION
+    
+# Copy and organize files
+def folder_copy(image_path):
+    for root, dirs, files in os.walk(image_path):
+        for dire in dirs:
+            os.makedirs(os.path.join(output_path, dire) , exist_ok=True)
+            fullpath = os.path.join(root, dire)
+            files2 = os.listdir(fullpath) 
+            for filefull in files2:
+                filepath = os.path.join(fullpath, filefull)
+                print('Image name: {} '.format(os.path.join(output_path, dire,  filefull)))
+                shutil.copy(filepath, os.path.join(output_path, dire))
+
+# Looking for the "IMG_DATA" directory 
+def images_search():
+    print('**********************************************************************************************************')
+    print('Copying the images to the copernicus directory...')
+    print('**********************************************************************************************************')
+    for foldername in folder_safe:
+        for path, dirs, filename in os.walk(foldername): #omit files, loop through later
+            for dirname in dirs:
+                fullpath = os.path.join(path, dirname)
+                if "IMG_DATA" in dirname:
+                    folder_copy(fullpath)
+    
+# Searching for metadata files
+def metadata_search(output_path_metadata, folder_safe):
+    print('**********************************************************************************************************')
+    print('Searching for  metadata files...')
+    print('**********************************************************************************************************')
+    for file_xml in folder_safe:
+        file_rename = r.randint(0,9999)
+        for fn in os.listdir(file_xml):
+            if fn.endswith(('.xml')):
+                shutil.copy(os.path.join(file_xml,fn), os.path.join(output_path_metadata, fn))
+                new_file_rename =  str(file_rename) + '_' +  fn 
+                os.rename(os.path.join(output_path_metadata, fn), os.path.join(output_path_metadata, new_file_rename)) 
+                print('Metadata name: {} '.format(join(output_path_metadata, new_file_rename)))
+                
+# Searching for spatial resolutions (R10m, R20m and R60m)
+def resolution_search():
+    print('**********************************************************************************************************')
+    print('Selecting image by resolution and metadata files')
+    print('**********************************************************************************************************')
+    image_resolution  = [name for name in os.listdir(output_path) if not name.endswith('DS_Store')] 
+    for foldername in image_resolution:
+        fullpath = os.path.join(output_path, foldername)
+        print('File name: {} '.format(fullpath)) if spatial_resolution_check in foldername or "metadata" in foldername else shutil.rmtree(fullpath)
+    
+# Searching for image band (All,  B01, B02, B03, B04, B05, B06,B07, B08, B8A, B09, B10, B11, B12, TC1)
+def image_band(image_band_check):
+    print('**********************************************************************************************************')
+    print('Selecting {} image band..."'.format(image_band_check)) 
+    print('**********************************************************************************************************')
+    resolution_path = join(output_path, spatial_resolution_check)
+    if os.path.isdir(resolution_path) == True:
+        image_band_list  = [name for name in os.listdir(resolution_path) if not name.endswith('DS_Store')]
+        for foldername in image_band_list:
+        	fullpath = os.path.join(resolution_path, foldername)
+        	print('Image name: {} '.format(fullpath)) if image_band_check in foldername or image_band_check == 'All' else os.remove(fullpath)
+        
+if PLATFORM_NAME == 'Sentinel-2':
+	# Call folder_search function
+	images_search()
+ 
+	# Call metadata_search function 
+	metadata_search(output_path_metadata, folder_safe)
+
+	# Call resolution_search function
+	resolution_search()
+
+	# Call image_search function
+	image_band(IMAGE_BAND)
+    
+if 'variables' in locals():
+  variables.put("DATASET_PATH", output_path)
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            363.984375
+        </positionTop>
+        <positionLeft>
+            374.984375
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2144px;
+            height:2464px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-358.984375px;left:-369.984375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_108" style="top: 363.984px; left: 374.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a Copernicus dataset including a 'metadata folder' with metadata files and 'images folder' containing satellite images according to the resolution &amp; image band selected by user.
+
+Please access https://peps.cnes.fr/rocket/#/register to create a new user account from Peps website.
+
+Please add third party credentials (USER_NAME_COP and USER_PASS_COP) in the Scheduling &amp; Orchestration interface → Manage Third-Party Credentials to connect to Copernicus."><img src="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_Copernicus</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 477px; top: 394px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
