@@ -1,0 +1,484 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Gromacs_VMD_Molecule_Simulation" projectName="Gromacs and VMD" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="DISPLAY" value="14" model="PA:INTEGER"/>
+    <variable name="GROMACS_PORT" value="9999" />
+    <variable name="GROMACS_MPI_THREADS" value="2" />
+    <variable name="GROMACS_OPEN_MPI_THREADS" value="2" />
+  </variables>
+  <description>
+    <![CDATA[ Example of Remote Visualization using Xvnc. It uses the following parameters:
+DISPLAY: display number to use
+VISU_COMMAND: vnc command to start ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="basic-examples"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/gromacs.jpeg"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_Remote_Visualization" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ Example of Remote Visualization using Xvnc.
+It uses the following parameters:
+DISPLAY: display number to use
+VISU_COMMAND: vnc command to start ]]>
+      </description>
+      <variables>
+        <variable name="VISU_COMMAND" value="Xvnc :$DISPLAY -depth 24 -geometry 1280x1024 -SecurityTypes None" inherited="false" model="PA:NOT_EMPTY_STRING"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/remote-visualization.png"/>
+        <info name="DISABLE_PTK" value="true"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Pre-Script which enables Remote Visualization using a VNC command and X terminal session
+ *
+ * This script creates the variable 'VISU_PID' containing the process id of the VNC session started
+ * This session should be terminated with a kill command (otherwise the task will remain running)
+ *
+ * Arguments:
+ * display : X display number (e.g. 12)
+ * visu_command : command used to start the VNC session (e.g. "Xvnc :${DISPLAY} -geometry 1280x1024 -SecurityTypes None")
+ */
+
+def display = args[0]
+def visu_command = args[1]
+
+def processVisu = visu_command.execute()
+processVisu.consumeProcessOutput(System.out, System.err)
+Thread.sleep(1000)
+grepProc = 'ps -aux'.execute() | ['grep', visu_command].execute() | 'grep -v grep'.execute() | ['awk', '{ print $2 }'].execute()
+grepProc.waitFor()
+visu_pidText = grepProc.text
+
+println "Visu process id: " + visu_pidText
+
+try {
+    Integer visuPid = visu_pidText.trim() as Integer
+    variables.put("VISU_PID", visuPid)
+} catch (Exception e) {
+    throw new IllegalStateException("Visu process cannot be found", e)
+}    
+
+remoteConnectionString = String.format("PA_REMOTE_CONNECTION;%s;%s;vnc;%s:59%s", variables.get("PA_JOB_ID"), variables.get("PA_TASK_ID"), variables.get("PA_NODE_HOST"), display)
+println remoteConnectionString
+    
+schedulerapi.connect()
+schedulerapi.enableRemoteVisualization(variables.get("PA_JOB_ID"), variables.get("PA_TASK_NAME"), remoteConnectionString)
+
+variables.put("VNC_VMD_HOST",variables.get("PA_NODE_HOST"))
+println(variables.get("VNC_VMD_HOST"))
+
+/*
+// Add token to the current node
+token = "VNC_" + variables.get("PA_JOB_ID")
+variables.put("VISU_TOKEN", token)
+nodeUrl = variables.get("PA_NODE_URL")
+println("Current nodeUrl: " + nodeUrl)
+println("Adding token:    " + token)
+rmapi.connect()
+rmapi.addNodeToken(nodeUrl, token)
+*/
+]]>
+          </code>
+          <arguments>
+            <argument value="${DISPLAY}"/>
+            <argument value="${VISU_COMMAND}"/>
+          </arguments>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            242.5
+        </positionTop>
+        <positionLeft>
+            491.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Stop_VMD_and_Remote_Visualization" 
+    
+    
+    
+    
+    fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/remote-visualization.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="wait_for_signal"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Script which verifies that the current node runs on a host which matches the given regular expression
+ *
+ * Arguments:
+ * machine host name (regexp)
+ */
+
+import com.google.common.base.Strings;
+import org.ow2.proactive.scripting.helper.selection.SelectionUtils
+
+if (args.length != 1) {
+    println "Incorrect number of arguments, expected 1, received " + args.length;
+    selected = false;
+    return;
+}
+
+machineName = args[0]
+
+if (Strings.isNullOrEmpty(machineName)) {
+    println "Given host name was empty";
+    selected = false;
+    return;
+}
+
+machineName = machineName.trim()
+
+println "Hostname " + nodehost + " (expected :  " + machineName + ")";
+
+selected = SelectionUtils.checkHostName(machineName)
+
+
+
+]]>
+          </code>
+          <arguments>
+            <argument value="${VNC_VMD_HOST}"/>
+          </arguments>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+docker stop vmd_$variables_PA_JOB_ID && docker rm vmd_$variables_PA_JOB_ID
+kill $variables_VISU_PID
+echo "Display closed"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            507.5
+        </positionTop>
+        <positionLeft>
+            478.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Run_VMD" maxNumberOfExecution="1"
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ Example of Remote Visualization using Xvnc.
+It uses the following parameters:
+DISPLAY: display number to use
+VISU_COMMAND: vnc command to start ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/vmd.png"/>
+        <info name="DISABLE_PTK" value="true"/>
+      </genericInformation>
+      <depends>
+        <task ref="Gromacs_Simulation"/>
+        <task ref="Start_Remote_Visualization"/>
+      </depends>
+      <inputFiles>
+        <files  includes="molecule.gro" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Script which verifies that the current node runs on a host which matches the given regular expression
+ *
+ * Arguments:
+ * machine host name (regexp)
+ */
+
+import com.google.common.base.Strings;
+import org.ow2.proactive.scripting.helper.selection.SelectionUtils
+
+if (args.length != 1) {
+    println "Incorrect number of arguments, expected 1, received " + args.length;
+    selected = false;
+    return;
+}
+
+machineName = args[0]
+
+if (Strings.isNullOrEmpty(machineName)) {
+    println "Given host name was empty";
+    selected = false;
+    return;
+}
+
+machineName = machineName.trim()
+
+println "Hostname " + nodehost + " (expected :  " + machineName + ")";
+
+selected = SelectionUtils.checkHostName(machineName)
+
+
+
+]]>
+          </code>
+          <arguments>
+            <argument value="${VNC_VMD_HOST}"/>
+          </arguments>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+#!/bin/bash
+
+export DISPLAY=:${variables_DISPLAY}
+export LIBGL_ALWAYS_INDIRECT=1
+
+currentPath=$(pwd)
+mkdir $currentPath/data
+mv molecule.gro $currentPath/data/molecule.gro
+
+touch $currentPath/data/connect_to_sim.tcl
+echo "menu main on" > $currentPath/data/connect_to_sim.tcl
+echo "display rendermode Acrobat3D" >> $currentPath/data/connect_to_sim.tcl
+echo "imd connect $variables_GROMACS_HOST $variables_GROMACS_PORT ; imd transfer 1 ; imd keep 1" >> $currentPath/data/connect_to_sim.tcl
+echo "wait 10000" >> $currentPath/data/connect_to_sim.tcl
+
+set -e
+docker run -i --name vmd_$variables_PA_JOB_ID --net=host -e DISPLAY=$DISPLAY -v $currentPath/data:/data activeeon/vmd /bin/bash -c "vmd /data/molecule.gro -pos 0 0 -startup /data/connect_to_sim.tcl" || true
+
+exit
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            374.5
+        </positionTop>
+        <positionLeft>
+            692.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="wait_for_signal" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A template of a signal task that waits until the value of the variable SIGNAL is added to the set of job signals (stored in ProActive signals channel). ]]>
+      </description>
+      <variables>
+        <variable name="SIGNAL" value="Terminate_Job_and_Services" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Remote_Visualization"/>
+        <task ref="Gromacs_Simulation"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+signal = args[0]
+signalapi.readyForSignal(signal)
+println("Waiting for signal "+ signal)
+signalapi.waitFor(signal)
+]]>
+          </code>
+          <arguments>
+            <argument value="${SIGNAL}"/>
+          </arguments>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            377.5
+        </positionTop>
+        <positionLeft>
+            526.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Gromacs_Simulation" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <genericInformation>
+        <info name="DISABLE_PTK" value="true"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/gromacs.jpeg"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="molecule_topology.tpr" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+currentPath=$(pwd)
+mkdir $currentPath/data
+mv molecule_topology.tpr $currentPath/data/molecule_topology.tpr
+
+docker run --name gromacs_$variables_PA_JOB_ID -d -p $variables_GROMACS_PORT:$variables_GROMACS_PORT -v $currentPath/data:/data gromacs/gromacs gmx mdrun -s /data/molecule_topology.tpr -ntmpi $variables_GROMACS_MPI_THREADS -ntomp $variables_GROMACS_OPEN_MPI_THREADS -imdport $variables_GROMACS_PORT -imdwait -imdpull -imdterm
+
+sleep 5
+
+docker logs gromacs_$variables_PA_JOB_ID
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("GROMACS_HOST", variables.get("PA_NODE_HOST"))
+println(variables.get("GROMACS_HOST"))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            242.5
+        </positionTop>
+        <positionLeft>
+            676.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Stop_Gromacs_Simulation" 
+    
+    
+    
+    
+    fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/gromacs.jpeg"/>
+      </genericInformation>
+      <depends>
+        <task ref="Stop_VMD_and_Remote_Visualization"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Script which verifies that the current node runs on a host which matches the given regular expression
+ *
+ * Arguments:
+ * machine host name (regexp)
+ */
+
+import com.google.common.base.Strings;
+import org.ow2.proactive.scripting.helper.selection.SelectionUtils
+
+if (args.length != 1) {
+    println "Incorrect number of arguments, expected 1, received " + args.length;
+    selected = false;
+    return;
+}
+
+machineName = args[0]
+
+if (Strings.isNullOrEmpty(machineName)) {
+    println "Given host name was empty";
+    selected = false;
+    return;
+}
+
+machineName = machineName.trim()
+
+println "Hostname " + nodehost + " (expected :  " + machineName + ")";
+
+selected = SelectionUtils.checkHostName(machineName)
+
+
+
+]]>
+          </code>
+          <arguments>
+            <argument value="${GROMACS_HOST}"/>
+          </arguments>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+docker stop gromacs_$variables_PA_JOB_ID && docker rm gromacs_$variables_PA_JOB_ID
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            620
+        </positionTop>
+        <positionLeft>
+            525
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2732px;
+            height:3196px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-237.5px;left:-473.75px"><div class="task ui-draggable" id="jsPlumb_1_176" style="top: 242.5px; left: 491.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Example of Remote Visualization using Xvnc.
+It uses the following parameters:
+DISPLAY: display number to use
+VISU_COMMAND: vnc command to start"><img src="/automation-dashboard/styles/patterns/img/wf-icons/remote-visualization.png" width="20px">&nbsp;<span class="name">Start_Remote_Visualization</span></a></div><div class="task ui-draggable" id="jsPlumb_1_179" style="top: 507.5px; left: 478.75px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/remote-visualization.png" width="20px">&nbsp;<span class="name">Stop_VMD_and_Remote_Visualization</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_182" style="top: 374.5px; left: 692.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Example of Remote Visualization using Xvnc.
+It uses the following parameters:
+DISPLAY: display number to use
+VISU_COMMAND: vnc command to start"><img src="/automation-dashboard/styles/patterns/img/wf-icons/vmd.png" width="20px">&nbsp;<span class="name">Run_VMD</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_185" style="top: 377.5px; left: 526.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A template of a signal task that waits until the value of the variable SIGNAL is added to the set of job signals (stored in ProActive signals channel)."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">wait_for_signal</span></a></div><div class="task ui-draggable" id="jsPlumb_1_188" style="top: 242.5px; left: 676.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a bash engine."><img src="/automation-dashboard/styles/patterns/img/wf-icons/gromacs.jpeg" width="20px">&nbsp;<span class="name">Gromacs_Simulation</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_191" style="top: 620px; left: 525px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/gromacs.jpeg" width="20px">&nbsp;<span class="name">Stop_Gromacs_Simulation</span></a></div><svg style="position:absolute;left:567px;top:417.5px" width="25.75" height="90.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 4.75 89.5 C 14.75 39.5 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.177624,67.674928 L12.30828720155084,47.11583524004942 L5.88986142975296,53.734279967621056 L-1.6323608308280955,48.40359781029646 L7.177624,67.674928" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.177624,67.674928 L12.30828720155084,47.11583524004942 L5.88986142975296,53.734279967621056 L-1.6323608308280955,48.40359781029646 L7.177624,67.674928" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:727.5px;top:282.5px" width="26" height="93" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 5 92 C 15 42 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.39958875,69.4706815 L12.44589973908693,48.89072169922729 L6.054668964852149,55.535431564260854 L-1.4893501966522171,50.235641484375144 L7.39958875,69.4706815" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.39958875,69.4706815 L12.44589973908693,48.89072169922729 L6.054668964852149,55.535431564260854 L-1.4893501966522171,50.235641484375144 L7.39958875,69.4706815" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:560.5px;top:282.5px" width="193" height="93" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 172 92 C 182 42 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M146.9437255,63.14091049999999 L130.70238169788388,49.53140090187471 L133.84504352848822,58.19879247134142 L125.76026366922531,62.63008287338649 L146.9437255,63.14091049999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M146.9437255,63.14091049999999 L130.70238169788388,49.53140090187471 L133.84504352848822,58.19879247134142 L125.76026366922531,62.63008287338649 L146.9437255,63.14091049999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:560.5px;top:282.5px" width="27.5" height="96" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 6.5 95 C 16.5 45 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.764571125000002,72.20064625 L13.509504487793464,51.54911828273691 L7.216089166849415,58.28654535826855 L-0.4045964039379939,53.0976002408875 L8.764571125000002,72.20064625" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.764571125000002,72.20064625 L13.509504487793464,51.54911828273691 L7.216089166849415,58.28654535826855 L-0.4045964039379939,53.0976002408875 L8.764571125000002,72.20064625" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 561px; top: 273px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 572.25px; top: 537.5px; visibility: visible;" dragid="jsPlumb_1_239" elid="jsPlumb_1_179"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 572.25px; top: 497.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 733px; top: 405px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 733px; top: 365px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 567.5px; top: 408px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 567.5px; top: 368px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected endpointDrag" style="position: absolute; height: 20px; width: 20px; left: 728px; top: 273px; visibility: visible;" dragid="jsPlumb_1_233" elid="jsPlumb_1_188"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 591px; top: 650px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 591px; top: 610px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:567px;top:282.5px" width="181.5" height="96" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 95 C -10 45 170.5 50 160.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.265625,66.09375 L43.40858821229735,64.68836514045414 L35.14380313632019,60.60261825060583 L37.91745646290318,51.81018700413395 L22.265625,66.09375" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:571.75px;top:547px" width="39.75" height="73.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 18.75 72.5 C 28.75 22.5 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M20.20536,53.81712 L20.936311993862745,32.64011102369109 L16.03903411715656,40.45142777557897 L7.5706197694417146,36.80643690653453 L20.20536,53.81712" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
