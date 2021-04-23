@@ -76,7 +76,7 @@ TOKENS = { # user api tokens
 DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
 TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
 DRIFT_ENABLED = True if (os.getenv('DRIFT_ENABLED') is not None and os.getenv('DRIFT_ENABLED').lower() == "true") else False
-# DRIFT_THRESHOLD = float(os.getenv('DRIFT_THRESHOLD')) if os.getenv('DRIFT_THRESHOLD') is not None else None
+GPU_ENABLED = True if (os.getenv('GPU_ENABLED') is not None and os.getenv('GPU_ENABLED').lower() == "true") else False
 DRIFT_NOTIFICATION = True if (os.getenv('DRIFT_NOTIFICATION') is not None and os.getenv('DRIFT_NOTIFICATION').lower() == "true") else False
 LOG_PREDICTIONS = True if (os.getenv('LOG_PREDICTIONS') is not None and os.getenv('LOG_PREDICTIONS').lower() == "true") else False
 HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
@@ -84,6 +84,10 @@ USER_KEY = os.getenv('USER_KEY')
 assert USER_KEY is not None, "USER_KEY is required!"
 USER_KEY = str(USER_KEY).encode()
 
+#Required imports for Nvidia Rapids Usage
+if GPU_ENABLED:
+    import cudf
+    from cudf import read_json, read_csv 
 
 # Decrypt user credentials
 USER_DATA_FILE = join(APP_BASE_DIR, 'user_data.enc')
@@ -107,9 +111,9 @@ if not isfile(CONFIG_FILE):
         'DEBUG_ENABLED': DEBUG_ENABLED,
         'TRACE_ENABLED': TRACE_ENABLED,
         'DRIFT_ENABLED': DRIFT_ENABLED,
-        # 'DRIFT_THRESHOLD': DRIFT_THRESHOLD,
         'DRIFT_NOTIFICATION': DRIFT_NOTIFICATION,
         'LOG_PREDICTIONS': LOG_PREDICTIONS,
+        'GPU_ENABLED': GPU_ENABLED,
         'HTTPS_ENABLED': HTTPS_ENABLED
     }
     with open(CONFIG_FILE, "w") as f:
@@ -256,6 +260,7 @@ def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables=
     try:
         log("Connecting on " + proactive_url, token)
         gateway = proactive.ProActiveGateway(proactive_url, [])
+
         gateway.connect(
             username=user_credentials['ciLogin'],
             password=user_credentials['ciPasswd'])
@@ -343,10 +348,18 @@ def predict_api(data: str) -> str:
     api_token = data['api_token']
     log("calling predict_api", api_token)
     detector = data['detector']
-    dataframe = pd.DataFrame()
     feature_names = list()
-    if exists(CURRENT_BASELINE_DATA): # and isfile(CURRENT_BASELINE_DATA):
-        dataframe = pd.read_csv(CURRENT_BASELINE_DATA)
+    if GPU_ENABLED:
+        dataframe = cudf.DataFrame()
+    else:
+        dataframe = pd.DataFrame()
+
+    if exists(CURRENT_BASELINE_DATA) and get_config('DRIFT_ENABLED'): # and isfile(CURRENT_BASELINE_DATA):
+        if GPU_ENABLED:
+            dataframe = read_csv(CURRENT_BASELINE_DATA)
+        else:
+            dataframe = pd.read_csv(CURRENT_BASELINE_DATA)
+
     if not dataframe.empty:
         feature_names = dataframe.columns
     if auth_token(api_token):
@@ -356,23 +369,26 @@ def predict_api(data: str) -> str:
                 # dataframe = pd.read_json(dataframe_json, orient='values')
                 predict_dataframe_json = data['predict_dataframe_json']
                 predict_dataframe = pd.read_json(predict_dataframe_json, orient='values')
-                if get_config('DRIFT_ENABLED') and not dataframe.empty:
+                if GPU_ENABLED:
+                    predict_dataframe = cudf.DataFrame.from_pandas(predict_dataframe)
+                if get_config('DRIFT_ENABLED') and dataframe.empty == False:
                     drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, api_token)
-                elif get_config('DRIFT_ENABLED') and dataframe.empty:
-                    drifts_json = "Drift detection can not be enacted without baseline data!"
                 else:
-                    drifts_json = "Drift detection is not enabled!"
+                    drifts_json = "Drift detection is not enabled."
                 model = load(CURRENT_MODEL_FILE)
                 log("model:\n" + str(model))
                 log("dataframe:\n" + str(dataframe.head()))
-                predictions = model.predict(predict_dataframe.values)
+                predictions = model.predict(predict_dataframe)
                 if get_config('LOG_PREDICTIONS'):
                     log("Logging predictions")
                     dataframe_predictions = predict_dataframe.assign(predictions=predictions)
-                    dataframe_predictions.to_csv(PREDICTIONS_FILE, header=False, index=False, mode="a")
+                    dataframe_predictions.to_csv(PREDICTIONS_FILE, header=False, index=False)
                     log("Done")
                 log("Model predictions done", api_token)
-                predict_drifts['predictions'] = list(predictions)
+                if GPU_ENABLED:
+                    predict_drifts['predictions'] = list(predictions.to_pandas())
+                else:
+                    predict_drifts['predictions'] = list(predictions)
                 predict_drifts['drifts'] = drifts_json
                 return json.dumps(predict_drifts) 
             except Exception as e:
@@ -469,7 +485,6 @@ def undeploy_api() -> str:
         return log("Model removed", api_token)
     else:
         return log("Invalid token", api_token)
-
 
 def redeploy_api() -> str:
     api_token = connexion.request.form["api_token"]
