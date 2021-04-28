@@ -18,7 +18,7 @@ def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")
 def endpointID = variables.get("ENDPOINT_ID")
-def httpEnabled = variables.get("HTTP_ENABLED") // e.g. MongoDB, Visdom, Tensorboard
+def httpEnabled = variables.get("HTTP_ENABLED") // e.g. Visdom, Tensorboard
 def httpsEnabled = variables.get("HTTPS_ENABLED") // e.g. MaaS, JupyterLab
 def engine = variables.get("ENGINE") // docker, singularity
 
@@ -33,18 +33,17 @@ if (engine != null && "singularity".equalsIgnoreCase(engine)) {
     containerID = new File(instanceName+"_containerID").text.trim()
 }
 
-def containerUrl = hostname+":"+port
-if (httpsEnabled != null){
-    if ("true".equalsIgnoreCase(httpsEnabled)){
-        containerUrl = "https://"+containerUrl
-    }else{
-        containerUrl = "http://"+containerUrl
-    }
-}else{
-    if (httpEnabled != null && "true".equalsIgnoreCase(httpEnabled)){
-        containerUrl = "http://"+containerUrl
-    }
+def containerUrl = hostname + ":" + port
+if (httpsEnabled != null && "true".equalsIgnoreCase(httpsEnabled)){
+    containerUrl = "https://"+containerUrl
 }
+if (httpEnabled != null && "true".equalsIgnoreCase(httpEnabled)){
+        containerUrl = "http://"+containerUrl
+}
+if(httpEnabled == null && httpsEnabled == null){
+    containerUrl = "tcp://"+containerUrl
+}
+
 println "containerUrl: " + containerUrl
 
 variables.put("HOSTNAME", hostname)
@@ -75,12 +74,14 @@ try {
     endpoint.setId(endpointID);
     endpoint.setUrl(containerUrl);
     // Set the endpoint parameters according to the Proxy settings
-    if (proxyfied.toLowerCase()=="true"){
-        proxyfiedURL = variables.get('PROXYFIED_URL')
-        endpoint.setProxyfied(true);
-        endpoint.setProxyfiedUrl(proxyfiedURL)
-    }else{
-        endpoint.setProxyfied(false)
+    if (proxyfied != null){
+        if (proxyfied.toLowerCase()=="true"){
+            proxyfiedURL = variables.get('PROXYFIED_URL')
+            endpoint.setProxyfied(true);
+            endpoint.setProxyfiedUrl(proxyfiedURL)
+        }else{
+            endpoint.setProxyfied(false)
+        }
     }
 
     // Node
@@ -100,7 +101,7 @@ try {
     def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
     serviceInstanceData.setInstanceStatus("RUNNING")
     serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-    if (proxyfied.toLowerCase()=="true"){
+    if (proxyfied != null && proxyfied.toLowerCase()=="true"){
         serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
         serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
     }
