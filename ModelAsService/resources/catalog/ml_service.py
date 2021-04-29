@@ -25,12 +25,17 @@ from json import JSONEncoder
 from urllib.parse import quote
 from distutils.util import strtobool
 
-
-class NumpyArrayEncoder(JSONEncoder):
+    
+class NpEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, numpy.ndarray):
+        if isinstance(obj, numpy.integer):
+            return int(obj)
+        elif isinstance(obj, numpy.floating):
+            return float(obj)
+        elif isinstance(obj, numpy.ndarray):
             return obj.tolist()
-        return JSONEncoder.default(self, obj)
+        else:
+            return super(NpEncoder, self).default(obj)
 
 
 def install(package):
@@ -212,7 +217,7 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
                     log("Web notification sent!")
                 else:
                     log("Error occurred while sending a web notification")
-    return json.dumps(drifts)
+    return json.dumps(drifts,cls=NpEncoder)
     
     # This code is commented in case needed in future for drift detection
     # log("calling perform_drift_detection", token)
@@ -390,7 +395,7 @@ def predict_api(data: str) -> str:
                 else:
                     predict_drifts['predictions'] = list(predictions)
                 predict_drifts['drifts'] = drifts_json
-                return json.dumps(predict_drifts) 
+                return json.dumps(predict_drifts,cls=NpEncoder) 
             except Exception as e:
                 return log(str(e), api_token)
         else:
