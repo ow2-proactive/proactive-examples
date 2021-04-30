@@ -26,8 +26,8 @@
                   <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
                       <arguments>
                           <argument value="$PCA_INSTANCE_ID"/>
-                          <argument value="swarm_manager_pa_node_name"/>
-                          <argument value="swarm_manager_pa_node_name"/>
+                          <argument value="swarm_manager_and_workers_pa_node_names"/>
+                          <argument value="swarm_manager_and_workers_pa_node_names"/>
                       </arguments>
                   </file>
               </script>
@@ -88,19 +88,35 @@ runs = variables.get("TARGETED_NB_PA_NODES")
       <depends>
         <task ref="inform_FINISH_LAUNCHED"/>
       </depends>
+      <selection>
+            <script type="dynamic">
+                <code language="groovy">
+                    <![CDATA[
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def targeted_pa_node_name = variables.get("swarm_manager_and_workers_pa_node_names").split(",")[task_replication_id]
+
+selected = (nodename == targeted_pa_node_name)
+]]>
+                </code>
+            </script>
+      </selection>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
 // Retrieve variables
-def task_replication_id = variables.get('PA_TASK_REPLICATION');
+def task_replication_id = variables.get('PA_TASK_REPLICATION')
 
 // Clean swarm
 def cmd = ["docker", "swarm", "leave", "-f"]
-cmd.execute().waitForProcessOutput(System.out, System.err)
+def cmd_err = new StringBuilder()
+cmd.execute().waitForProcessOutput(System.out, cmd_err)
 
-// Propagate this clean was executed
-variables.put("DOCKER_SWARM_LEAVE_FORCED_EXECUTED_" + task_replication_id, "true")
+// Propagate the status of the clean
+if (!cmd_err.toString().isEmpty() && !cmd_err.toString().contains("This node is not part of a swarm")){
+    println "DEBUG adding ko since cmd_err " + cmd_err.toString()
+  variables.put("DOCKER_SWARM_LEAVE_FORCED_EXECUTED_" + task_replication_id, "ko")
+}
 ]]>
           </code>
         </script>
@@ -114,7 +130,7 @@ variables.put("DOCKER_SWARM_LEAVE_FORCED_EXECUTED_" + task_replication_id, "true
         </positionLeft>
       </metadata>
     </task>
-    <task name="set_FINISH_and_inform_FINISH_DONE"
+    <task name="Set_service_FINISHED_if_all_clean_OK"
     
     
     
@@ -135,29 +151,27 @@ variables.put("DOCKER_SWARM_LEAVE_FORCED_EXECUTED_" + task_replication_id, "true
 def instance_name = variables.get("INSTANCE_NAME")
 def targeted_nb_pa_nodes = variables.get("TARGETED_NB_PA_NODES") as Integer
 
-def status_file_content = instance_name
+// Merge and propagate all the clean command status
+def status_file_content = ""
 for (i = 0; i < targeted_nb_pa_nodes; i++) {
-    if (variables.get("DOCKER_SWARM_LEAVE_FORCED_EXECUTED_" +  i) == null){
-    	status_file_content = "error"
-        break
-    }
+    status_file_content += "|" + variables.get("DOCKER_SWARM_LEAVE_FORCED_EXECUTED_" +  i)
 }
-
 new File(localspace, instance_name + "_status").text = status_file_content
 ]]>
           </code>
         </script>
       </scriptExecutable>
-      <post>
-        <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Post_Trigger_Action/raw" language="groovy">
-            <arguments>
-              <argument value="FINISHED"/>
-            </arguments>
-          </file>
-        </script>
-      </post>
-      <metadata>
+        <post>
+            <script>
+                <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Set_service_FINISHED_if_all_clean_OK/raw" language="groovy">
+                    <arguments>
+                        <argument value="FINISHED"/>
+                        <argument value="${INSTANCE_NAME}_status"/>
+                    </arguments>
+                </file>
+            </script>
+        </post>
+        <metadata>
         <positionTop>
             1242.5
         </positionTop>
@@ -176,11 +190,11 @@ new File(localspace, instance_name + "_status").text = status_file_content
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png"/>
       </genericInformation>
       <depends>
-        <task ref="set_FINISH_and_inform_FINISH_DONE"/>
+        <task ref="Set_service_FINISHED_if_all_clean_OK"/>
       </depends>
       <scriptExecutable>
           <script>
-              <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_instance_and_remove_tokens/raw" language="groovy">
+              <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_and_remove_tokens/raw" language="groovy">
                   <arguments>
                       <argument value="null"/>
                       <argument value="$INSTANCE_NAME"/>

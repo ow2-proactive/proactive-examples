@@ -33,7 +33,8 @@ def session_id = schedulerapi.getSession()
 def service_instance_rest_api = new ServiceInstanceRestApi(new ApiClient().setBasePath(pca_url))
 
 // If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
-def current_status = service_instance_rest_api.getServiceInstanceUsingGET(session_id, instance_id).getInstanceStatus()
+def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(session_id, instance_id)
+def current_status = service_instance_data.getInstanceStatus()
 
 if (current_status.equals("FINISHED")){
 
@@ -61,11 +62,16 @@ if (current_status.equals("FINISHED")){
         }
     }
 
-    // Remove token in the current node
+    // Remove all tokens
     rmapi.connect()
-    def pa_node_url_to_remove_token = variables.get("PA_NODE_URL")
-    println "[Loop_over_service_instance_status] Removing token " + token_name + " from node " + pa_node_url_to_remove_token
-    rmapi.removeNodeToken(pa_node_url_to_remove_token, token_name)
+    def deploymentsIterator = service_instance_data.getDeployments().iterator()
+    i = 0
+    while (deploymentsIterator.hasNext()) {
+        def pa_node_url_to_remove_token = deploymentsIterator.next().getNode().getUrl()
+        println "[Loop_over_service_instance_status] Removing token " + token_name + " from node " + pa_node_url_to_remove_token
+        rmapi.removeNodeToken(pa_node_url_to_remove_token, token_name)
+        i++
+    }
 
 } else {
 
