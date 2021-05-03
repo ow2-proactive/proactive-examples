@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Docker_Swarm_Spark_Service" projectName="Service Automation - Management" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="node_source_name" value="" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/nodesources)"/>
+    <variable name="nb_spark_workers" value="3" model="PA:NOT_EMPTY_STRING"/>
+    <variable name="INSTANCE_NAME" value="docker-swarm-spark-$PA_JOB_ID" model="PA:NOT_EMPTY_STRING"/>
+  </variables>
+  <description>
+    <![CDATA[ Deploy a Spark platform on a Docker Swarm. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="service-automation"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+    <info name="pca.service.id" value="Docker_Swarm_Spark"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_Docker_Swarm_Service" 
+    
+    onTaskError="cancelJob" 
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ Start the Docker_Swarm service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Docker_Swarm" inherited="false" />
+        <variable name="INSTANCE_NAME" value="swarm-$PA_JOB_ID" inherited="false" />
+        <variable name="swarm_manager_listen_ip_port" value="0.0.0.0:2377" inherited="false" />
+        <variable name="TARGETED_PA_NODE_SOURCE_NAME" value="$node_source_name" inherited="false" />
+        <variable name="TARGETED_NB_PA_NODES" value="$nb_spark_workers" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Service_Start/raw" language="groovy">
+            <arguments>
+              <argument value="false"/>
+              <argument value="false"/>
+              <argument value="INSTANCE_NAME"/>
+              <argument value="swarm_manager_listen_ip_port"/>
+              <argument value="TARGETED_PA_NODE_SOURCE_NAME"/>
+              <argument value="TARGETED_NB_PA_NODES"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Propagate the swarm service instance id for spark
+def instance_name = variables.get("INSTANCE_NAME")
+def instance_id = variables.get("INSTANCE_ID_" + instance_name)
+variables.put("propagated_swarm_service_instance_id", instance_id)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            208.50000762939453
+        </positionTop>
+        <positionLeft>
+            598.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start_Spark_Service" 
+    
+    onTaskError="cancelJob" 
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ Start the Spark service. ]]>
+      </description>
+      <variables>
+        <variable name="SERVICE_ID" value="Spark" inherited="false" />
+        <variable name="INSTANCE_NAME" value="spark-$PA_JOB_ID" inherited="false" />
+        <variable name="spark_gui_start_port" value="" inherited="true" />
+        <variable name="swarm_service_instance_id" value="$propagated_swarm_service_instance_id" inherited="false" />
+        <variable name="nb_spark_workers" value="" inherited="true" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Docker_Swarm_Service"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Service_Start/raw" language="groovy">
+            <arguments>
+              <argument value="true"/>
+              <argument value="false"/>
+              <argument value="INSTANCE_NAME"/>
+              <argument value="spark_gui_start_port"/>
+              <argument value="swarm_service_instance_id"/>
+              <argument value="nb_spark_workers"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            335.50000762939453
+        </positionTop>
+        <positionLeft>
+            598.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="wait_for_stop" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job. ]]>
+      </description>
+      <variables>
+        <variable name="SIGNALS" value="Terminate_job_and_service" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="TASK.DOCUMENTATION" value="user/ProActiveUserGuide.html#_task_signal_api"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Spark_Service"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import com.google.common.base.Splitter;
+
+if (variables.get("PA_TASK_ITERATION")==0){
+
+    // Read the variable SIGNALS
+	signals = variables.get("SIGNALS")
+
+	// Split the value of the variable SIGNALS and transform it into a list
+	Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+
+    // Send a ready notification for each signal in the set
+    println("Ready for signals "+ signalsSet)
+    signalsSet.each {
+        signal -> signalapi.readyForSignal(signal)
+    }
+
+    // Add the signals set as a variable to be used by next tasks
+    variables.put("SIGNALS_SET", signalsSet)
+}
+
+//Read the variable SIGNALS_SET
+Set signalsSet =  variables.get("SIGNALS_SET")
+
+// Check whether one signal among those specified as input is received
+println("Checking whether one signal in the set "+ signalsSet +" is received")
+receivedSignal = signalapi.checkForSignals(signalsSet)
+
+// If a signal is received, remove ready signals and break the loop, else sleep 10 seconds then restart
+if (receivedSignal != null){
+
+    // remove ready signals
+	signalapi.removeManySignals(new HashSet<>(signalsSet.collect { signal -> "ready_"+signal }))
+
+    // print the received signal
+    println("Received signal: "+ receivedSignal)
+    result = receivedSignal
+
+} else {
+    result = null
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="wait_for_stop">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+if (result!=null){
+    loop = false
+} else {
+    loop = "* * * * *"
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            462.47501373291016
+        </positionTop>
+        <positionLeft>
+            598.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Stop_Spark_Service"
+    
+    onTaskError="cancelJob" 
+    
+    
+    fork="true">
+      <variables>
+        <variable name="INSTANCE_NAME" value="spark-$PA_JOB_ID" inherited="false" />
+        <variable name="ACTION" value="Finish_Spark" inherited="false"/>
+        <variable name="ACTION" value="Finish_Spark" inherited="false"/>
+        <variable name="INSTANCE_ID" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="wait_for_stop"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Service_Action/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            590.5000381469727
+        </positionTop>
+        <positionLeft>
+            598.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Stop_Docker_Swarm_Service" 
+    
+    onTaskError="cancelJob" 
+    
+    
+    fork="true">
+      <variables>
+        <variable name="INSTANCE_NAME" value="swarm-$PA_JOB_ID" inherited="false" />
+        <variable name="ACTION" value="Finish_Docker_Swarm" inherited="false"/>
+        <variable name="INSTANCE_ID" value="" inherited="false" />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Stop_Spark_Service"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Service_Action/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            718.5000381469727
+        </positionTop>
+        <positionLeft>
+            598.25
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2254px;
+            height:2574px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-203.50000762939453px;left:-593.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_39" style="top: 208.5px; left: 598.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Start the Docker_Swarm service."><img src="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png" width="20px">&nbsp;<span class="name">Start_Docker_Swarm_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_42" style="top: 335.5px; left: 598.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Start the Spark service."><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">Start_Spark_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_45" style="top: 462.475px; left: 598.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">wait_for_stop</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_48" style="top: 590.5px; left: 598.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">Stop_Spark_Service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_51" style="top: 718.5px; left: 598.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/swarm.png" width="20px">&nbsp;<span class="name">Stop_Docker_Swarm_Service</span></a></div><svg style="position:absolute;left:650.5px;top:248.5px" width="42.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 86 C -10 36 31.5 50 21.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.9948960000000009,64.474304 L11.816458178835555,47.59623526852386 L3.3105125398425246,51.15276289902182 L-1.5050829221426287,43.29082672868133 L-0.9948960000000009,64.474304" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.9948960000000009,64.474304 L11.816458178835555,47.59623526852386 L3.3105125398425246,51.15276289902182 L-1.5050829221426287,43.29082672868133 L-0.9948960000000009,64.474304" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:637.5px;top:374.5px" width="34" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 87 C -10 37 23 50 13 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.7219520000000006,65.388768 L9.160644305345858,47.20720872542532 L1.0961641616670847,51.67533585121424 L-4.5527878434399005,44.389092563758226 L-1.7219520000000006,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.7219520000000006,65.388768 L9.160644305345858,47.20720872542532 L1.0961641616670847,51.67533585121424 L-4.5527878434399005,44.389092563758226 L-1.7219520000000006,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:678.0266769263776px;top:411.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_65" style="position: absolute; transform: translate(-50%, -50%); left: 690px; top: 481.5px;">loop</div><svg style="position:absolute;left:637.5px;top:501.5px" width="34" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 13 88 C 23 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M14.721952,66.303232 L17.607310728060902,45.310978547585634 L11.939456689355112,52.582527942035654 L3.88660667009656,48.093473858230524 L14.721952,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M14.721952,66.303232 L17.607310728060902,45.310978547585634 L11.939456689355112,52.582527942035654 L3.88660667009656,48.093473858230524 L14.721952,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:650.5px;top:629.5px" width="42" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 21 88 C 31 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.037664,66.303232 L22.838488794001677,45.128750196439555 L17.91546294336647,52.92386510732942 L9.459121901331102,49.25095125307308 L22.037664,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.037664,66.303232 L22.838488794001677,45.128750196439555 L17.91546294336647,52.92386510732942 L9.459121901331102,49.25095125307308 L22.037664,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 672.5px; top: 239px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 651px; top: 365px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 651px; top: 325px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 638px; top: 492px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 638px; top: 452px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 688px; top: 452px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 688px; top: 492px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 651px; top: 620px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 651px; top: 580px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 672px; top: 748px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 672px; top: 708px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

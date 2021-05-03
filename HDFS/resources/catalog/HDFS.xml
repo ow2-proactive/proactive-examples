@@ -3,10 +3,10 @@
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="HDFS" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
   <variables>
-    <variable name="INSTANCE_NAME" value="hdfs-$PA_JOB_ID" />
-    <variable name="hdfs_gui_port" value="5000" />
-    <variable name="swarm_service_instance_id" value="" />
-    <variable name="nb_hdfs_datanodes" value="3" />
+    <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="hdfs-$PA_JOB_ID" />
+    <variable model="PA:NOT_EMPTY_STRING" name="hdfs_gui_port" value="5000" />
+    <variable model="PA:NOT_EMPTY_STRING" name="swarm_service_instance_id" value="xx" />
+    <variable model="PA:NOT_EMPTY_STRING" name="nb_hdfs_datanodes" value="3" />
   </variables>
   <description>
     <![CDATA[ Deployment of HDFS of nb_hdfs_datanodes datanodes. hdfs_gui_port is the HDFS web portal port. swarm_service_instance_id is the service instance id of the targeted Docker Swarm. ]]>
@@ -33,6 +33,8 @@
               <argument value="$swarm_service_instance_id"/>
               <argument value="swarm_token_name"/>
               <argument value="INSTANCE_NAME"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
             </arguments>
           </file>
         </script>
@@ -52,12 +54,9 @@
           <code language="groovy">
             <![CDATA[
 // The overlay network must be created on the swarm manager host
-def cmd = ["docker", "node", "ls"]
-println cmd
-def docker_node_ls_output = new StringBuilder()
-cmd.execute().waitForProcessOutput(docker_node_ls_output, System.err)
+def swarm_manager_pa_node_name = variables.get("swarm_manager_and_workers_pa_node_names").split(",")[0]
 
-selected = docker_node_ls_output.toString().contains("HOSTNAME")
+selected = (nodename == swarm_manager_pa_node_name)
 ]]>
           </code>
         </script>
@@ -67,11 +66,12 @@ selected = docker_node_ls_output.toString().contains("HOSTNAME")
           <code language="groovy">
             <![CDATA[
 // Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
 def instance_name = variables.get("INSTANCE_NAME")
 def hdfs_gui_port = variables.get("hdfs_gui_port")
 def job_id = variables.get("PA_JOB_ID")
-def hdfs_namenode_node_name = variables.get("PA_NODE_NAME")
-def hdfs_namenode_host = variables.get("PA_NODE_HOST")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def nb_hdfs_datanodes = variables.get("nb_hdfs_datanodes") as Integer
 
 // Create the overlay network
 def hdfs_network_name = instance_name + "-hdfs-network"
@@ -83,7 +83,8 @@ cmd.execute().waitForProcessOutput(System.out, System.err)
 def hdfs_namenode_container_name = instance_name + "-hdfs-namenode"
 cmd = ["docker", "run", "--rm", "-dit", "--publish", hdfs_gui_port + ":9870", "--name", hdfs_namenode_container_name, "--net", hdfs_network_name, "activeeon/hdfs-spark:latest"]
 println cmd
-cmd.execute().waitForProcessOutput(System.out, System.err)
+def hdfs_namenode_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hdfs_namenode_container_id, System.err)
 
 // Namenode configuration + Start
 def config_namenode_core_site_command = "sed s/IP:PORT/" + hdfs_namenode_container_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
@@ -105,12 +106,14 @@ while (!docker_exec_jps_output.toString().contains("NameNode")){
 
 // Propagate variables
 variables.put("hdfs_network_name", hdfs_network_name)
-variables.put("hdfs_namenode_node_name", hdfs_namenode_node_name)
 variables.put("hdfs_namenode_container_name", hdfs_namenode_container_name)
+variables.put("nb_hdfs_deployments", (nb_hdfs_datanodes + 1))
+variables.put("hdfs_namenode_and_datanodes_pa_node_names", pa_node_name)
+resultMap.put("hdfs_service_instance_id", service_instance_id)
 
-// Propagate variables to the current post script
-def hdfs_namenode_endpoint_url = "http://" + hdfs_namenode_host + ":" + hdfs_gui_port
-new File(localspace, "arguments.txt").text = "hdfs_namenode_gui," + hdfs_namenode_endpoint_url + ", , , , , , "
+// Propagate the container id to the post script
+new File(localspace, "hdfs_namenode_container_id").text = hdfs_namenode_container_id.toString()
+new File(localspace, "hdfs_namenode_container_name").text = hdfs_namenode_container_name
 ]]>
           </code>
         </script>
@@ -128,7 +131,33 @@ runs = variables.get("nb_hdfs_datanodes")
       </controlFlow>
       <post>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_instance_and_add_token/raw" language="groovy"></file>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hdfs_namenode_container_id = new File(localspace, "hdfs_namenode_container_id").text
+def hdfs_namenode_container_name = new File(localspace, "hdfs_namenode_container_name").text
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def hdfs_gui_port = variables.get("hdfs_gui_port")
+
+// Build the endpoint url
+def hdfs_namenode_endpoint_url = "http://" + pa_node_host + ":" + hdfs_gui_port
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":"hdfs_namenode_gui","url":hdfs_namenode_endpoint_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hdfs_namenode_container_id,"name":hdfs_namenode_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("hdfs_deployment_json_0", deployment_json)
+]]>
+          </code>
         </script>
       </post>
       <metadata>
@@ -152,10 +181,12 @@ runs = variables.get("nb_hdfs_datanodes")
         <script type="static">
           <code language="groovy">
             <![CDATA[
-// The 1st replicated task must run on the hdfs namenode node
 def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def swarm_manager_and_workers_pa_node_names = variables.get("swarm_manager_and_workers_pa_node_names")
 
-selected = (task_replication_id == 0 && nodename.equals(variables.get("hdfs_namenode_node_name")) ||  task_replication_id > 0)
+def targeted_pa_node_name = swarm_manager_and_workers_pa_node_names.split(",")[task_replication_id]
+
+selected = (nodename == targeted_pa_node_name)
 ]]>
           </code>
         </script>
@@ -165,16 +196,19 @@ selected = (task_replication_id == 0 && nodename.equals(variables.get("hdfs_name
           <code language="groovy">
             <![CDATA[
 // Retrieve variables
+def pa_job_id = variables.get("PA_JOB_ID")
 def instance_name = variables.get("INSTANCE_NAME")
 def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
 def hdfs_network_name = variables.get("hdfs_network_name")
 def hdfs_namenode_container_name = variables.get("hdfs_namenode_container_name")
+def pa_node_name = variables.get("PA_NODE_NAME")
 
 // Start the hdfs datanode container
 def hdfs_datanode_container_name = instance_name + "-hdfs-datanode-" + task_replication_id
 def cmd = ["docker", "run", "--rm", "-dit", "--name", hdfs_datanode_container_name, "--net", hdfs_network_name, "activeeon/hdfs-spark:latest"]
 println cmd
-cmd.execute().waitForProcessOutput(System.out, System.err)
+def hdfs_datanode_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hdfs_datanode_container_id, System.err)
 
 // HDFS datanode configuration + Start
 def config_datanode_core_site_command = "sed s/IP:PORT/" + hdfs_namenode_container_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
@@ -184,24 +218,49 @@ def command_in_container = config_datanode_core_site_command + /* ";" + config_d
 cmd = ["docker", "exec", hdfs_datanode_container_name, "/bin/sh", "-c", command_in_container]
 println cmd
 cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Propagate variables
+variables.put("hdfs_datanode_" + task_replication_id + "_pa_node_name", pa_node_name)
+
+// Propagate the container id to the post script
+new File(localspace, "hdfs_datanode_container_id").text = hdfs_datanode_container_id.toString()
+new File(localspace, "hdfs_datanode_container_name").text = hdfs_datanode_container_name
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <post>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_instance_and_add_token/raw" language="groovy">
-            <arguments>
-              <argument value="${INSTANCE_NAME}_${PA_TASK_ID}"/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value="${INSTANCE_NAME}"/>
-            </arguments>
-          </file>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hdfs_datanode_container_id = new File(localspace, "hdfs_datanode_container_id").text
+def hdfs_datanode_container_name = new File(localspace, "hdfs_datanode_container_name").text
+
+// Retrieve variables
+def task_replication_id = variables.get("PA_TASK_REPLICATION")
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+
+// Create the deployment map and json
+def endpoint_id = instance_name + "_" + task_replication_id
+def deployment_map = ["endpoint":["id":endpoint_id],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hdfs_datanode_container_id,"name":hdfs_datanode_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("hdfs_deployment_json_" + ((task_replication_id as Integer) + 1), deployment_json)
+
+// Add token to the current node (RM API)
+rmapi.connect()
+println "Adding token " + instance_name + " to node " + pa_node_url
+rmapi.addNodeToken(pa_node_url, instance_name)
+]]>
+          </code>
         </script>
       </post>
       <metadata>
@@ -213,7 +272,8 @@ cmd.execute().waitForProcessOutput(System.out, System.err)
         </positionLeft>
       </metadata>
     </task>
-    <task name="end_of_hdfs_deployment"
+
+    <task name="merge_json_deployments_and_propagate"
 
 
 
@@ -228,35 +288,148 @@ cmd.execute().waitForProcessOutput(System.out, System.err)
       </depends>
       <scriptExecutable>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_instance_and_add_token/raw" language="groovy">
-            <arguments>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value="RUNNING"/>
-              <argument value="true"/>
-              <argument value=""/>
-            </arguments>
-          </file>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def nb_hdfs_datanodes = variables.get("nb_hdfs_datanodes") as Integer
+def hdfs_namenode_and_datanodes_pa_node_names = variables.get("hdfs_namenode_and_datanodes_pa_node_names")
+
+for (i = 0; i < nb_hdfs_datanodes; i++) {
+    hdfs_namenode_and_datanodes_pa_node_names += "," + variables.get("hdfs_datanode_" + i + "_pa_node_name")
+}
+
+variables.put("hdfs_namenode_and_datanodes_pa_node_names", hdfs_namenode_and_datanodes_pa_node_names)
+]]>
+          </code>
         </script>
       </scriptExecutable>
-      <post>
+      <metadata>
+        <positionTop>
+          542.5
+        </positionTop>
+        <positionLeft>
+          668
+        </positionLeft>
+      </metadata>
+    </task>
+
+    <task name="propagate_variables_and_update_deployments_with_service"
+
+
+
+
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="merge_json_deployments_and_propagate"/>
+      </depends>
+      <pre>
         <script>
           <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Propagate_variables_to_current_service/raw" language="groovy">
             <arguments>
               <argument value="hdfs_network_name"/>
-              <argument value="$hdfs_network_name"/>
+              <argument value="VARIABLE_VALUE"/>
               <argument value="hdfs_namenode_host_port"/>
               <argument value="$hdfs_namenode_container_name:9000"/>
-              <argument value="hdfs_namenode_node_name"/>
-              <argument value="$hdfs_namenode_node_name"/>
+              <argument value="hdfs_namenode_and_datanodes_pa_node_names"/>
+              <argument value="VARIABLE_VALUE"/>
             </arguments>
           </file>
         </script>
-      </post>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
+            <arguments>
+              <argument value="hdfs_deployment_json_"/>
+              <argument value="$nb_hdfs_deployments"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <cleaning>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
+        </script>
+      </cleaning>
     </task>
+
+    <task name="loop_over_hdfs_namenode_status"
+
+
+
+
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="propagate_variables_and_update_deployments_with_service"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+def hdfs_namenode_and_datanodes_pa_node_names = variables.get("hdfs_namenode_and_datanodes_pa_node_names")
+
+def hdfs_namenode_pa_node_name = hdfs_namenode_and_datanodes_pa_node_names.split(",")[0]
+
+selected = (nodename == hdfs_namenode_pa_node_name)
+]]>
+          </code>
+        </script>
+      </selection>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def hdfs_namenode_container_name = variables.get("hdfs_namenode_container_name")
+def instance_name = variables.get("INSTANCE_NAME")
+
+// Ensure namenode is running
+def cmd = ["docker", "exec", hdfs_namenode_container_name, "jps"]
+println cmd
+def docker_exec_jps_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+
+def is_hdfs_namenode_ok = docker_exec_jps_output.toString().contains("NameNode")
+println "DEBUG is_hdfs_namenode_ok " + is_hdfs_namenode_ok
+def is_docker_based_service = true
+def token_to_remove = instance_name
+
+// Propagate to the current task script
+new File(localspace, "arguments.txt").text = String.valueOf(is_hdfs_namenode_ok) + "," + String.valueOf(is_docker_based_service) + "," + token_to_remove
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Loop_over_service_instance_status/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="loop_over_hdfs_namenode_status">
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw" language="groovy"></file>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          798.5
+        </positionTop>
+        <positionLeft>
+          668
+        </positionLeft>
+      </metadata>
+    </task>
+
   </taskFlow>
   <metadata>
     <visualization>

@@ -3,14 +3,13 @@
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Spark" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
 <variables>
-  <variable name="INSTANCE_NAME" value="spark-$PA_JOB_ID" />
-  <variable name="spark_gui_start_port" value="5500" />
-  <variable name="swarm_service_instance_id" value="" />
+  <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="spark-$PA_JOB_ID" />
+  <variable model="PA:NOT_EMPTY_STRING" name="swarm_service_instance_id" value="xx" />
   <variable name="hdfs_service_instance_id" value="" />
-  <variable name="nb_spark_worker" value="3" />
+  <variable model="PA:NOT_EMPTY_STRING" name="nb_spark_workers" value="3" />
   </variables>
   <description>
-    <![CDATA[ Deployment of a Spark platform with nb_spark_worker spark workers. spark_gui_start_port is the Spark master web portal port. Other worker web portals ports will increment it. swarm_service_instance_id is the service instance id of the targeted Docker Swarm. hdfs_service_instance_id is the service instance id of the targeted HDFS (optional). ]]>
+    <![CDATA[ Deployment of a Spark platform with nb_spark_workers spark workers. swarm_service_instance_id is the service instance id of the targeted Docker Swarm. hdfs_service_instance_id is the service instance id of the targeted HDFS (optional). ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="service-automation"/>
@@ -34,6 +33,8 @@
               <argument value="$swarm_service_instance_id"/>
               <argument value="swarm_token_name"/>
               <argument value="INSTANCE_NAME"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
             </arguments>
           </file>
         </script>
@@ -43,8 +44,6 @@
           <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
             <arguments>
               <argument value="$hdfs_service_instance_id"/>
-              <argument value="hdfs_token_name"/>
-              <argument value="INSTANCE_NAME"/>
               <argument value="hdfs_network_name"/>
               <argument value="hdfs_network_name"/>
               <argument value="hdfs_namenode_host_port"/>
@@ -54,73 +53,22 @@
         </script>
       </post>
     </task>
-
-    <task name="propagate_variables"
-          fork="true">
+    <task name="create_overlay_network_or_not_and_start_spark_master" fork="true">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$swarm_token_name"/>
       </genericInformation>
       <depends>
         <task ref="retrieve_services_variables"/>
-      </depends>
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-// EITHER target the HDFS platform (optional wkw param) by relying on its token and its docker network
-// OR spark relies on the swarm token and creates its own docker network
-def swarm_service_instance_id = variables.get("swarm_service_instance_id")
-def hdfs_service_instance_id = variables.get("hdfs_service_instance_id")
-def instance_name = variables.get("INSTANCE_NAME")
-
-def targeted_token_name = null
-def targeted_network_name = null
-
-if (!swarm_service_instance_id.isEmpty()) {
-    targeted_token_name = variables.get("swarm_token_name")
-    targeted_network_name = instance_name + "-spark-network"
-} else if (!hdfs_service_instance_id.isEmpty()) {
-    targeted_token_name = variables.get("hdfs_token_name")
-    targeted_network_name = variables.get("hdfs_network_name")
-} else {
-    println ("Either specify swarm_service_instance_id or hdfs_service_instance_id")
-    System.exit(1)
-}
-
-println "targeted_token_name " + targeted_token_name
-println "targeted_network_name " + targeted_network_name
-
-// Propagate variables
-variables.put("targeted_token_name", targeted_token_name)
-variables.put("targeted_network_name", targeted_network_name)
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-    </task>
-
-
-
-
-    <task name="create_overlay_network_or_not_and_start_spark_master" >
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
-        <info name="NODE_ACCESS_TOKEN" value="$targeted_token_name"/>
-      </genericInformation>
-      <depends>
-        <task ref="propagate_variables"/>
       </depends>
       <selection>
         <script type="static">
           <code language="groovy">
             <![CDATA[
 // The overlay network must be created on the swarm manager host
-def cmd = ["docker", "node", "ls"]
-println cmd
-def docker_node_ls_output = new StringBuilder()
-cmd.execute().waitForProcessOutput(docker_node_ls_output, System.err)
+def swarm_manager_pa_node_name = variables.get("swarm_manager_and_workers_pa_node_names").split(",")[0]
 
-selected = docker_node_ls_output.toString().contains("HOSTNAME")
+selected = (nodename == swarm_manager_pa_node_name)
 ]]>
           </code>
         </script>
@@ -130,32 +78,47 @@ selected = docker_node_ls_output.toString().contains("HOSTNAME")
           <code language="groovy">
             <![CDATA[
 // Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
 def instance_name = variables.get("INSTANCE_NAME")
-def spark_gui_start_port = variables.get("spark_gui_start_port")
 def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def hdfs_network_name = variables.get("hdfs_network_name")
 def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
-def spark_master_node_name = variables.get("PA_NODE_NAME")
-def spark_master_host = variables.get("PA_NODE_HOST")
-def targeted_network_name = variables.get("targeted_network_name")
+def nb_spark_workers = variables.get("nb_spark_workers") as Integer
 
-// Create the overlay network if no hdfs. Otherwise use the hdfs docker network
-if (targeted_network_name.contains("spark")) {
+// If hdfs wkw param is not set, create a spark overlay network rather than using the hdfs one
+def targeted_network_name = hdfs_network_name
+
+if (hdfs_network_name == null) {
+  targeted_network_name = instance_name + "-spark-network"
   def cmd = ["docker", "network", "create", "-d", "overlay", "--attachable", targeted_network_name]
   println cmd
   cmd.execute().waitForProcessOutput(System.out, System.err)
 }
 
+// Find a free port for spark_master_gui_port
+def spark_master_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  spark_master_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
 // Start the spark master docker container
 def spark_master_container_name = instance_name + "-spark-master"
-cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_gui_start_port + ":" + spark_gui_start_port, "--name", spark_master_container_name, "--net", targeted_network_name, "activeeon/hdfs-spark:latest"]
+cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_master_gui_port + ":" + spark_master_gui_port, "--name", spark_master_container_name, "--net", targeted_network_name, "activeeon/hdfs-spark:latest"]
 println cmd
-cmd.execute().waitForProcessOutput(System.out, System.err)
+def spark_master_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(spark_master_container_id, System.err)
 
 // Spark master configuration + Start
 def hdfs_config_command = "sed s/IP:PORT/" + hdfs_namenode_host_port + "/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
 def spark_create_spark_env_file_config_command = "touch \$SPARK_HOME/conf/spark-env.sh"
-def spark_public_dns_config_command = "echo \"export SPARK_PUBLIC_DNS=" + spark_master_host + "\" >> \$SPARK_HOME/conf/spark-env.sh"
-def spark_master_webui_port_config_command = "echo \"export SPARK_MASTER_WEBUI_PORT=" + spark_gui_start_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+def spark_public_dns_config_command = "echo \"export SPARK_PUBLIC_DNS=" + pa_node_host + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+def spark_master_webui_port_config_command = "echo \"export SPARK_MASTER_WEBUI_PORT=" + spark_master_gui_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
 def start_master_command = "\$SPARK_HOME/sbin/start-master.sh"
 def command_in_container = hdfs_config_command + ";" + spark_create_spark_env_file_config_command + ";" + spark_public_dns_config_command + ";" + spark_master_webui_port_config_command + ";" + start_master_command
 cmd = ["docker", "exec", spark_master_container_name, "/bin/sh", "-c", command_in_container]
@@ -172,12 +135,17 @@ while (!docker_exec_jps_output.toString().contains("Master")){
 }
 
 // Propagate variables
-variables.put("spark_master_node_name", spark_master_node_name)
+variables.put("spark_master_gui_port", spark_master_gui_port)
+variables.put("targeted_network_name", targeted_network_name)
+variables.put("spark_master_container_name", spark_master_container_name)
 variables.put("spark_master_url", "spark://" + spark_master_container_name + ":7077")
+variables.put("nb_spark_deployments", (nb_spark_workers + 1))
+variables.put("spark_master_and_workers_pa_node_names", pa_node_name)
+resultMap.put("spark_service_instance_id", service_instance_id)
 
 // Propagate variables to the current post script
-def spark_master_endpoint_url = "http://" + spark_master_host + ":" + spark_gui_start_port
-new File(localspace, "arguments.txt").text = "spark_master_gui," + spark_master_endpoint_url + ", , , , , , "
+new File(localspace, "spark_master_container_id").text = spark_master_container_id.toString()
+new File(localspace, "spark_master_container_name").text = spark_master_container_name
 ]]>
           </code>
         </script>
@@ -187,7 +155,7 @@ new File(localspace, "arguments.txt").text = "spark_master_gui," + spark_master_
           <script>
             <code language="groovy">
               <![CDATA[
-runs = variables.get("nb_spark_worker")
+runs = variables.get("nb_spark_workers")
 ]]>
             </code>
           </script>
@@ -195,22 +163,47 @@ runs = variables.get("nb_spark_worker")
       </controlFlow>
       <post>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_instance_and_add_token/raw" language="groovy"></file>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def spark_master_container_id = new File(localspace, "spark_master_container_id").text
+def spark_master_container_name = new File(localspace, "spark_master_container_name").text
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def spark_master_gui_port = variables.get("spark_master_gui_port")
+
+def spark_master_endpoint_url = "http://" + pa_node_host + ":" + spark_master_gui_port
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":"spark_master_gui","url":spark_master_endpoint_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":spark_master_container_id,"name":spark_master_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("spark_deployment_json_0", deployment_json)
+]]>
+          </code>
         </script>
       </post>
       <metadata>
         <positionTop>
-          334.6333312988281
+            418.5
         </positionTop>
         <positionLeft>
-          596
+            643
         </positionLeft>
       </metadata>
     </task>
-    <task name="start_spark_slave" >
+    <task name="start_spark_worker" >
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
-        <info name="NODE_ACCESS_TOKEN" value="$targeted_token_name"/>
+        <info name="NODE_ACCESS_TOKEN" value="$swarm_token_name"/>
       </genericInformation>
       <depends>
         <task ref="create_overlay_network_or_not_and_start_spark_master"/>
@@ -219,10 +212,12 @@ runs = variables.get("nb_spark_worker")
         <script type="static">
           <code language="groovy">
             <![CDATA[
-// The 1st replicated task must run on the spark master node
 def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def swarm_manager_and_workers_pa_node_names = variables.get("swarm_manager_and_workers_pa_node_names")
 
-selected = (task_replication_id == 0 && nodename.equals(variables.get("spark_master_node_name")) ||  task_replication_id > 0)
+def targeted_pa_node_name = swarm_manager_and_workers_pa_node_names.split(",")[task_replication_id]
+
+selected = (nodename == targeted_pa_node_name)
 ]]>
           </code>
         </script>
@@ -231,56 +226,104 @@ selected = (task_replication_id == 0 && nodename.equals(variables.get("spark_mas
         <script>
           <code language="groovy">
             <![CDATA[
+
+
 // Retrieve variables
 def instance_name = variables.get("INSTANCE_NAME")
 def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
 def targeted_network_name = variables.get("targeted_network_name")
-def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
 def spark_master_url = variables.get("spark_master_url")
-def spark_gui_start_port = variables.get("spark_gui_start_port") as Integer
-def spark_slave_host = variables.get("PA_NODE_HOST")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
 
-// Start the spark slave container
-def spark_slave_gui_port = spark_gui_start_port + 1 + task_replication_id
-def spark_slave_container_name = instance_name + "-spark-slave-" + task_replication_id
-def cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_slave_gui_port + ":" + spark_slave_gui_port, "--name", spark_slave_container_name, "--net", targeted_network_name, "activeeon/hdfs-spark:latest"]
+// Find a free port for spark_master_gui_port
+def spark_worker_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  spark_worker_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+// Start the spark worker container
+def spark_worker_container_name = instance_name + "-spark-worker-" + task_replication_id
+def cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_worker_gui_port + ":" + spark_worker_gui_port, "--name", spark_worker_container_name, "--net", targeted_network_name, "activeeon/hdfs-spark:latest"]
 println cmd
-cmd.execute().waitForProcessOutput(System.out, System.err)
+def spark_worker_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(spark_worker_container_id, System.err)
 
-// Spark slave configuration + Start
+// Spark worker configuration + Start
 def hdfs_config_command = "sed s/IP:PORT/" + hdfs_namenode_host_port + "/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
 def spark_create_spark_env_file_config_command = "touch \$SPARK_HOME/conf/spark-env.sh"
-def spark_public_dns_config_command = "echo \"export SPARK_PUBLIC_DNS=" + spark_slave_host + "\" >> \$SPARK_HOME/conf/spark-env.sh"
-def worker_webui_port_config_command = "echo \"export SPARK_WORKER_WEBUI_PORT=" + spark_slave_gui_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
-def start_slave_command = "\$SPARK_HOME/sbin/start-slave.sh " + spark_master_url
-def command_in_container = hdfs_config_command + ";" + spark_create_spark_env_file_config_command + ";" + spark_public_dns_config_command + ";" + worker_webui_port_config_command + ";" + start_slave_command
-cmd = ["docker", "exec", spark_slave_container_name, "/bin/sh", "-c", command_in_container]
+def spark_public_dns_config_command = "echo \"export SPARK_PUBLIC_DNS=" + pa_node_host + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+def worker_webui_port_config_command = "echo \"export SPARK_WORKER_WEBUI_PORT=" + spark_worker_gui_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+def start_worker_command = "\$SPARK_HOME/sbin/start-slave.sh " + spark_master_url
+def command_in_container = hdfs_config_command + ";" + spark_create_spark_env_file_config_command + ";" + spark_public_dns_config_command + ";" + worker_webui_port_config_command + ";" + start_worker_command
+cmd = ["docker", "exec", spark_worker_container_name, "/bin/sh", "-c", command_in_container]
 println cmd
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
+// Propagate variables
+variables.put("spark_worker_" + task_replication_id + "_pa_node_name", pa_node_name)
+
 // Propagate variables to the current post script
-def spark_slave_endpoint_name = "spark_slave_" + task_replication_id + "_gui_url"
-def spark_slave_endpoint_url = "http://" + spark_slave_host + ":" + spark_slave_gui_port
-new File(localspace, "arguments.txt").text = spark_slave_endpoint_name + "," + spark_slave_endpoint_url + ", , , , , ," + instance_name
+new File(localspace, "spark_worker_gui_port").text = spark_worker_gui_port
+new File(localspace, "spark_worker_container_id").text = spark_worker_container_id.toString()
+new File(localspace, "spark_worker_container_name").text = spark_worker_container_name
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <post>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_instance_and_add_token/raw" language="groovy"></file>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def spark_worker_gui_port = new File(localspace, "spark_worker_gui_port").text
+def spark_worker_container_id = new File(localspace, "spark_worker_container_id").text
+def spark_worker_container_name = new File(localspace, "spark_worker_container_name").text
+
+// Retrieve variables
+def task_replication_id = variables.get("PA_TASK_REPLICATION")
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+
+def spark_worker_endpoint_name = "spark_worker_" + task_replication_id + "_gui_url"
+def spark_worker_endpoint_url = "http://" + pa_node_host + ":" + spark_worker_gui_port
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":spark_worker_endpoint_name,"url":spark_worker_endpoint_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":spark_worker_container_id,"name":spark_worker_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("spark_deployment_json_" + ((task_replication_id as Integer) + 1), deployment_json)
+
+// Add token to the current node (RM API)
+rmapi.connect()
+println "Adding token " + instance_name + " to node " + pa_node_url
+rmapi.addNodeToken(pa_node_url, instance_name)
+]]>
+          </code>
         </script>
       </post>
       <metadata>
         <positionTop>
-          462.6333312988281
+            546.5
         </positionTop>
         <positionLeft>
-          596
+            643
         </positionLeft>
       </metadata>
     </task>
-    <task name="end_of_spark_deployment"
+
+    <task name="merge_json_deployments_and_propagate"
 
 
 
@@ -288,90 +331,157 @@ new File(localspace, "arguments.txt").text = spark_slave_endpoint_name + "," + s
           fork="true">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
-        <info name="NODE_ACCESS_TOKEN" value="$targeted_token_name"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="start_spark_slave"/>
+        <task ref="start_spark_worker"/>
       </depends>
       <scriptExecutable>
         <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_instance_and_add_token/raw" language="groovy">
-            <arguments>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value=""/>
-              <argument value="RUNNING"/>
-              <argument value="true"/>
-              <argument value=""/>
-            </arguments>
-          </file>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def nb_spark_workers = variables.get("nb_spark_workers") as Integer
+def spark_master_and_workers_pa_node_names = variables.get("spark_master_and_workers_pa_node_names")
+
+for (i = 0; i < nb_spark_workers; i++) {
+    spark_master_and_workers_pa_node_names += "," + variables.get("spark_worker_" + i + "_pa_node_name")
+}
+
+variables.put("spark_master_and_workers_pa_node_names", spark_master_and_workers_pa_node_names)
+]]>
+          </code>
         </script>
       </scriptExecutable>
-      <post>
+      <metadata>
+        <positionTop>
+          542.5
+        </positionTop>
+        <positionLeft>
+          668
+        </positionLeft>
+      </metadata>
+    </task>
+
+    <task name="propagate_variables_and_update_deployments_with_service"
+
+
+
+
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="merge_json_deployments_and_propagate"/>
+      </depends>
+      <pre>
         <script>
           <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Propagate_variables_to_current_service/raw" language="groovy">
             <arguments>
               <argument value="targeted_network_name"/>
-              <argument value="$targeted_network_name"/>
+              <argument value="VARIABLE_VALUE"/>
               <argument value="spark_master_url"/>
-              <argument value="$spark_master_url"/>
-              <argument value="spark_master_node_name"/>
-              <argument value="$spark_master_node_name"/>
+              <argument value="VARIABLE_VALUE"/>
               <argument value="hdfs_namenode_host_port"/>
-              <argument value="$hdfs_namenode_host_port"/>
+              <argument value="VARIABLE_VALUE"/>
+              <argument value="spark_master_and_workers_pa_node_names"/>
+              <argument value="VARIABLE_VALUE"/>
             </arguments>
           </file>
         </script>
-      </post>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
+            <arguments>
+              <argument value="spark_deployment_json_"/>
+              <argument value="$nb_spark_deployments"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <cleaning>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
+        </script>
+      </cleaning>
     </task>
+
+    <task name="loop_over_spark_master_status"
+
+
+
+
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="propagate_variables_and_update_deployments_with_service"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+def spark_master_and_workers_pa_node_names = variables.get("spark_master_and_workers_pa_node_names")
+
+def spark_master_pa_node_name = spark_master_and_workers_pa_node_names.split(",")[0]
+
+selected = (nodename == spark_master_pa_node_name)
+]]>
+          </code>
+        </script>
+      </selection>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def spark_master_container_name = variables.get("spark_master_container_name")
+def instance_name = variables.get("INSTANCE_NAME")
+
+// Ensure spark master is running
+def cmd = ["docker", "exec", spark_master_container_name, "jps"]
+println cmd
+def docker_exec_jps_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+
+def is_spark_master_ok = docker_exec_jps_output.toString().contains("Master")
+println "DEBUG is_spark_master_ok " + is_spark_master_ok
+def is_docker_based_service = true
+def token_to_remove = instance_name
+
+// Propagate to the current task script
+new File(localspace, "arguments.txt").text = String.valueOf(is_spark_master_ok) + "," + String.valueOf(is_docker_based_service) + "," + token_to_remove
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Loop_over_service_instance_status/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="loop_over_spark_master_status">
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw" language="groovy"></file>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          798.5
+        </positionTop>
+        <positionLeft>
+          668
+        </positionLeft>
+      </metadata>
+    </task>
+
+
   </taskFlow>
-  <metadata>
-    <visualization>
-      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
-        #workflow-designer {
-            left:0 !important;
-            top:0 !important;
-            width:2735px;
-            height:2924px;
-            }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-201.63333129882812px;left:-591px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 206.633px; left: 596px;" id="jsPlumb_1_10"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">get_resources_from_service_instance</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 334.633px; left: 596px;" id="jsPlumb_1_13"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">start_spark_master</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 462.633px; left: 596px;" id="jsPlumb_1_16"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">start_spark_slave</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 590.633px; left: 596px;" id="jsPlumb_1_19"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">update_service_instance</span></a></div><svg style="position:absolute;left:651.5px;top:246.5px" width="67" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 56 50 46 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M1.6926389999999976,64.9032055 L18.66180608105043,52.21276151346453 L9.504895730542636,53.285604853735244 L7.044205434785677,44.400504782921885 L1.6926389999999976,64.9032055" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M1.6926389999999976,64.9032055 L18.66180608105043,52.21276151346453 L9.504895730542636,53.285604853735244 L7.044205434785677,44.400504782921885 L1.6926389999999976,64.9032055" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:683.9px;top:364.5px" width="28.200000000000045" height="99" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 88 17.200000000000045 -10 7.2000000000000455 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.1009752999999947,77.41936575 L7.046180412470953,58.30577000320734 L-0.568522702436107,63.50349031809778 L-6.869695019431264,56.77331740564345 L-2.1009752999999947,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.1009752999999947,77.41936575 L7.046180412470953,58.30577000320734 L-0.568522702436107,63.50349031809778 L-6.869695019431264,56.77331740564345 L-2.1009752999999947,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div style="position: absolute; transform: translate(-50%, -50%); left: 697.5px; top: 414.75px;" class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_30">replicate</div><svg style="position:absolute;left:647px;top:374.5px" width="25.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 14.5 50 4.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4501093750000003,66.78168750000002 L6.253690937044999,47.46216731630898 L-1.2390824053543916,52.834163932040326 L-7.69383263091469,46.25114034666338 L-2.4501093750000003,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4501093750000003,66.78168750000002 L6.253690937044999,47.46216731630898 L-1.2390824053543916,52.834163932040326 L-7.69383263091469,46.25114034666338 L-2.4501093750000003,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:647px;top:502.5px" width="38.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 17.5 88 C 27.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M18.83704,66.303232 L20.538982678279996,45.182072204196906 L15.288421492048318,52.76043662072092 L6.996187299000918,48.73069071214858 L18.83704,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M18.83704,66.303232 L20.538982678279996,45.182072204196906 L15.288421492048318,52.76043662072092 L6.996187299000918,48.73069071214858 L18.83704,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div style="position: absolute; height: 20px; width: 20px; left: 698px; top: 237px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 652px; top: 365px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 652px; top: 325px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 691.6px; top: 365px;" class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 647.5px; top: 493px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 684.4px; top: 453px;" class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 647.5px; top: 453px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 665px; top: 621px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 665px; top: 581px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
- ]]>
-    </visualization>
-  </metadata>
 </job>
