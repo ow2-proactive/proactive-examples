@@ -4,13 +4,12 @@
         xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Spark" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
 <variables>
   <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="spark-$PA_JOB_ID" />
-  <variable model="PA:NOT_EMPTY_STRING" name="spark_gui_start_port" value="5500" />
   <variable model="PA:NOT_EMPTY_STRING" name="swarm_service_instance_id" value="xx" />
   <variable name="hdfs_service_instance_id" value="" />
   <variable model="PA:NOT_EMPTY_STRING" name="nb_spark_workers" value="3" />
   </variables>
   <description>
-    <![CDATA[ Deployment of a Spark platform with nb_spark_workers spark workers. spark_gui_start_port is the Spark master web portal port. Other worker web portals ports will increment it. swarm_service_instance_id is the service instance id of the targeted Docker Swarm. hdfs_service_instance_id is the service instance id of the targeted HDFS (optional). ]]>
+    <![CDATA[ Deployment of a Spark platform with nb_spark_workers spark workers. swarm_service_instance_id is the service instance id of the targeted Docker Swarm. hdfs_service_instance_id is the service instance id of the targeted HDFS (optional). ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="service-automation"/>
@@ -79,9 +78,9 @@ selected = (nodename == swarm_manager_pa_node_name)
           <code language="groovy">
             <![CDATA[
 // Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
 def instance_name = variables.get("INSTANCE_NAME")
 def job_id = variables.get("PA_JOB_ID")
-def spark_gui_start_port = variables.get("spark_gui_start_port")
 def pa_node_name = variables.get("PA_NODE_NAME")
 def pa_node_host = variables.get("PA_NODE_HOST")
 def hdfs_network_name = variables.get("hdfs_network_name")
@@ -98,9 +97,19 @@ if (hdfs_network_name == null) {
   cmd.execute().waitForProcessOutput(System.out, System.err)
 }
 
+// Find a free port for spark_master_gui_port
+def spark_master_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  spark_master_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
 // Start the spark master docker container
 def spark_master_container_name = instance_name + "-spark-master"
-cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_gui_start_port + ":" + spark_gui_start_port, "--name", spark_master_container_name, "--net", targeted_network_name, "activeeon/hdfs-spark:latest"]
+cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_master_gui_port + ":" + spark_master_gui_port, "--name", spark_master_container_name, "--net", targeted_network_name, "activeeon/hdfs-spark:latest"]
 println cmd
 def spark_master_container_id = new StringBuilder()
 cmd.execute().waitForProcessOutput(spark_master_container_id, System.err)
@@ -109,7 +118,7 @@ cmd.execute().waitForProcessOutput(spark_master_container_id, System.err)
 def hdfs_config_command = "sed s/IP:PORT/" + hdfs_namenode_host_port + "/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
 def spark_create_spark_env_file_config_command = "touch \$SPARK_HOME/conf/spark-env.sh"
 def spark_public_dns_config_command = "echo \"export SPARK_PUBLIC_DNS=" + pa_node_host + "\" >> \$SPARK_HOME/conf/spark-env.sh"
-def spark_master_webui_port_config_command = "echo \"export SPARK_MASTER_WEBUI_PORT=" + spark_gui_start_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+def spark_master_webui_port_config_command = "echo \"export SPARK_MASTER_WEBUI_PORT=" + spark_master_gui_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
 def start_master_command = "\$SPARK_HOME/sbin/start-master.sh"
 def command_in_container = hdfs_config_command + ";" + spark_create_spark_env_file_config_command + ";" + spark_public_dns_config_command + ";" + spark_master_webui_port_config_command + ";" + start_master_command
 cmd = ["docker", "exec", spark_master_container_name, "/bin/sh", "-c", command_in_container]
@@ -126,11 +135,13 @@ while (!docker_exec_jps_output.toString().contains("Master")){
 }
 
 // Propagate variables
+variables.put("spark_master_gui_port", spark_master_gui_port)
 variables.put("targeted_network_name", targeted_network_name)
 variables.put("spark_master_container_name", spark_master_container_name)
 variables.put("spark_master_url", "spark://" + spark_master_container_name + ":7077")
 variables.put("nb_spark_deployments", (nb_spark_workers + 1))
 variables.put("spark_master_and_workers_pa_node_names", pa_node_name)
+resultMap.put("spark_service_instance_id", service_instance_id)
 
 // Propagate variables to the current post script
 new File(localspace, "spark_master_container_id").text = spark_master_container_id.toString()
@@ -166,9 +177,9 @@ def pa_node_name = variables.get("PA_NODE_NAME")
 def pa_node_host = variables.get("PA_NODE_HOST")
 def pa_node_source_name = variables.get("PA_NODE_SOURCE")
 def pa_node_url = variables.get("PA_NODE_URL")
-def spark_gui_start_port = variables.get("spark_gui_start_port")
+def spark_master_gui_port = variables.get("spark_master_gui_port")
 
-def spark_master_endpoint_url = "http://" + pa_node_host + ":" + spark_gui_start_port
+def spark_master_endpoint_url = "http://" + pa_node_host + ":" + spark_master_gui_port
 
 // Create the deployment map and json
 def deployment_map = ["endpoint":["id":"spark_master_gui","url":spark_master_endpoint_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":spark_master_container_id,"name":spark_master_container_name]]
@@ -215,18 +226,28 @@ selected = (nodename == targeted_pa_node_name)
         <script>
           <code language="groovy">
             <![CDATA[
+
+
 // Retrieve variables
 def instance_name = variables.get("INSTANCE_NAME")
 def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
 def targeted_network_name = variables.get("targeted_network_name")
 def spark_master_url = variables.get("spark_master_url")
-def spark_gui_start_port = variables.get("spark_gui_start_port") as Integer
 def pa_node_host = variables.get("PA_NODE_HOST")
 def pa_node_name = variables.get("PA_NODE_NAME")
 def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
 
+// Find a free port for spark_master_gui_port
+def spark_worker_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  spark_worker_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
 // Start the spark worker container
-def spark_worker_gui_port = spark_gui_start_port + 1 + task_replication_id
 def spark_worker_container_name = instance_name + "-spark-worker-" + task_replication_id
 def cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_worker_gui_port + ":" + spark_worker_gui_port, "--name", spark_worker_container_name, "--net", targeted_network_name, "activeeon/hdfs-spark:latest"]
 println cmd
@@ -248,6 +269,7 @@ cmd.execute().waitForProcessOutput(System.out, System.err)
 variables.put("spark_worker_" + task_replication_id + "_pa_node_name", pa_node_name)
 
 // Propagate variables to the current post script
+new File(localspace, "spark_worker_gui_port").text = spark_worker_gui_port
 new File(localspace, "spark_worker_container_id").text = spark_worker_container_id.toString()
 new File(localspace, "spark_worker_container_name").text = spark_worker_container_name
 ]]>
@@ -261,6 +283,7 @@ new File(localspace, "spark_worker_container_name").text = spark_worker_containe
 import groovy.json.JsonOutput
 
 // Retrieve the script arguments
+def spark_worker_gui_port = new File(localspace, "spark_worker_gui_port").text
 def spark_worker_container_id = new File(localspace, "spark_worker_container_id").text
 def spark_worker_container_name = new File(localspace, "spark_worker_container_name").text
 
@@ -271,10 +294,8 @@ def pa_node_name = variables.get("PA_NODE_NAME")
 def pa_node_host = variables.get("PA_NODE_HOST")
 def pa_node_source_name = variables.get("PA_NODE_SOURCE")
 def pa_node_url = variables.get("PA_NODE_URL")
-def spark_gui_start_port = variables.get("spark_gui_start_port") as Integer
 
 def spark_worker_endpoint_name = "spark_worker_" + task_replication_id + "_gui_url"
-def spark_worker_gui_port = spark_gui_start_port + 1 + task_replication_id
 def spark_worker_endpoint_url = "http://" + pa_node_host + ":" + spark_worker_gui_port
 
 // Create the deployment map and json
@@ -302,7 +323,7 @@ rmapi.addNodeToken(pa_node_url, instance_name)
       </metadata>
     </task>
 
-    <task name="add_deployments_and_update_service"
+    <task name="merge_json_deployments_and_propagate"
 
 
 
@@ -316,16 +337,6 @@ rmapi.addNodeToken(pa_node_url, instance_name)
         <task ref="start_spark_worker"/>
       </depends>
       <scriptExecutable>
-        <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
-            <arguments>
-              <argument value="spark_deployment_json_"/>
-              <argument value="$nb_spark_deployments"/>
-            </arguments>
-          </file>
-        </script>
-      </scriptExecutable>
-      <post>
         <script>
           <code language="groovy">
             <![CDATA[
@@ -341,12 +352,7 @@ variables.put("spark_master_and_workers_pa_node_names", spark_master_and_workers
 ]]>
           </code>
         </script>
-      </post>
-      <cleaning>
-        <script>
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
-        </script>
-      </cleaning>
+      </scriptExecutable>
       <metadata>
         <positionTop>
           542.5
@@ -357,7 +363,7 @@ variables.put("spark_master_and_workers_pa_node_names", spark_master_and_workers
       </metadata>
     </task>
 
-    <task name="propagate_variables_to_current_service"
+    <task name="propagate_variables_and_update_deployments_with_service"
 
 
 
@@ -368,9 +374,9 @@ variables.put("spark_master_and_workers_pa_node_names", spark_master_and_workers
         <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="add_deployments_and_update_service"/>
+        <task ref="merge_json_deployments_and_propagate"/>
       </depends>
-      <scriptExecutable>
+      <pre>
         <script>
           <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Propagate_variables_to_current_service/raw" language="groovy">
             <arguments>
@@ -385,7 +391,22 @@ variables.put("spark_master_and_workers_pa_node_names", spark_master_and_workers
             </arguments>
           </file>
         </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
+            <arguments>
+              <argument value="spark_deployment_json_"/>
+              <argument value="$nb_spark_deployments"/>
+            </arguments>
+          </file>
+        </script>
       </scriptExecutable>
+      <cleaning>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
+        </script>
+      </cleaning>
     </task>
 
     <task name="loop_over_spark_master_status"
@@ -399,7 +420,7 @@ variables.put("spark_master_and_workers_pa_node_names", spark_master_and_workers
         <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="propagate_variables_to_current_service"/>
+        <task ref="propagate_variables_and_update_deployments_with_service"/>
       </depends>
       <selection>
         <script type="static">
