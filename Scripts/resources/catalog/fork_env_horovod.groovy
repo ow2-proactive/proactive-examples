@@ -178,14 +178,15 @@ if (CONTAINER_ENABLED && (
         cmd.add("--privileged") // https://github.com/NVIDIA/nvidia-docker/issues/1171
     }
 
+    isWindows = false
+    isMac = false
     switch (family) {
         case OperatingSystemFamily.WINDOWS:
             isWindows = true
             break
         case OperatingSystemFamily.MAC:
-            isMac = true;
-        default:
-            isWindows = false
+            isMac = true
+            break
     }
     forkEnvironment.setDockerWindowsToLinux(isWindows)
 
