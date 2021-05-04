@@ -213,6 +213,7 @@ if (CONTAINER_ENABLED && (
         // /etc/nvidia-container-runtime/config.toml => no-cgroups = true
         cmd.add("--privileged") // https://github.com/NVIDIA/nvidia-docker/issues/1171
     }
+ 
     isWindows = false
     isMac = false
     switch (family) {
