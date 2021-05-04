@@ -220,8 +220,10 @@ if (CONTAINER_ENABLED && (
             break
         case OperatingSystemFamily.MAC:
             isMac = true
+            break
         default:
             isWindows = false
+            isMac = false
     }
     forkEnvironment.setDockerWindowsToLinux(isWindows)
 
