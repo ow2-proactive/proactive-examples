@@ -28,6 +28,8 @@ switch (family) {
     case OperatingSystemFamily.WINDOWS:
         isWindows = true;
         break;
+    case OperatingSystemFamily.MAC:
+        isMac = true;
     default:
         isWindows = false;
 }
@@ -78,7 +80,7 @@ if (!isPANodeInContainer) {
     cmd.add(dataDirHost + ":" + dataDirContainer)
 }
 
-if (!isWindows) {
+if (!isWindows && !isMac) {
     // when not on windows, mount and use the current JRE
     currentJavaHome = System.getProperty("java.home")
     forkEnvironment.setJavaHome(currentJavaHome)
