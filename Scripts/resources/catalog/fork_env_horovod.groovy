@@ -183,7 +183,7 @@ if (CONTAINER_ENABLED && (
             isWindows = true
             break
         case OperatingSystemFamily.MAC:
-            isMac = true;
+            isMac = true
             break
         default:
             isWindows = false
