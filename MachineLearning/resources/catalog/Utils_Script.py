@@ -694,13 +694,15 @@ def compress_and_transfer_dataframe_in_dataspace(dataframe, orient, dataspace="u
 
     job_id = variables.get("PA_JOB_ID")
     task_id = variables.get("PA_TASK_ID")
+    work_dir = variables.get("WORK_DIR") if variables.get("WORK_DIR") is not None else "."
 
     dataframe_file_name = 'task_id_' + task_id + '_df_out_' + str(uuid.uuid4())
     dataframe_file_path = dataframe_file_name + '.json.bz2'
     dataframe_json = dataframe.to_json(orient=orient).encode()
     with bz2.open(dataframe_file_path, 'w') as f:
         f.write(dataframe_json)
-    destination_path = os.path.join('job_id_' + job_id, dataframe_file_path)
+    
+    destination_path = os.path.join(work_dir, 'job_id_' + job_id, dataframe_file_path)
 
     print("Transferring dataframe to the " + dataspace + " space")
     print('File size in KB:  ', os.path.getsize(dataframe_file_path) / 1024)
