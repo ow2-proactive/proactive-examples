@@ -701,7 +701,6 @@ def compress_and_transfer_dataframe_in_dataspace(dataframe, orient, dataspace="u
     dataframe_json = dataframe.to_json(orient=orient).encode()
     with bz2.open(dataframe_file_path, 'w') as f:
         f.write(dataframe_json)
-    
     destination_path = os.path.join(work_dir, 'job_id_' + job_id, dataframe_file_path)
 
     print("Transferring dataframe to the " + dataspace + " space")
