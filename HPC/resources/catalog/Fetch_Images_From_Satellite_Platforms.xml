@@ -2,13 +2,19 @@
 <job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Fetch_Images_From_Satellite_Platforms" onTaskError="continueJobExecution" priority="normal" projectName="Satellite Imagery" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
   <variables>
     <variable model="PA:LIST(Peps, Copernicus, All)" name="SEARCH_ENGINE" value="Copernicus"/>
+    <variable model="PA:LIST(PA:URL,PA:URI,PA:USER_FILE,PA:GLOBAL_FILE)" name="IMPORT_FROM" value="PA:GLOBAL_FILE"/>
+    <variable model="PA:GLOBAL_FILE" name="FILE_PATH" value="example2.json"/>
+    <variable name="TIME_TO_RETRIEVE_IN_SECONDS" value="900"/>
+    <variable name="TIME_TO_CHECK_ONLINE_IN_SECONDS" value="1800"/>
     <variable name="OUTPUT_PATH" value="/tmp/"/>
+    <variable name="REQUIRED_LICENSES" value="software_A"/>
+    <variable name="WALLTIME" value="24:00:00"/>
   </variables>
   <description>
     <![CDATA[ The satellite-imagery bucket contains some tasks that enable you to search, download and retrieve the metadata of Sentinel satellite images from the PEPS website (https://peps.cnes.fr/rocket/#/home) and Copernicus Open Access Hub (https://scihub.copernicus.eu/). ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="satellite-imagery"/>
+<info name="bucketName" value="hpc"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/sentinel_image.jpg"/>
 <info name="Documentation" value="PML/PMLUserGuide.html#_satellite_imagery_bucket"/>
 <info name="group" value="public-objects"/>
@@ -18,6 +24,9 @@
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
       </genericInformation>
+      <depends>
+        <task ref="Import_GeoData"/>
+      </depends>
       <scriptExecutable>
         <script>
           <code language="cpython">
@@ -45,14 +54,14 @@ else:
       </controlFlow>
       <metadata>
         <positionTop>
-            200.34375
+            541.984375
         </positionTop>
         <positionLeft>
-            385.984375
+            288.984375
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="Fetch_Satellite_Images_From_PEPS">
+    <task fork="false" name="Fetch_Satellite_Images_From_PEPS">
       <description>
         <![CDATA[ Load and return a PEPS dataset including a
 'metadata folder' with metadata files and 'images folder' containing satellite images.
@@ -61,20 +70,9 @@ Please access https://peps.cnes.fr/rocket/#/register to create a new user accoun
 
 Please add third party credentials (USER_NAME_PEPS and USER_PASS_PEPS) in the Scheduling & Orchestration interface → Manage Third-Party Credentials to connect to PEPS. ]]>
       </description>
-      <variables>
-        <variable inherited="false" name="LOCATION" value="Toulouse"/>
-        <variable inherited="false" model="PA:LIST(S1, S2, S2B, S2ST, S3)" name="COLLECTION" value="S1"/>
-        <variable inherited="false" model="PA:LIST(GRD, SLC, OCN, S2MSI1C)" name="PRODUCT_TYPE" value="GRD"/>
-        <variable inherited="false" model="PA:LIST(EW, IW , SM, WV, INS-NOBS, INS-RAW, MSI)" name="SENSOR_MODE" value="IW"/>
-        <variable inherited="false" model="PA:DATETIME(yyyy-MM-dd)" name="START_DATE" value="2015-11-01"/>
-        <variable inherited="false" model="PA:DATETIME(yyyy-MM-dd)" name="END_DATE" value="2015-12-01"/>
-        <variable inherited="false" name="TILE" value=""/>
-        <variable inherited="false" name="LATITUDE" value=""/>
-        <variable inherited="false" name="LONGITUDE" value=""/>
-      </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/peps-logo.png"/>
-        <info name="task.documentation" value="PML/PMLUserGuide.html#_satellite_imagery_bucket"/>
+        <info name="task.documentation" value="MLOS/MLOSUserGuide.html#_satellite_imagery_bucket"/>
       </genericInformation>
       <scriptExecutable>
         <script>
@@ -82,418 +80,23 @@ Please add third party credentials (USER_NAME_PEPS and USER_PASS_PEPS) in the Sc
             <![CDATA[
 __file__ = variables.get("PA_TASK_NAME")
 
-import sys
-import uuid
-import json
-import time
-import shutil
-import zipfile
-import optparse 
-import random as r
-from datetime import date
-from zipfile import ZipFile 
-from os.path import join, exists, os, isfile
-
-
-if 'variables' in locals():
-  LOCATION      = variables.get("LOCATION") 		 # location 
-  COLLECTION    = variables.get("COLLECTION")        # Collection within theia collections  ----- choices=['S1', 'S2', 'S2ST', 'S3']  
-  PRODUCT_TYPE  = variables.get("PRODUCT_TYPE")      # GRD, SLC, OCN (for S1) | S2MSI1C S2MSI2A S2MSI2Ap (for S2) 
-  SENSOR_MODE   = variables.get("SENSOR_MODE")		 # EW, IW , SM, WV (for S1) | INS-NOBS, INS-RAW (for S3)
-  START_DATE = variables.get("START_DATE")			 # Start date, fmt('2015-12-22')  
-  END_DATE = variables.get("END_DATE")				 # End date, fmt('2015-12-23') 
-  TILE = variables.get("TILE")						 # Sentinel-2 tile number type= string 
-  LATITUDE = variables.get("LATITUDE")               # Latitude in decimal degrees 
-  LONGITUDE = variables.get("LONGITUDE")             # Longitude in decimal degrees 
-  EMAIL = credentials.get("USER_NAME_PEPS")              # User email
-  PASSWD = credentials.get("USER_PASS_PEPS")              # User password
-  OUTPUT_PATH = variables.get("OUTPUT_PATH")         # Folder output path 
-    
-COLLECTION =   COLLECTION.upper()
-PRODUCT_TYPE = PRODUCT_TYPE.upper()
-SENSOR_MODE =  SENSOR_MODE.upper()
-
-if LOCATION == "": LOCATION = None
-if TILE == "": TILE = None
-LATITUDE = None if LATITUDE == "" else float(LATITUDE)
-LONGITUDE = None if LONGITUDE == "" else float(LONGITUDE)  
-
- 
-NO_DOWNLOAD = False  # Do not download products, just print curl command
-LATMIN = None		 # Min latitude in decimal degrees  
-LATMAX = None		 # Max latitude in decimal degreess 
-LONMIN = None        # Min longitude in decimal degrees
-LONMAX = None        # Max longitude in decimal degrees
-ORBIT = None         # Orbit Path number # type int
-SEARCH_JSON_FILE = None   
-WINDOWS = False
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-# Define the current 'dataset_path'
-os.getcwd() if OUTPUT_PATH == "" else os.chdir(OUTPUT_PATH)
-
-dataset_path = join(OUTPUT_PATH, ID, 'dataset')
-output_path = join(OUTPUT_PATH, ID, 'peps')
-output_path_metadata = join(OUTPUT_PATH, ID, 'peps', 'metadata')
-
-os.makedirs(dataset_path, exist_ok=True)
-os.makedirs(output_path, exist_ok=True)
-os.makedirs(output_path_metadata, exist_ok=True)
-
-print('The path input PEPS dataset', dataset_path)
-print('The path output PEPS dataset', output_path)
-
-class OptionParser (optparse.OptionParser):
-
-    def check_required(self, opt):
-        option = self.get_option(opt)
-
-        # Assumes the option's 'default' is set to None!
-        if getattr(self.values, option.dest) is None:
-            self.error("%s option not supplied" % option)
-
-
-###########################################################################
-def check_rename(tmpfile, prodsize):
-    print(os.path.getsize(tmpfile), prodsize)
-    if os.path.getsize(tmpfile) != prodsize:
-        with open(tmpfile) as f_tmp:
-            try:
-                tmp_data = json.load(f_tmp)
-                print("Result is a json file (might come from a wrong password file)")
-                print(tmp_data)
-                sys.exit(-1)
-            except ValueError:
-                print("\ndownload was not complete, tmp file removed")
-                os.remove(tmpfile)
-                pass
-    else:
-        os.rename("%s" % tmpfile, "%s/%s.zip" % (dataset_path, prod))
-        print("product saved as : %s/%s.zip" % (dataset_path, prod))
-
-###########################################################################
-
-def parse_catalog(SEARCH_JSON_FILE):
-    # Filter catalog result
-    with open(SEARCH_JSON_FILE) as data_file:
-        data = json.load(data_file)
-
-    if 'ErrorCode' in data:
-        print(data['ErrorMessage'])
-        sys.exit(-2)
-
-    # Sort data
-    download_dict = {}
-    storage_dict = {}
-    size_dict = {}
-    if len(data["features"])>0:
-        for i in range(len(data["features"])):
-            prod = data["features"][i]["properties"]["productIdentifier"]
-            print(prod, data["features"][i]["properties"]["storage"]["mode"])
-            feature_id = data["features"][i]["id"]
-            try:
-                storage = data["features"][i]["properties"]["storage"]["mode"]
-                platform = data["features"][i]["properties"]["platform"]
-                resourceSize = int(data["features"][i]["properties"]["resourceSize"])
-                # recup du numero d'orbite
-                orbitN = data["features"][i]["properties"]["orbitNumber"]
-                if platform == 'S1A':
-                    # calcul de l'orbite relative pour Sentinel 1A
-                    relativeOrbit = ((orbitN - 73) % 175) + 1
-                elif platform == 'S1B':
-                    # calcul de l'orbite relative pour Sentinel 1B
-                    relativeOrbit = ((orbitN - 27) % 175) + 1
-
-            # print data["features"][i]["properties"]["productIdentifier"],data["features"][i]["id"],data["features"][i]["properties"]["startDate"],storage
-
-                if ORBIT is not None:
-                    if platform.startswith('S2'):
-                        if prod.find("_R%03d" % ORBIT) > 0:
-                            download_dict[prod] = feature_id
-                            storage_dict[prod] = storage
-                            size_dict[prod] = resourceSize
-                    elif platform.startswith('S1'):
-                        if relativeOrbit == ORBIT:
-                            download_dict[prod] = feature_id
-                            storage_dict[prod] = storage
-                            size_dict[prod] = resourceSize
-                else:
-                    download_dict[prod] = feature_id
-                    storage_dict[prod] = storage
-                    size_dict[prod] = resourceSize
-            except:
-                pass
-    else:
-        print(">>> no product corresponds to selection criteria")
-        sys.exit(-1)
-
-    return(prod, download_dict, storage_dict, size_dict)
-  
-    
-    
-if SEARCH_JSON_FILE is None or SEARCH_JSON_FILE == "":
-    SEARCH_JSON_FILE = 'search.json'
-
-if TILE is None:
-    if LOCATION is None:
-        if LATITUDE is None or LONGITUDE is None:
-            if (LATMIN is None) or (LONMIN is None) or (LATMAX is None) or (LONMAX is None):
-                print("provide at least a point or rectangle or tile number")
-                sys.exit(-1)
-            else:
-                geom = 'rectangle'
-        else:
-            if (LATMIN is None) and (LONMIN is None) and (LATMAX is None) and (LONMAX is None):
-                geom = 'point'
-            else:
-                print("please choose between point and rectangle, but not both")
-                sys.exit(-1)
-    else:
-        if (LATMIN is None) and (LONMIN is None) and (LATMAX is None) and (LONMAX is None) and (LATITUDE is None) or (LONGITUDE is None):
-            geom = 'LOCATION'
-        else:
-            print("please choose location and coordinates, but not both")
-            sys.exit(-1)
-
-# geometric parameters of catalog request
-
-if TILE is not None:
-    if TILE.startswith('T') and len(TILE)==6:
-        tileid = TILE[1:6]
-    elif len(TILE)==5:
-        tileid = TILE[0:5]
-    else:
-        print("tile name is ill-formated : 31TCJ or T31TCJ are allowed")
-        sys.exit(-4)
-    query_geom="tileid=%s"%(tileid)
-elif geom == 'point':
-    query_geom = 'LATITUDE=%f\&LONGITUDE=%f' % (LATITUDE, LONGITUDE)
-elif geom == 'rectangle':
-    query_geom = 'box={LONMIN},{LATMIN},{LONMAX},{LATMAX}'.format(
-        LATMIN=LATMIN, LATMAX=LATMAX, LONMIN=LONMIN, LONMAX=LONMAX)
-elif geom == 'LOCATION':
-    query_geom = "q=%s" % LOCATION
-    
-# date parameters of catalog request
-if START_DATE is not None:
-    START_DATE = START_DATE
-    if END_DATE is not None:
-        END_DATE = END_DATE
-    else:
-        END_DATE = date.today().isoformat()
-
-# special case for Sentinel-2     
-
-if COLLECTION == 'S2':
-    if START_DATE >= '2016-12-05':
-        print("**** products after '2016-12-05' are stored in Tiled products collection")
-        print("**** please use option -c S2ST")
-    elif END_DATE >= '2016-12-05':
-        print("**** products after '2016-12-05' are stored in Tiled products collection")
-        print("**** please use option -c S2ST to get the products after that date")
-        print("**** products before that date will be downloaded")
- 
-if COLLECTION == 'S2ST':
-    if END_DATE < '2016-12-05':
-        print("**** products before '2016-12-05' are stored in non-tiled products collection")
-        print("**** please use option -c S2")
-    elif START_DATE < '2016-12-05':
-        print("**** products before '2016-12-05' are stored in non-tiled products collection")
-        print("**** please use option -c S2 to get the products before that date")
-        print("**** products after that date will be downloaded")
-        
-
-# ====================
-# search in catalog
-# ====================
-if (PRODUCT_TYPE == "") and (SENSOR_MODE == ""):
-    search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500' % (
-        SEARCH_JSON_FILE, COLLECTION, query_geom, START_DATE, END_DATE)
-else:
-    search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500\&productType=%s\&sensorMode=%s' % (
-        SEARCH_JSON_FILE, COLLECTION, query_geom, START_DATE, END_DATE, PRODUCT_TYPE, SENSOR_MODE)
-
-if WINDOWS :
-    search_catalog = search_catalog.replace('\&','^&')
-
-print(search_catalog)
-os.system(search_catalog)
-time.sleep(5)
-
-prod, download_dict, storage_dict, size_dict = parse_catalog(SEARCH_JSON_FILE)
-
-
-# ====================
-# Download
-# ====================
-
-if len(download_dict) == 0:
-    print("No product matches the criteria")
-else:
-    # first try for the products on tape
-    if dataset_path == None:
-        dataset_path = os.getcwd()
-
-    for prod in list(download_dict.keys()):
-        file_exists = os.path.exists(("%s/%s.SAFE") % (dataset_path, prod)
-                                     ) or os.path.exists(("%s/%s.zip") % (dataset_path, prod))
-        if (not(NO_DOWNLOAD) and not(file_exists)):
-            if storage_dict[prod] == "tape":
-                tmticks = time.time()
-                tmpfile = ("%s/tmp_%s.tmp") % (dataset_path, tmticks)
-                print("\nStage tape product: %s" % prod)
-                get_product = 'curl -o %s -k -u "%s:%s" https://peps.cnes.fr/resto/collections/%s/%s/download/?issuerId=peps &>/dev/null' % (
-                    tmpfile, EMAIL, PASSWD, COLLECTION, download_dict[prod])
-                os.system(get_product)
-                if os.path.exists(tmpfile):
-                    os.remove(tmpfile)
-
-    NbProdsToDownload = len(list(download_dict.keys()))
-    print("##########################")
-    print("%d  products to download" % NbProdsToDownload)
-    print("##########################")
-    while (NbProdsToDownload > 0):
-       # redo catalog search to update disk/tape status
-        if (PRODUCT_TYPE == "") and (SENSOR_MODE == ""):
-            search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500' % (
-                SEARCH_JSON_FILE, COLLECTION, query_geom, START_DATE, END_DATE)
-        else:
-            search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500\&productType=%s\&sensorMode=%s' % (
-                SEARCH_JSON_FILE, COLLECTION, query_geom, START_DATE, END_DATE, PRODUCT_TYPE, SENSOR_MODE)
-
-        if WINDOWS :
-            search_catalog = search_catalog.replace('\&','^&')
-
-        os.system(search_catalog)
-        time.sleep(2)
-
-        prod, download_dict, storage_dict, size_dict = parse_catalog(SEARCH_JSON_FILE)
-
-        NbProdsToDownload = 0
-        # download all products on disk
-        for prod in list(download_dict.keys()):
-            file_exists = os.path.exists(("%s/%s.SAFE") % (dataset_path, prod)) or os.path.exists(("%s/%s.zip") % (dataset_path, prod))
-            if (not(NO_DOWNLOAD) and not(file_exists)):
-                if storage_dict[prod] == "disk":
-                    tmticks = time.time()
-                    tmpfile = ("%s/tmp_%s.tmp") % (dataset_path, tmticks)
-                    print("\nDownload of product : %s" % prod)
-                    get_product = 'curl -o %s -k -u "%s:%s" https://peps.cnes.fr/resto/collections/%s/%s/download/?issuerId=peps' % (
-                        tmpfile, EMAIL, PASSWD, COLLECTION, download_dict[prod])
-                    print(get_product)
-                    os.system(get_product)
-                    # check binary product, rename tmp file
-                    if not os.path.exists(("%s/tmp_%s.tmp") % (dataset_path, tmticks)):
-                        NbProdsToDownload += 1
-                    else:
-                         check_rename(tmpfile, size_dict[prod])
-
-            elif file_exists:
-                print("%s already exists" % prod)
-
-        # download all products on tape
-        for prod in list(download_dict.keys()):
-            file_exists = os.path.exists(("%s/%s.SAFE") % (dataset_path, prod)
-                                         ) or os.path.exists(("%s/%s.zip") % (dataset_path, prod))
-            if (not(NO_DOWNLOAD) and not(file_exists)):
-                if storage_dict[prod] == "tape" or storage_dict[prod] == "staging" :
-                    NbProdsToDownload += 1
-
-        if NbProdsToDownload > 0:
-            print("##############################################################################")
-            print("%d remaining products are on tape, lets's wait 1 minute before trying again" % NbProdsToDownload)
-            print("##############################################################################")
-            time.sleep(60)
-            
-            
-# List all .zip folders
-folder_zip = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.zip')]
-
-# Unzip folders 
-print('Extracting all the files...')
-for file_name in folder_zip: 
-    with ZipFile(file_name, 'r') as zip: 
-        zip.printdir() 
-        # extracting all the files 
-        print('Unzip File name:', file_name) 
-        zip.extractall(dataset_path) 
-print('Finished!')            
-            
-# List all .safe folders
-folder_safe = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.SAFE')]
-
-# Copy and organize files
-def folder_copy(image_path, path_dst):          
-    for root, dirs, files in os.walk(image_path, path_dst): 
-        os.makedirs(path_dst, exist_ok=True)
-        for file in files:   
-            fullpath = join(root, file)
-            shutil.copy(fullpath, path_dst)
-            #print('Image Name:', fullpath) 
-            print('Image Name:', join(path_dst, file))  
-            
-# Looking for the "measurement" and  "IMG_DATA" directories (S1 and S2 sensors)
-def folder_search():
-    print('Copying the images to the peps directory...')
-    for foldername in folder_safe:
-        for path, dirs, filename in os.walk(foldername): #omit files, loop through later
-            for dirname in dirs:
-                fullpath = os.path.join(path, dirname)
-                if "measurement" in dirname:
-                    path_dst = os.path.join(output_path, 'measurement')
-                    folder_copy(fullpath, path_dst)
-                if "IMG_DATA" in dirname:
-                    path_dst = os.path.join(output_path, 'IMG_DATA')
-                    folder_copy(fullpath, path_dst)
-    print('Finished!')
-    
-# Searching for metadata files
-def metadata_search(output_path_metadata, folder_safe):
-    print('Searching for metadata files...')
-    for file_xml in folder_safe:
-        file_rename = r.randint(0,9999)
-        for fn in os.listdir(file_xml):
-            if fn.endswith(('.xml')):
-                shutil.copy(os.path.join(file_xml,fn), os.path.join(output_path_metadata, fn))
-                new_file_rename =  str(file_rename) + '_' +  fn 
-                os.rename(os.path.join(output_path_metadata, fn), os.path.join(output_path_metadata, new_file_rename)) 
-                print('Metadata Name:', join(output_path_metadata, new_file_rename))   
-    print('Finished')
-    
-# Call folder_search function
-folder_search()
-
-# Call  metadata_search function
-metadata_search(output_path_metadata, folder_safe)
-                
-# Remove the "dataset_path" directory
-shutil.rmtree(dataset_path)
-while os.path.exists(dataset_path):
-  pass
-print('Remove all directory in the', dataset_path)
-print('Finished!')  
-
-
-if 'variables' in locals():
-	variables.put("DATASET_PATH", output_path)
-  
+print('Starting download....')
 print("END " + __file__)
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow block="start"/>
       <metadata>
         <positionTop>
-            328.34375
+            669.984375
         </positionTop>
         <positionLeft>
-            257.984375
+            100.984375
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="Else">
+    <task fork="false" name="Else">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
       </genericInformation>
@@ -508,14 +111,14 @@ print("END " + __file__)
       </scriptExecutable>
       <metadata>
         <positionTop>
-            328.34375
+            669.984375
         </positionTop>
         <positionLeft>
-            385.984375
+            288.984375
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="Continuation">
+    <task fork="false" name="Continuation">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
       </genericInformation>
@@ -530,17 +133,20 @@ print("END " + __file__)
       </scriptExecutable>
       <metadata>
         <positionTop>
-            328.34375
+            669.984375
         </positionTop>
         <positionLeft>
-            513.984375
+            426.984375
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="Condition2">
+    <task fork="false" name="Condition2">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
       </genericInformation>
+      <depends>
+        <task ref="Import_GeoData"/>
+      </depends>
       <scriptExecutable>
         <script>
           <code language="cpython">
@@ -568,14 +174,14 @@ else:
       </controlFlow>
       <metadata>
         <positionTop>
-            200.34375
+            541.984375
         </positionTop>
         <positionLeft>
-            769.984375
+            826.984375
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="Fetch_Satellite_Images_From_Copernicus">
+    <task fork="false" name="Fetch_Satellite_Images_From_Copernicus">
       <description>
         <![CDATA[ Load and return a Copernicus dataset including a 'metadata folder' with metadata files and 'images folder' containing satellite images according to the resolution & image band selected by user.
 
@@ -583,60 +189,177 @@ Please access https://peps.cnes.fr/rocket/#/register to create a new user accoun
 
 Please add third party credentials (USER_NAME_COP and USER_PASS_COP) in the Scheduling & Orchestration interface → Manage Third-Party Credentials to connect to Copernicus. ]]>
       </description>
-      <variables>
-        <variable inherited="false" model="PA:LIST(Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5 Precursor, Sentinel-6)" name="PLATFORM_NAME" value="Sentinel-2"/>
-        <variable inherited="false" model="PA:LIST(SLC, GRD, OCN, S2MSI2A, S2MSI1C, S2MS2Ap)" name="PRODUCT_TYPE" value="S2MSI1C"/>
-        <variable inherited="false" name="FOOTPRINT" value="expected_search_footprints_s1"/>
-        <variable inherited="false" model="PA:DATETIME(yyyy-MM-dd)" name="START_DATE" value="2019-12-30"/>
-        <variable inherited="false" model="PA:DATETIME(yyyy-MM-dd)" name="END_DATE" value="2020-01-05"/>
-        <variable inherited="false" model="PA:Boolean" name="USE_START_AND_END_DATE" value="True"/>
-        <variable inherited="false" model="PA:LIST(10m, 20m, 60m)" name="SPATIAL_RESOLUTION" value="10m"/>
-        <variable inherited="false" model="PA:LIST(All, B01, B02, B03, B04, B05, B06, B07, B08, B8A, B09, B10, B11, B12, TCI)" name="IMAGE_BAND" value="All"/>
-      </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png"/>
-        <info name="task.documentation" value="PML/PMLUserGuide.html#_satellite_imagery_bucket"/>
+        <info name="task.documentation" value="MLOS/MLOSUserGuide.html#_satellite_imagery_bucket"/>
       </genericInformation>
-      <pre>
+      <scriptExecutable>
         <script>
           <code language="cpython">
             <![CDATA[
-import ssl, sys
+__file__ = variables.get("PA_TASK_NAME")
 
-if sys.version_info[0] < 3:
-    try:
-        from urllib2 import urlopen
-    except ImportError:
-        import pip
-        pip.main(['install', 'request'])
-        from urllib2 import urlopen
-else:
-    try:
-        from urllib.request import urlopen
-    except ImportError:
-        import pip
-        pip.main(['install', 'request'])
-        from urllib.request import urlopen
-
-PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-FOOTPRINT = variables.get("FOOTPRINT")
-
-satellite_imagery_resources_url = PA_CATALOG_REST_URL +"/buckets/satellite-imagery/resources/"+FOOTPRINT+"/raw"
-print("satellite-imagery-resources-url: ", satellite_imagery_resources_url)
-
-# This restores the same behavior as before.
-context        = ssl._create_unverified_context()
-json_file      = urlopen(satellite_imagery_resources_url, context=context).read()
-json_content   = json_file.decode('utf-8')
-json_file_name = FOOTPRINT + ".geojson"
-
-f = open(json_file_name, "w")
-f.write(json_content)
-f.close()
+print('Starting download....')
+print("END " + __file__)
 ]]>
           </code>
         </script>
-      </pre>
+      </scriptExecutable>
+      <controlFlow block="start"/>
+      <metadata>
+        <positionTop>
+            669.984375
+        </positionTop>
+        <positionLeft>
+            626.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" name="Else2">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            669.984375
+        </positionTop>
+        <positionLeft>
+            826.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" name="Continuation2">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            669.984375
+        </positionTop>
+        <positionLeft>
+            965
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" name="Import_GeoData">
+      <description>
+        <![CDATA[ Import geo dataset. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/geodata.jpg"/>
+        <info name="task.documentation" value="MLOS/MLOSUserGuide.html#_satellite_imagery_bucket"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import json
+import uuid
+from os.path import join, os
+
+from sentinelsat.sentinel import read_geojson
+
+if 'variables' in locals():
+    IMPORT_FROM = variables.get("IMPORT_FROM")
+    FILE_PATH = variables.get("FILE_PATH")  # Geojson file search_footprints.geojson with footprints of the query result
+    OUTPUT_PATH = variables.get("OUTPUT_PATH")  # Folder output path 
+
+# Get an unique ID
+ID = str(uuid.uuid4())
+
+# Get current job ID
+PA_JOB_ID = variables.get("PA_JOB_ID")
+
+# Get an unique ID
+#ID = str(uuid.uuid4())
+ID_JOB = 'Job_' + str(PA_JOB_ID) 
+
+# Define the current 'dataset_path'
+os.chdir(OUTPUT_PATH)
+dataset_path = join(OUTPUT_PATH, ID, ID_JOB)
+
+# Create the folders tmp
+os.makedirs(dataset_path, exist_ok = True)
+os.chmod(dataset_path, mode=0o770)
+
+# Define path to download the dataset
+os.chdir(dataset_path)
+
+print('The path input dataset:', dataset_path)
+
+# -------------------------------------------------------------
+# Load file
+#
+if IMPORT_FROM.upper() == "PA:USER_FILE":
+    print("Importing file from the user space")
+    userspaceapi.connect()
+    out_file = gateway.jvm.java.io.File(os.path.join(dataset_path, FILE_PATH))
+    userspaceapi.pullFile(FILE_PATH, out_file)
+
+if IMPORT_FROM.upper() == "PA:GLOBAL_FILE":
+    print("Importing file from the global space")
+    globalspaceapi.connect()
+    out_file = gateway.jvm.java.io.File(os.path.join(dataset_path, FILE_PATH))
+    globalspaceapi.pullFile(FILE_PATH, out_file)
+
+gjson = read_geojson(os.path.join(dataset_path, FILE_PATH))
+n_acq = len(gjson.features)
+print('{s:{c}^{n}}'.format(s=' GEOJSON DATA ', n=75, c='#'))
+print('{s:{c}^{n}}'.format(s='#', n=75, c='#'))
+print(gjson)
+
+gjson_data = json.dumps(gjson).encode('utf-8')
+
+if 'variables' in locals():
+    variables.put("DATASET_PATH", dataset_path)
+    variables.put("GJSON_DATA", gjson_data)
+    variables.put("N_acq", n_acq)
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            413.984375
+        </positionTop>
+        <positionLeft>
+            557.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" name="Split">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        <info name="Documentation" value="user/ProActiveUserGuide.html#_replicate"/>
+      </genericInformation>
+      <depends>
+        <task ref="Fetch_Satellite_Images_From_PEPS"/>
+      </depends>
       <scriptExecutable>
         <script>
           <code language="cpython">
@@ -645,14 +368,18 @@ __file__ = variables.get("PA_TASK_NAME")
 
 import os
 import sys
-import uuid
+import json
+import time
 import shutil
-import zipfile
-import datetime
 import subprocess
 import random as r
 from zipfile import ZipFile
-from os.path import join, exists, os, isfile
+from os.path import join, os
+from collections import OrderedDict
+from ast import literal_eval as make_tuple
+
+from distutils.dir_util import copy_tree
+from geojson import FeatureCollection
 
 try:
     from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
@@ -663,154 +390,519 @@ finally:
 
 
 if 'variables' in locals():
-  PLATFORM_NAME  = variables.get("PLATFORM_NAME")                        # Specific platform [Sentinel-1, Sentinel-2, Sentinel-3, Sentinel-4, Sentinel-5,  Sentinel-5, Precursor, Sentinel-6]
-  PRODUCT_TYPE  = variables.get("PRODUCT_TYPE")                          # Used to perform a search based on the product type
-  FOOTPRINT      = variables.get("FOOTPRINT")                            # Geojson file search_footprints.geojson with footprints of the query result
-  FOOTPRINT      = FOOTPRINT + ".geojson"
-  FOOTPRINT_FILE = os.path.join(os.getcwd(), FOOTPRINT)
-  START_DATE     = variables.get("START_DATE")                           # Start date of the query in the format YYYYMMDD
-  END_DATE       = variables.get("END_DATE")                             # End date of the query in the format YYYYMMDD
-  USER_NAME      = credentials.get("USER_NAME_COP")                      # User email
-  USER_PASS      = credentials.get("USER_PASS_COP")                      # User password
-  OUTPUT_PATH    = variables.get("OUTPUT_PATH")                          # Folder output path 
-  USE_START_AND_END_DATE = bool(variables.get("USE_START_AND_END_DATE")) # True or False to use start and end data
-  SPATIAL_RESOLUTION = variables.get("SPATIAL_RESOLUTION")               # Spatial resolutions of 10m, 20m and 60m
-  IMAGE_BAND = variables.get("IMAGE_BAND")                               # Image band (TC1,  B01, B02, B03, 0B4, 0B5, 0B6,B07, B08, B8A, B09, B10, B11, B12)																
+    DATASET_PATH = variables.get("DATASET_PATH")  # folder dataset path 
+    GJSON_DATA = variables.get("GJSON_DATA")  # gson data
+    N_acq = variables.get("N_acq")  # number of features
     
-# Get an unique ID
-ID = str(uuid.uuid4())
+gjson_dec = json.loads(GJSON_DATA.decode('utf-8'))
+gjson = FeatureCollection(gjson_dec)
+gjson['features'] = list(gjson['features']) 
+
+
+# Loop for each trial
+result = {}
+for i in range(N_acq): 
+    result[i] =  json.dumps(gjson[i])
+    print(result[i])
+    
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=result.size()
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            797.984375
+        </positionTop>
+        <positionLeft>
+            100.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" maxNumberOfExecution="10" name="Process" taskRetryDelay="1:00">
+      <description>
+        <![CDATA[ This task will be replicated according to the 'runs' value specified in the replication script. The replication index is used in each task's instance to select the input. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import sys
+import time
+import json
+import shutil
+import psutil
+import random
+from datetime import date
+from zipfile import ZipFile
+from os.path import join, os
+from geojson import FeatureCollection
+
+try:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+except ImportError:
+    subprocess.call([sys.executable, "-m", "pip", "install", 'sentinelsat'])
+finally:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+
+USER_NAME = credentials.get("USER_NAME_PEPS")  # user email
+USER_PASS = credentials.get("USER_PASS_PEPS")  # user password
+DATASET_PATH = variables.get("DATASET_PATH")   # folder dataset path 
+GJSON_DATA = variables.get("GJSON_DATA")       # gson data
+
+NO_DOWNLOAD = False  # Do not download products, just print curl command
+LOCATION = None      # Location in string
+TILE = None          # Tile number in string 
+LATMIN = None        # Min latitude in decimal degrees  
+LATMAX = None        # Max latitude in decimal degreess 
+LONMIN = None        # Min longitude in decimal degrees
+LONMAX = None        # Max longitude in decimal degrees
+ORBIT = None         # Orbit Path number # type int
+SEARCH_JSON_FILE = None
+WINDOWS = False
+     
+gjson_dec = json.loads(GJSON_DATA.decode('utf-8'))
+gjson = FeatureCollection(gjson_dec)
+gjson['features'] = list(gjson['features'])  
+
+# Get current job ID
+PA_JOB_ID = variables.get("PA_JOB_ID")
+
+# Print task replication number
+i = int(variables.get('PA_TASK_REPLICATION'))
+
+# Get data from the split task
+features_dec = json.loads(str(results[0].value()[i]))
+print("Task id: ", i, " ", features_dec)
+features = FeatureCollection(features_dec) 
 
 # Define the current 'dataset_path'
-os.chdir(OUTPUT_PATH)
+os.chdir(DATASET_PATH)
 
-dataset_path = join(OUTPUT_PATH, ID, 'dataset')
-output_path = join(OUTPUT_PATH, ID, 'copernicus')
-output_path_metadata = join(OUTPUT_PATH, ID, 'copernicus', 'metadata')
+TASK_NUMBER = 'Process_' + str(i)
+output_path = join(DATASET_PATH, TASK_NUMBER, 'peps')
+
 
 # Create the folders
-os.makedirs(dataset_path, exist_ok=True)
 os.makedirs(output_path, exist_ok=True)
-os.makedirs(output_path_metadata, exist_ok=True)
 
-# Define path to download the dataset
-os.chdir(dataset_path)
+# check disc space
+print('{s:{c}^{n}}'.format(s=' CHECK DISC SPACE ', n=75, c='#'))
+total, used, free, percent = psutil.disk_usage(DATASET_PATH)
 
-print('The path input Copernicus dataset', dataset_path)
-print('The path output Copernicus dataset', output_path)
+## convert from Kilobytes to Gigabytes (GB)
+#total_ = total/(1024*1024)
+#used_ = used/(1024*1024)
+#free_ = free/(1024*1024)
 
-# Data format
-start_date_format = START_DATE.replace('-', '')
-end_date_format =  END_DATE.replace('-', '')
+print('Total: {}KB'.format(round(total))) 
+print('Used: {}KB'.format((round(used)))) 
+print('Free: {}KB'.format((round(free)))) 
+print('Total used (%): {}%'.format(round(percent))) 
 
-#  SentinelAPI
-api = SentinelAPI(USER_NAME, USER_PASS)
-footprint = geojson_to_wkt(read_geojson(FOOTPRINT_FILE))
+print('The path output Peps dataset:', output_path)
 
-if USE_START_AND_END_DATE == True:
-    products = api.query(footprint, producttype=PRODUCT_TYPE, date=(start_date_format, end_date_format), platformname=PLATFORM_NAME)
-else:
-    products = api.query(footprint, producttype=PRODUCT_TYPE, platformname=PLATFORM_NAME)
+# -------------------------------------------------------------
+
+
+# store filename into dict 
+def get_filename(list_prod_filename):
+    dicfile = {}
+    cont = 1
+    for i in list_prod_filename:
+        ditc = {"Folder_" + str(cont): output_path + '/'  + i}
+        dicfile.update(ditc)
+        cont += 1
+    return dicfile
+
+# save info into json file
+filename = join(output_path, 'output.json')
+
+# add info json
+def add_info_json(features, filename):
+    json_object = json.dumps(features, sort_keys=True, indent=4)
+    # writing to filename.json 
+    with open(filename, "w") as outfile:
+        outfile.write(json_object)
+
+# get info json
+def get_info_json(features, product_name, filename):
+    dicfile = get_filename(product_name)
+    features.update({'output_path': dicfile})
+    add_info_json(features, filename)
+
+
+###########################################################################
+def check_rename(tmpfile, prodsize):
+    print(os.path.getsize(tmpfile), prodsize)
+    if os.path.getsize(tmpfile) != prodsize:
+        with open(tmpfile) as f_tmp:
+            try:
+                tmp_data = json.load(f_tmp)
+                print("Result is a json file (might come from a wrong password file)")
+                print(tmp_data)
+                # sys.exit(-1)
+            except ValueError:
+                print("\ndownload was not complete, tmp file removed")
+                os.remove(tmpfile)
+                pass
+    else:
+        os.rename("%s" % tmpfile, "%s/%s.zip" % (output_path, prod))
+        print("product saved as : %s/%s.zip" % (output_path, prod))
+
+
+###########################################################################
+total_prod_size = 0 
+
+def parse_catalog(SEARCH_JSON_FILE):
+    # Filter catalog result
+    with open(SEARCH_JSON_FILE) as data_file:
+        data = json.load(data_file)
+
+    if 'ErrorCode' in data:
+        print(data['ErrorMessage'])
+        # sys.exit(-2)
+
+    # Sort data
+    download_dict = {}
+    storage_dict = {}
+    size_dict = {}
+    if len(data["features"]) > 0:
+        for i in range(len(data["features"])):
+            prod = data["features"][i]["properties"]["productIdentifier"]
+            print(prod, data["features"][i]["properties"]["storage"]["mode"])
+            feature_id = data["features"][i]["id"]
+            try:
+                storage = data["features"][i]["properties"]["storage"]["mode"]
+                platform = data["features"][i]["properties"]["platform"]
+                resourceSize = int(data["features"][i]["properties"]["resourceSize"])
+                # recup du numero d'orbite
+                orbitN = data["features"][i]["properties"]["orbitNumber"]
+                if platform == 'S1A':
+                    # calcul de l'orbite relative pour Sentinel 1A
+                    relativeOrbit = ((orbitN - 73) % 175) + 1
+                elif platform == 'S1B':
+                    # calcul de l'orbite relative pour Sentinel 1B
+                    relativeOrbit = ((orbitN - 27) % 175) + 1
+
+                if ORBIT is not None:
+                    if platform.startswith('S2'):
+                        if prod.find("_R%03d" % ORBIT) > 0:
+                            download_dict[prod] = feature_id
+                            storage_dict[prod] = storage
+                            size_dict[prod] = resourceSize
+                    elif platform.startswith('S1'):
+                        if relativeOrbit == ORBIT:
+                            download_dict[prod] = feature_id
+                            storage_dict[prod] = storage
+                            size_dict[prod] = resourceSize
+                else:
+                    download_dict[prod] = feature_id
+                    storage_dict[prod] = storage
+                    size_dict[prod] = resourceSize
+            except:
+                pass
+    else:
+        print(">>> no product corresponds to selection criteria")
+        # sys.exit(-1)
+
+    return (prod, download_dict, storage_dict, size_dict)
+
+
+prod_filename = []
+try:
+    product_type = features['properties']["producttype"]
+    platform_name = features['properties']['platformname']
+    if platform_name == 'Sentinel-1':
+        platform_name = 'S1'
+    if platform_name == 'Sentinel-2':
+        platform_name = 'S2'
+    if platform_name == 'Sentinel-3':
+        platform_name = 'S3'
+    if platform_name == 'Sentinel-2 Single Tile':
+        platform_name = 'S2ST'
+    start_date = features['properties']["beginposition"]
+    end_date = features['properties']["endposition"]
+
+    try:
+        sensor_operational_mode = features['properties']['sensoroperationalmode']
+    except:
+        sensor_operational_mode = ''
+
+    footprint = geojson_to_wkt(features['geometry'], decimals=6)
     
-api.download_all(products)
+    if footprint.find('POLYGON') != -1:
+        coord = features['geometry']['coordinates'][0][0]
+        longitude = coord[0]
+        latitude = coord[1]
+    elif footprint.find('POINT') != -1:
+        coord = features['geometry']['coordinates']
+        longitude = coord[0]
+        latitude = coord[1]
+    else:
+        print('Please check the .json file!')
 
+    print('{s:{c}^{n}}'.format(s=' GEOJSON SETTINGS ', n=75, c='#'))
+    print('{s:{c}^{n}}'.format(s='#', n=75, c='#'))
+    print("Footprint:", footprint)
+    print('longitude', longitude)
+    print('latitude', latitude)
+    print("Platform Name:", platform_name)
+    print("Product Type:", product_type)
+    print("Start date:", start_date)
+    print("End date:", end_date)
+    
+    if SEARCH_JSON_FILE is None or SEARCH_JSON_FILE == "":
+        SEARCH_JSON_FILE = 'search.json'
 
+    if TILE is None:
+        if LOCATION is None:
+            if latitude is None or longitude is None:
+                if (LATMIN is None) or (LONMIN is None) or (LATMAX is None) or (LONMAX is None):
+                    print("provide at least a point or rectangle or tile number")
+                    # sys.exit(-1)
+                else:
+                    geom = 'rectangle'
+            else:
+                if (LATMIN is None) and (LONMIN is None) and (LATMAX is None) and (LONMAX is None):
+                    geom = 'point'
+                else:
+                    print("please choose between point and rectangle, but not both")
+                    # sys.exit(-1)
+        else:
+            if (LATMIN is None) and (LONMIN is None) and (LATMAX is None) and (LONMAX is None) and (
+                    latitude is None) or (longitude is None):
+                geom = 'LOCATION'
+            else:
+                print("please choose location and coordinates, but not both")
+                # sys.exit(-1)
 
-#print(os.listdir(dataset_path))
+    # geometric parameters of catalog request
+    if TILE is not None:
+        if TILE.startswith('T') and len(TILE) == 6:
+            tileid = TILE[1:6]
+        elif len(TILE) == 5:
+            tileid = TILE[0:5]
+        else:
+            print("tile name is ill-formated : 31TCJ or T31TCJ are allowed")
+            # sys.exit(-4)
+        query_geom = "tileid=%s" % (tileid)
+    elif geom == 'point':
+        query_geom = 'latitude=%f\&longitude=%f' % (latitude, longitude)
+    elif geom == 'rectangle':
+        query_geom = 'box={LONMIN},{LATMIN},{LONMAX},{LATMAX}'.format(
+            LATMIN=LATMIN, LATMAX=LATMAX, LONMIN=LONMIN, LONMAX=LONMAX)
+    elif geom == 'LOCATION':
+        query_geom = "q=%s" % LOCATION
 
+    # date parameters of catalog request
+    if start_date is not None:
+        start_date = start_date
+        if end_date is not None:
+            end_date = end_date
+        else:
+            end_date = date.today().isoformat()
+
+    # special case for Sentinel-2     
+
+    if platform_name == 'S2':
+        if start_date >= '2016-12-05':
+            print("**** products after '2016-12-05' are stored in Tiled products collection")
+            print("**** please use option -c S2ST")
+        elif end_date >= '2016-12-05':
+            print("**** products after '2016-12-05' are stored in Tiled products collection")
+            print("**** please use option -c S2ST to get the products after that date")
+            print("**** products before that date will be downloaded")
+
+    if platform_name == 'S2ST':
+        if end_date < '2016-12-05':
+            print("**** products before '2016-12-05' are stored in non-tiled products collection")
+            print("**** please use option -c S2")
+        elif start_date < '2016-12-05':
+            print("**** products before '2016-12-05' are stored in non-tiled products collection")
+            print("**** please use option -c S2 to get the products before that date")
+            print("**** products after that date will be downloaded")
+
+    # ====================
+    # search in catalog
+    # ====================
+    if (product_type == "") and (sensor_operational_mode == ""):
+        search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500' % (
+            SEARCH_JSON_FILE, platform_name, query_geom, start_date, end_date)
+    else:
+        search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500\&productType=%s\&sensorMode=%s' % (
+            SEARCH_JSON_FILE, platform_name, query_geom, start_date, end_date, product_type,
+            sensor_operational_mode)
+
+    if WINDOWS:
+        search_catalog = search_catalog.replace('\&', '^&')
+
+    print(search_catalog)
+    os.system(search_catalog)
+    time.sleep(5)
+
+    prod, download_dict, storage_dict, size_dict = parse_catalog(SEARCH_JSON_FILE)
+ 
+
+    # ====================
+    # Download
+    # ====================
+
+    if len(download_dict) == 0:
+        print("No product matches the criteria")
+    else:
+        # first try for the products on tape
+        if output_path == None:
+            output_path = os.getcwd()
+
+        for prod in list(download_dict.keys()):
+            file_exists = os.path.exists(("%s/%s.SAFE") % (output_path, prod)
+                                         ) or os.path.exists(("%s/%s.zip") % (output_path, prod))
+            if (not (NO_DOWNLOAD) and not (file_exists)):
+                if storage_dict[prod] == "tape":
+                    tmticks = time.time()
+                    tmpfile = ("%s/tmp_%s.tmp") % (output_path, tmticks)
+                    print("\nStage tape product: %s" % prod)
+                    get_product = 'curl -o %s -k -u "%s:%s" https://peps.cnes.fr/resto/collections/%s/%s/download/?issuerId=peps &>/dev/null' % (
+                        tmpfile, USER_NAME, USER_PASS, platform_name, download_dict[prod])
+                    os.system(get_product)
+                    if os.path.exists(tmpfile):
+                        os.remove(tmpfile)
+
+        NbProdsToDownload = len(list(download_dict.keys()))
+        print("##########################")
+        print("%d  products to download" % NbProdsToDownload)
+        print("##########################")
+        while (NbProdsToDownload > 0):
+            # redo catalog search to update disk/tape status
+            if (product_type == "") and (sensor_operational_mode == ""):
+                search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500' % (
+                    SEARCH_JSON_FILE, platform_name, query_geom, start_date, end_date)
+            else:
+                search_catalog = 'curl -k -o %s https://peps.cnes.fr/resto/api/collections/%s/search.json?%s\&startDate=%s\&completionDate=%s\&maxRecords=500\&productType=%s\&sensorMode=%s' % (
+                    SEARCH_JSON_FILE, platform_name, query_geom, start_date, end_date, product_type,
+                    sensor_operational_mode)
+
+            if WINDOWS:
+                search_catalog = search_catalog.replace('\&', '^&')
+
+            os.system(search_catalog)
+            time.sleep(2)
+
+            prod, download_dict, storage_dict, size_dict = parse_catalog(SEARCH_JSON_FILE)           
+        
+            NbProdsToDownload = 0
+            
+            # calculate all file size
+            totalsize = 0 
+            for filesize in list(download_dict.keys()):
+                size = size_dict[filesize]
+                totalsize+=size
+            print('Total products size:', totalsize)
+            
+            # convert bytes to kilobytes
+            kilobytes = totalsize/1024
+            
+            # check if there is enough disk space
+            if free < kilobytes:
+                print('Disk space available: {}KB'.format(free)) 
+                print('Total products size: {}KB'.format(kilobytes)) 
+                raise SystemExit('No space left on device: %s' % DATASET_PATH)
+     
+            # download all products on disk
+            for prod in list(download_dict.keys()):
+                file_exists = os.path.exists(("%s/%s.SAFE") % (output_path, prod)) or os.path.exists(
+                    ("%s/%s.zip") % (output_path, prod))
+                if (not (NO_DOWNLOAD) and not (file_exists)):
+                    if storage_dict[prod] == "disk":
+                        tmticks = time.time()
+                        tmpfile = ("%s/tmp_%s.tmp") % (output_path, tmticks)
+                        print("\nDownload of product : %s" % prod)
+                        # save filemane products in a list
+                        prod_filename.append(prod)
+                        get_product = 'curl -o %s -k -u "%s:%s" https://peps.cnes.fr/resto/collections/%s/%s/download/?issuerId=peps' % (
+                            tmpfile, USER_NAME, USER_PASS, platform_name, download_dict[prod])
+                        print(get_product)
+                        os.system(get_product)
+                        # check binary product, rename tmp file
+                        if not os.path.exists(("%s/tmp_%s.tmp") % (output_path, tmticks)):
+                            NbProdsToDownload += 1
+                        else:
+                            check_rename(tmpfile, size_dict[prod])
+                            total_prod_size += size_dict[prod]
+
+                elif file_exists:
+                    print("%s already exists" % prod)
+
+            # download all products on tape
+            for prod in list(download_dict.keys()):
+                file_exists = os.path.exists(("%s/%s.SAFE") % (output_path, prod)
+                                             ) or os.path.exists(("%s/%s.zip") % (output_path, prod))
+                if (not (NO_DOWNLOAD) and not (file_exists)):
+                    if storage_dict[prod] == "tape" or storage_dict[prod] == "staging":
+                        NbProdsToDownload += 1
+            
+            if NbProdsToDownload > 0:
+                print("##############################################################################")
+                print(
+                        "%d remaining products are on tape, lets's wait 1 minute before trying again" % NbProdsToDownload)
+                print("##############################################################################")
+                time.sleep(60)
+
+    # save output json file
+    get_info_json(features, prod_filename, filename)
+except Exception as ex:
+    print(ex)
+    print('Please check the json file!')
+
+    
 # List all .zip folders
-folder_zip = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.zip')]
+folder_zip = [i for i in [os.path.relpath(os.path.join(output_path, p)) for p in os.listdir(output_path)] if
+              i.endswith('.zip')]
 
-# Unzip folders 
+# Unzip folders
 print('**********************************************************************************************************')
 print('Extracting all the files...')
 print('**********************************************************************************************************')
-for file_name in folder_zip: 
-    with ZipFile(file_name, 'r') as zip: 
-        zip.printdir() 
+for file_name in folder_zip:
+    try:
+        shutil.unpack_archive(file_name, output_path)
         print('Unzip file name: {} '.format(file_name))
-        zip.extractall(dataset_path) 
-                       
+        # remove each zip file
+        os.remove(file_name)   
+    except:
+        print('Error while unzip file name: {}. Try to unzip it manually...'.format(file_name))    
+
 # List all .safe folders
-folder_safe = [i for i in [os.path.relpath(os.path.join(dataset_path, p)) for p in os.listdir(dataset_path)] if i.endswith('.SAFE')]
+folder_safe = [i for i in [os.path.relpath(os.path.join(output_path, p)) for p in os.listdir(output_path)] if
+               i.endswith('.SAFE')]
 
-# Rename SPATIAL_RESOLUTION variable
-spatial_resolution_check = 'R' + SPATIAL_RESOLUTION
-    
-# Copy and organize files
-def folder_copy(image_path):
-    for root, dirs, files in os.walk(image_path):
-        for dire in dirs:
-            os.makedirs(os.path.join(output_path, dire) , exist_ok=True)
-            fullpath = os.path.join(root, dire)
-            files2 = os.listdir(fullpath) 
-            for filefull in files2:
-                filepath = os.path.join(fullpath, filefull)
-                print('Image name: {} '.format(os.path.join(output_path, dire,  filefull)))
-                shutil.copy(filepath, os.path.join(output_path, dire))
+# Number of product(s)
+print('Total number of products available: {} '.format(len(prod_filename)))
 
-# Looking for the "IMG_DATA" directory 
-def images_search():
-    print('**********************************************************************************************************')
-    print('Copying the images to the copernicus directory...')
-    print('**********************************************************************************************************')
-    for foldername in folder_safe:
-        for path, dirs, filename in os.walk(foldername): #omit files, loop through later
-            for dirname in dirs:
-                fullpath = os.path.join(path, dirname)
-                if "IMG_DATA" in dirname:
-                    folder_copy(fullpath)
-    
-# Searching for metadata files
-def metadata_search(output_path_metadata, folder_safe):
-    print('**********************************************************************************************************')
-    print('Searching for  metadata files...')
-    print('**********************************************************************************************************')
-    for file_xml in folder_safe:
-        file_rename = r.randint(0,9999)
-        for fn in os.listdir(file_xml):
-            if fn.endswith(('.xml')):
-                shutil.copy(os.path.join(file_xml,fn), os.path.join(output_path_metadata, fn))
-                new_file_rename =  str(file_rename) + '_' +  fn 
-                os.rename(os.path.join(output_path_metadata, fn), os.path.join(output_path_metadata, new_file_rename)) 
-                print('Metadata name: {} '.format(join(output_path_metadata, new_file_rename)))
-                
-# Searching for spatial resolutions (R10m, R20m and R60m)
-def resolution_search():
-    print('**********************************************************************************************************')
-    print('Selecting image by resolution and metadata files')
-    print('**********************************************************************************************************')
-    image_resolution  = [name for name in os.listdir(output_path) if not name.endswith('DS_Store')] 
-    for foldername in image_resolution:
-        fullpath = os.path.join(output_path, foldername)
-        print('File name: {} '.format(fullpath)) if spatial_resolution_check in foldername or "metadata" in foldername else shutil.rmtree(fullpath)
-    
-# Searching for image band (All,  B01, B02, B03, B04, B05, B06,B07, B08, B8A, B09, B10, B11, B12, TC1)
-def image_band(image_band_check):
-    print('**********************************************************************************************************')
-    print('Selecting {} image band..."'.format(image_band_check)) 
-    print('**********************************************************************************************************')
-    resolution_path = join(output_path, spatial_resolution_check)
-    if os.path.isdir(resolution_path) == True:
-        image_band_list  = [name for name in os.listdir(resolution_path) if not name.endswith('DS_Store')]
-        for foldername in image_band_list:
-        	fullpath = os.path.join(resolution_path, foldername)
-        	print('Image name: {} '.format(fullpath)) if image_band_check in foldername or image_band_check == 'All' else os.remove(fullpath)
-        
-if PLATFORM_NAME == 'Sentinel-2':
-	# Call folder_search function
-	images_search()
- 
-	# Call metadata_search function 
-	metadata_search(output_path_metadata, folder_safe)
+print('All zip file names: {} '.format(folder_zip))
+print('All safe file names: {} '.format(folder_safe))
 
-	# Call resolution_search function
-	resolution_search()
-
-	# Call image_search function
-	image_band(IMAGE_BAND)
-    
-if 'variables' in locals():
-  variables.put("DATASET_PATH", output_path)
+variables.put("OUTPUT_PATH", output_path)
 
 print("END " + __file__)
 ]]>
@@ -819,54 +911,623 @@ print("END " + __file__)
       </scriptExecutable>
       <metadata>
         <positionTop>
-            328.34375
+            925.984375
         </positionTop>
         <positionLeft>
-            641.984375
+            100.984375
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="Else2">
+    <task fork="false" name="Merge">
+      <description>
+        <![CDATA[ As a merge operation, we simply print the results from previous tasks. ]]>
+      </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
       </genericInformation>
+      <depends>
+        <task ref="Process"/>
+      </depends>
       <scriptExecutable>
         <script>
-          <code language="cpython">
+          <code language="groovy">
             <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
 
+print('Download finished!')
+print("END " + __file__)
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow block="end"/>
       <metadata>
         <positionTop>
-            328.34375
+            1051.984375
         </positionTop>
         <positionLeft>
-            769.984375
+            100.984375
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="Continuation2">
+    <task fork="false" name="Split2">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        <info name="Documentation" value="user/ProActiveUserGuide.html#_replicate"/>
       </genericInformation>
+      <depends>
+        <task ref="Fetch_Satellite_Images_From_Copernicus"/>
+      </depends>
       <scriptExecutable>
         <script>
           <code language="cpython">
             <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
 
+import os
+import sys
+import json
+import time
+import shutil
+import subprocess
+import random as r
+from zipfile import ZipFile
+from os.path import join, os
+from collections import OrderedDict
+from ast import literal_eval as make_tuple
+
+from distutils.dir_util import copy_tree
+from geojson import FeatureCollection
+
+try:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+except ImportError:
+    subprocess.call([sys.executable, "-m", "pip", "install", 'sentinelsat'])
+finally:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+
+
+if 'variables' in locals():
+    DATASET_PATH = variables.get("DATASET_PATH")  # folder dataset path 
+    GJSON_DATA = variables.get("GJSON_DATA")  # gson data
+    N_acq = variables.get("N_acq")  # number of features
+    
+gjson_dec = json.loads(GJSON_DATA.decode('utf-8'))
+gjson = FeatureCollection(gjson_dec)
+gjson['features'] = list(gjson['features']) 
+
+
+# Loop for each trial
+result = {}
+for i in range(N_acq): 
+    result[i] =  json.dumps(gjson[i])
+    print(result[i])
+    
+print("END " + __file__)
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow>
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=result.size()
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
       <metadata>
         <positionTop>
-            328.34375
+            797.984375
         </positionTop>
         <positionLeft>
-            897.984375
+            626.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" maxNumberOfExecution="2" name="Process2" runAsMe="true" taskRetryDelay="1:00">
+      <description>
+        <![CDATA[ This task will be replicated according to the 'runs' value specified in the replication script. The replication index is used in each task's instance to select the input. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        <info name="REQUIRED_LICENSES" value="$REQUIRED_LICENSES"/>
+        <info name="WALLTIME" value="$WALLTIME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Split2"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import os
+import sys
+import json
+import time
+import copy
+import shutil
+import psutil
+import pickle
+import subprocess
+import random as r
+from pathlib import Path
+from zipfile import ZipFile
+from os.path import join, os
+from collections import OrderedDict
+from geojson import FeatureCollection
+
+from distutils.dir_util import copy_tree
+from ast import literal_eval as make_tuple
+
+try:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+except ImportError:
+    subprocess.call([sys.executable, "-m", "pip", "install", 'sentinelsat'])
+finally:
+    from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+
+USER_NAME = credentials.get("USER_NAME_COP")  # user email
+USER_PASS = credentials.get("USER_PASS_COP")  # user password
+DATASET_PATH = variables.get("DATASET_PATH")  # folder dataset path 
+TIME_TO_RETRIEVE_IN_SECONDS = int(variables.get("TIME_TO_RETRIEVE_IN_SECONDS"))   # try product download in seconds
+TIME_TO_CHECK_IN_SECONDS = int(variables.get("TIME_TO_CHECK_ONLINE_IN_SECONDS"))  # check online product download in seconds   
+
+# Get current job ID
+PA_JOB_ID = variables.get("PA_JOB_ID")
+
+# Print task replication number
+i = int(variables.get('PA_TASK_REPLICATION'))
+
+# Get data from the split task
+features_dec = json.loads(str(results[0].value()[i]))
+print("Task id: ", i, " ", features_dec)
+features = FeatureCollection(features_dec) 
+
+# Define the current 'dataset_path'
+os.chdir(DATASET_PATH)
+
+TASK_NUMBER = 'Process_' + str(i)
+output_path = join(DATASET_PATH, TASK_NUMBER, 'copernicus')
+
+# Create the folders
+os.makedirs(output_path, exist_ok=True)
+# Change the permission
+os.chmod(output_path, mode=0o770)
+
+print('The path output Copernicus dataset:', output_path)
+
+# -------------------------------------------------------------
+
+#  SentinelAPI
+api = SentinelAPI(USER_NAME, USER_PASS, 'https://scihub.copernicus.eu/dhus')
+# get dic with product filenames
+def get_filename(product):
+    dicfile = {}
+    cont = 1
+    query_id = list(product.keys())
+    for i in query_id:
+        ditc = {"Folder_" + str(cont): output_path + '/' + product[i]['filename']}
+        dicfile.update(ditc)
+        cont += 1
+    return dicfile
+
+filename = os.path.join(output_path, 'output.json')
+
+def add_info_json(features, filename):
+    json_object = json.dumps(features, sort_keys=True, indent=4)
+    # writing to filename.json 
+    with open(filename, "w") as outfile:
+        outfile.write(json_object)
+        
+    with open(filename, 'a+') as f:
+        print('Creating output.json file!')
+    
+# Create .json for each query
+add_info_json(features, filename)
+    
+def get_info_json(features, product_tmp):
+    dicfile = get_filename(product_tmp)
+    features['features'].update({'output_path': dicfile})
+
+# list of the online and offline products
+def request_analysis(product):
+    requests_online = OrderedDict()
+    requests_offline = OrderedDict()
+    for k in product.keys():  # print all keys
+        product_info = api.get_product_odata(k)
+        if product_info['Online']:
+            #print('Product {} is online.'.format(k))
+            requests_online[k] = product[k]
+        else:
+            #print('Product {} is not online.'.format(k))
+            requests_offline[k] = product[k]
+    return requests_online, requests_offline
+
+# download the online 
+def download_daemon(requests_online):
+    if len(requests_online) > 0:
+        for i in requests_online:
+            print('Product {} is online. Starting download.'.format(i))
+            api.download(i, directory_path=output_path, checksum=True)
+    else:
+        print('There are no products online.')
+
+# retrieve the products from LTA 
+def retrieve_from_lta(requests_offline):
+    requests_pending = OrderedDict()
+    for k in requests_offline:
+        req_pend = api.download(k, directory_path=output_path, checksum=True)  # download or retrieve product from LTA
+        requests_pending[k] = req_pend
+    if len(requests_pending) > 0:
+        print("%d Retreiving offline product, lets's wait {} seconds before trying again".format(TIME_TO_RETRIEVE_IN_SECONDS))
+        time.sleep(TIME_TO_RETRIEVE_IN_SECONDS)  # Delay in seconds
+    return requests_pending
+
+# check the online products regularly every time 
+def check_online(requests_pending):
+    requests_online_pending, requests_offline_pending = request_analysis(requests_pending)
+    if len(requests_online_pending) > 0:
+        download_daemon(requests_online_pending)
+            
+    if len(requests_offline_pending) > 0:
+        print("%d Check status product, lets's wait {} seconds.".format(TIME_TO_CHECK_IN_SECONDS))
+        time.sleep(TIME_TO_CHECK_IN_SECONDS) 
+        check_online(requests_offline_pending)
+    else:
+        print('All products were downloaded')
+    
+
+queries = []
+Nprods = []
+queries_json = []
+total_prod_size = 0
+product = OrderedDict()
+product_tmp = OrderedDict()
+
+try:
+    footprint = geojson_to_wkt(features['geometry'], decimals=6)
+    platform_name = features['properties']["platformname"]
+    product_type = features['properties']["producttype"]
+    start_date = features['properties']["beginposition"]
+    end_date = features['properties']["endposition"]
+except:
+    footprint = geojson_to_wkt(features['geometry'], decimals=6)
+    platform_name = 'Sentinel-2'
+    product_type = 'S2MSI1C'
+    start_date = None
+    end_date = None
+    print('The latformname is defined by Sentinel-2!')
+    print('The producttype is defined by S2MSI1C!')
+    print('The beginposition and endposition are defined by None!')
+
+try:
+    cloud_cover_percentage = features['properties']["cloudcoverpercentage"]
+    cloud_cover_percentage =  make_tuple(cloud_cover_percentage)
+except:
+    cloud_cover_percentage =  (None, None)
+
+print('{s:{c}^{n}}'.format(s=' GEOJSON SETTINGS ', n=75, c='#'))
+print('{s:{c}^{n}}'.format(s='#', n=75, c='#'))
+print("Footprint:", footprint)
+print("Platform Name:", platform_name)
+print("Product Type:", product_type)
+print("Start Date:", start_date)
+print("End Date:", end_date)
+print("Cloud Cover Percentage:", cloud_cover_percentage)
+
+# query the OpenSearch API with the coordinates of an area, a date interval and any other search keywords accepted by the API.
+query_ac = api.query(area=footprint, producttype=product_type, date=(start_date, end_date),
+                         platformname=platform_name, cloudcoverpercentage=cloud_cover_percentage)
+queries.append(query_ac)
+# save the query results in an orderedDict
+product.update(query_ac)
+
+# api.count get the number of products matching a query
+Nprods.append(api.count(area=footprint, producttype=product_type, date=(start_date, end_date), platformname=platform_name))
+# geoJSON FeatureCollection containing footprints and metadata of the scenes
+queries_json.append(api.to_geojson(query_ac))
+
+# return the total file size in GB of all products in the OpenSearch response.
+total_prod_size += api.get_products_size(query_ac)
+
+print('{s:{c}^{n}}'.format(s=' CHECK DISC SPACE ', n=75, c='#'))
+total, used, free, percent = psutil.disk_usage(DATASET_PATH)
+print('Total: {}KB'.format(round(total))) 
+print('Used: {}KB'.format((round(used)))) 
+print('Free: {}KB'.format((round(free)))) 
+print('Total used (%): {}%'.format(round(percent))) 
+print('{s:{c}^{n}}'.format(s='', n=75, c='#'))
+
+# convert from Gigabytes (GB) to Kilobytes 
+kilobytes = total_prod_size*1048576
+
+# check if there is enough disk space
+if free < kilobytes:
+    print('Disk space available: {}KB'.format(free)) 
+    print('Total products size: {}KB'.format(kilobytes)) 
+    raise SystemExit('No space left on device: %s' % DATASET_PATH)
+                
+# Number of product(s)
+print('Total number of products available: {} '.format(len(product)))
+
+# list of the online and offline products
+requests_online, requests_offline = request_analysis(product)
+
+# Number of on versus off product(s)
+print('Online numnber of product(s): {} '.format(len(requests_online)))
+print('Offline numnber of product(s): {} '.format(len(requests_offline)))
+
+if requests_online:
+    try:
+        download_daemon(requests_online)
+        print('Download finished!')
+    except Exception as err:
+        print("Unexpected error:", err, sys.exc_info()[0])
+        raise
+else:
+    print("There no online product!")  
+
+if requests_offline:
+    try:
+        # retrieve the products from LTA 
+        requests_pending = retrieve_from_lta(requests_offline)
+        # check the online products regularly every time 
+        check_online(requests_pending)
+        print('Download finished!')
+    except Exception as err:
+        print("Unexpected error:", err, sys.exc_info()[0])
+        raise
+else:
+    print("There no offline product!") 
+
+# List all .zip folders
+folder_zip = [i for i in [os.path.relpath(os.path.join(output_path, p)) for p in os.listdir(output_path)] if
+              i.endswith('.zip')]
+
+# Unzip folders
+print('**********************************************************************************************************')
+print('Extracting all the files...')
+print('**********************************************************************************************************')
+
+def unzip_files(folder_zip, output_path):
+    corrupted_file = []
+    for file_name in folder_zip:
+        try:
+            shutil.unpack_archive(file_name, output_path)
+            print('Unzip file name: {} '.format(file_name))
+            # remove each successful zip file
+            os.remove(file_name)   
+        except:
+            corrupted_file.append(file_name)
+            print('Error while unzip file name: {}. Try to unzip it manually...'.format(file_name)) 
+            # remove each corrupted zip file
+            os.remove(file_name)   
+    return corrupted_file
+    
+
+# call unzip_files function 
+corrupted_file = unzip_files(folder_zip, output_path)
+
+
+if len(corrupted_file) > 0:
+    feature_data =  json.dumps(features).encode('utf-8')
+    
+    print('Deleting the folder: {}.'.format(join(DATASET_PATH, TASK_NUMBER))) 
+    # Remove the "dataset_path" directory
+    shutil.rmtree(join(DATASET_PATH, TASK_NUMBER))
+    raise SystemExit('Error caused by corrupted or incomplete products: {}'.format(corrupted_file))  
+    
+else:
+	# add info filename and save output json file
+    product_tmp.update(query_ac)
+    get_info_json(features, product_tmp)
+    product_tmp = OrderedDict()
+    
+    feature_data =  json.dumps(features).encode('utf-8')
+    variables.put("FEATURE_DATA"+str(i), feature_data)
+    
+    print('All files were successfully unzipped')
+    # List all .safe folders
+    folder_safe = [i for i in [os.path.relpath(os.path.join(output_path, p)) for p in os.listdir(output_path)] if
+               i.endswith('.SAFE')]
+
+    print('All zip file names: {} '.format( folder_zip))
+    print('All safe file names: {} '.format(folder_safe))
+    
+    # call again to save the outuput path in the json file
+    
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"/>
+      <metadata>
+        <positionTop>
+            925.984375
+        </positionTop>
+        <positionLeft>
+            626.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" name="Merge2">
+      <description>
+        <![CDATA[ As a merge operation, we simply print the results from previous tasks. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="PostProcess2"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import json
+import shutil
+import pickle
+from os.path import join, os
+from geojson import FeatureCollection
+
+dataset_path = variables.get("DATASET_PATH")  # folder dataset path
+output_path_corrupted_files = join(dataset_path , 'corrupted_files')
+output_path_suc_files = join(dataset_path , 'suc_files')
+
+# add info json
+def create_json(features, filename):
+    json_object = json.dumps(features, sort_keys=True, indent=4)
+    # writing to filename.json 
+    with open(filename, "w") as outfile:
+        outfile.write(json_object)
+
+def read_files(output_path_files):
+    features = []
+    corrupted_files = os.listdir(output_path_files)
+    for f in corrupted_files: 
+        fp = os.path.join(output_path_files, f)
+        content = pickle.load(open(fp,'rb'))
+        features.append(content)
+    return features
+
+
+if  os.path.isdir(output_path_corrupted_files):
+    features = read_files(output_path_corrupted_files)
+    feature_collection = FeatureCollection(features)
+    filename = os.path.join(dataset_path, 'output_error.json')
+    create_json(feature_collection, filename)
+    shutil.rmtree(output_path_corrupted_files)
+
+
+if os.path.isdir(output_path_suc_files):
+    features2 = read_files(output_path_suc_files)
+    feature_collection2 = FeatureCollection(features2)
+    filename = os.path.join(dataset_path, 'output.json')
+    create_json(feature_collection2, filename) 
+    shutil.rmtree(output_path_suc_files)
+    
+print('Finished!')
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"/>
+      <metadata>
+        <positionTop>
+            1175.984375
+        </positionTop>
+        <positionLeft>
+            626.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="PostProcess2" runAsMe="true">
+      <description>
+        <![CDATA[ The simplest task, ran by a Python engine. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/postprocess.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Process2"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+__file__ = variables.get("PA_TASK_NAME")
+
+import os
+import sys
+import json
+import time
+import copy
+import shutil
+import psutil
+import pickle
+import subprocess
+import random as r
+from pathlib import Path
+from zipfile import ZipFile
+from os.path import join, os
+from collections import OrderedDict
+from geojson import FeatureCollection
+
+
+i = int(variables.get('PA_TASK_REPLICATION'))            # task replication number
+DATASET_PATH = variables.get("DATASET_PATH")             # folder dataset path 
+TASK_NUMBER = 'Process_' + str(i)
+output_prod_path = join(DATASET_PATH, TASK_NUMBER)
+
+task_exception = results[0].hadException()
+print("task_exception: ", task_exception)
+
+
+if task_exception == True:
+    GJSON_DATA = variables.get("GJSON_DATA")      # gson data
+    gjson_dec = json.loads(GJSON_DATA.decode('utf-8'))
+    gjson = FeatureCollection(gjson_dec)
+    gjson['features'] = list(gjson['features']) 
+    feature = gjson[int(i)]
+    corrup_features = copy.deepcopy(feature)
+    
+    output_path_corrupted_files = join(DATASET_PATH, 'corrupted_files')
+    os.makedirs(output_path_corrupted_files, exist_ok=True)
+    os.chmod(output_path_corrupted_files, mode=0o770)
+    
+    # generate error file
+    name_error =  TASK_NUMBER + '_output_error.ob'
+    filename_error = os.path.join(output_path_corrupted_files, name_error)    
+
+    with open(filename_error, 'wb') as fp:
+        pickle.dump(corrup_features, fp)
+           
+    # Check whether the specified path is an existing directory or not 
+    isdir = os.path.exists(output_prod_path) 
+    if isdir:
+        shutil.rmtree(output_prod_path)
+        
+else:
+    FEATURE_DATA = variables.get("FEATURE_DATA"+str(i))      # gson data
+    feature = json.loads(FEATURE_DATA.decode('utf-8'))
+    succ_features = copy.deepcopy(feature)
+    
+    output_path_suc_files = join(DATASET_PATH, 'suc_files')
+    os.makedirs(output_path_suc_files, exist_ok=True)
+    os.chmod(output_path_suc_files, mode=0o770)
+    
+    name_suc =  TASK_NUMBER + '_output.ob'
+    filename_suc = os.path.join(output_path_suc_files, name_suc)
+
+    with open(filename_suc, 'wb') as fp:
+        pickle.dump(succ_features['features'], fp) 
+        
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"/>
+      <metadata>
+        <positionTop>
+            1051.984375
+        </positionTop>
+        <positionLeft>
+            626.984375
         </positionLeft>
       </metadata>
     </task>
@@ -880,22 +1541,22 @@ print("END " + __file__)
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2144px;
-            height:2464px;
+            width:2300px;
+            height:2476px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-195.34375px;left:-252.984375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_111" style="top: 200.344px; left: 385.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_114" style="top: 328.344px; left: 257.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a PEPS dataset including a
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-408.984375px;left:-95.984375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_116" style="top: 542px; left: 289px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_119" style="top: 670px; left: 101px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a PEPS dataset including a
 'metadata folder' with metadata files and 'images folder' containing satellite images.
 
 Please access https://peps.cnes.fr/rocket/#/register to create a new user account from Peps website.
 
-Please add third party credentials (USER_NAME_PEPS and USER_PASS_PEPS) in the Scheduling &amp; Orchestration interface → Manage Third-Party Credentials to connect to PEPS."><img src="/automation-dashboard/styles/patterns/img/wf-icons/peps-logo.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_PEPS</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_117" style="top: 328.344px; left: 385.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_120" style="top: 328.344px; left: 513.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_123" style="top: 200.344px; left: 769.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition2</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_126" style="top: 328.344px; left: 641.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a Copernicus dataset including a 'metadata folder' with metadata files and 'images folder' containing satellite images according to the resolution &amp; image band selected by user.
+Please add third party credentials (USER_NAME_PEPS and USER_PASS_PEPS) in the Scheduling &amp; Orchestration interface → Manage Third-Party Credentials to connect to PEPS."><img src="/automation-dashboard/styles/patterns/img/wf-icons/peps-logo.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_PEPS</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_122" style="top: 670px; left: 289px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_125" style="top: 670px; left: 427px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_128" style="top: 542px; left: 827px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition2</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_131" style="top: 670px; left: 627px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return a Copernicus dataset including a 'metadata folder' with metadata files and 'images folder' containing satellite images according to the resolution &amp; image band selected by user.
 
 Please access https://peps.cnes.fr/rocket/#/register to create a new user account from Copernicus website.
 
-Please add third party credentials (USER_NAME_COP and USER_PASS_COP) in the Scheduling &amp; Orchestration interface → Manage Third-Party Credentials to connect to Copernicus."><img src="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_Copernicus</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_129" style="top: 328.344px; left: 769.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else2</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_132" style="top: 328.344px; left: 897.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation2</span></a></div><svg style="position:absolute;left:247.5px;top:239.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 138 50 128 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_140" style="position: absolute; transform: translate(-50%, -50%); left: 321.5px; top: 283.5px;">if</div><svg style="position:absolute;left:370.98171321138256px;top:239.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_144" style="position: absolute; transform: translate(-50%, -50%); left: 378px; top: 283.5px;">else</div><svg style="position:absolute;left:375.5px;top:239.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 128 88 C 138 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_148" style="position: absolute; transform: translate(-50%, -50%); left: 449.5px; top: 283.5px;">continuation</div><svg style="position:absolute;left:631.5px;top:239.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 138 50 128 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_154" style="position: absolute; transform: translate(-50%, -50%); left: 705.5px; top: 283.5px;">if</div><svg style="position:absolute;left:754.9817132113825px;top:239.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_158" style="position: absolute; transform: translate(-50%, -50%); left: 762px; top: 283.5px;">else</div><svg style="position:absolute;left:759.5px;top:239.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 128 88 C 138 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_162" style="position: absolute; transform: translate(-50%, -50%); left: 833.5px; top: 283.5px;">continuation</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 426px; top: 230px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 376px; top: 230px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 348px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 248px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 426px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 376px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 554px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 504px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 810px; top: 230px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 760px; top: 230px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 744px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 632px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 810px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 760px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 938px; top: 358px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 888px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div></div></div>
+Please add third party credentials (USER_NAME_COP and USER_PASS_COP) in the Scheduling &amp; Orchestration interface → Manage Third-Party Credentials to connect to Copernicus."><img src="/automation-dashboard/styles/patterns/img/wf-icons/copernicus.png" width="20px">&nbsp;<span class="name">Fetch_Satellite_Images_From_Copernicus</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_134" style="top: 670px; left: 827px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else2</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_137" style="top: 670px; left: 965.001px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation2</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_140" style="top: 414px; left: 558px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Import geo dataset."><img src="/automation-dashboard/styles/patterns/img/wf-icons/geodata.jpg" width="20px">&nbsp;<span class="name">Import_GeoData</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_143" style="top: 798px; left: 101px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task defines some input, here strings to be processed."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Split</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_146" style="top: 926px; left: 101px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task will be replicated according to the 'runs' value specified in the replication script. The replication index is used in each task's instance to select the input."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Process</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_149" style="top: 1052px; left: 101px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="As a merge operation, we simply print the results from previous tasks."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Merge</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_152" style="top: 798px; left: 627px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task defines some input, here strings to be processed."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Split2</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_155" style="top: 926px; left: 627px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task will be replicated according to the 'runs' value specified in the replication script. The replication index is used in each task's instance to select the input."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Process2</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_158" style="top: 1176px; left: 627px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="As a merge operation, we simply print the results from previous tasks."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">Merge2</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_161" style="top: 1052px; left: 627px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/automation-dashboard/styles/patterns/img/wf-icons/postprocess.png" width="20px">&nbsp;<span class="name">PostProcess2</span></a></div><svg style="position:absolute;left:328.5px;top:453.5px" width="294.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 283.5 50 273.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M46.32786900000001,58.618708 L67.3591773425321,61.20406472612887 L60.00744872175862,55.64060480567469 L64.38107414820679,47.524485004370256 L46.32786900000001,58.618708" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M46.32786900000001,58.618708 L67.3591773425321,61.20406472612887 L60.00744872175862,55.64060480567469 L64.38107414820679,47.524485004370256 L46.32786900000001,58.618708" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:90.5px;top:581.5px" width="209" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 198 50 188 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.646870500000002,59.788559500000005 L48.83128506046604,60.25821866398432 L40.96015039977941,55.457672949866236 L44.50039851033227,46.94493876420492 L27.646870500000002,59.788559500000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.646870500000002,59.788559500000005 L48.83128506046604,60.25821866398432 L40.96015039977941,55.457672949866236 L44.50039851033227,46.94493876420492 L27.646870500000002,59.788559500000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_172" style="position: absolute; transform: translate(-50%, -50%); left: 194.5px; top: 625.5px;">if</div><svg style="position:absolute;left:273.98171321138256px;top:581.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_176" style="position: absolute; transform: translate(-50%, -50%); left: 281px; top: 625.5px;">else</div><svg style="position:absolute;left:278.5px;top:581.5px" width="159" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 138 88 C 148 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_180" style="position: absolute; transform: translate(-50%, -50%); left: 357.5px; top: 625.5px;">continuation</div><svg style="position:absolute;left:602px;top:453.5px" width="285.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 264.5 88 C 274.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M219.786137,58.618708 L201.81012501910658,47.3998402646723 L206.1274902456297,55.54602694930022 L198.7374439684068,61.05848701904261 L219.786137,58.618708" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M219.786137,58.618708 L201.81012501910658,47.3998402646723 L206.1274902456297,55.54602694930022 L198.7374439684068,61.05848701904261 L219.786137,58.618708" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:616.5px;top:581.5px" width="221" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 210 50 200 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.75904,59.394175999999995 L51.92923168611267,60.30136064120916 L44.158945939755114,55.339238169932116 L47.8742938560448,46.90145470145404 L30.75904,59.394175999999995" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.75904,59.394175999999995 L51.92923168611267,60.30136064120916 L44.158945939755114,55.339238169932116 L47.8742938560448,46.90145470145404 L30.75904,59.394175999999995" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_189" style="position: absolute; transform: translate(-50%, -50%); left: 726.5px; top: 625.5px;">if</div><svg style="position:absolute;left:811.9817132113825px;top:581.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_193" style="position: absolute; transform: translate(-50%, -50%); left: 819px; top: 625.5px;">else</div><svg style="position:absolute;left:816.5px;top:581.5px" width="159" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 138 88 C 148 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_197" style="position: absolute; transform: translate(-50%, -50%); left: 895.5px; top: 625.5px;">continuation</div><svg style="position:absolute;left:140.5px;top:709.5px" width="71" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 60 50 50 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M2.319999999999998,64.44800000000001 L19.842377216519672,52.53303895591799 L10.646502089767194,53.19325153772407 L8.587628754243738,44.206536866150785 L2.319999999999998,64.44800000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M2.319999999999998,64.44800000000001 L19.842377216519672,52.53303895591799 L10.646502089767194,53.19325153772407 L8.587628754243738,44.206536866150785 L2.319999999999998,64.44800000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:166.46578674770865px;top:827.5px" width="15.034213252291345" height="99" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 88 -10 -10 0 0 " transform="translate(14.534213252291345,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.889249999999999,77.41936575 L-0.6632823303137547,56.65542592021898 L-6.785898453911784,63.54843482802241 L-14.534213252291345,58.55207437413076 L-4.889249999999999,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(14.534213252291345,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.889249999999999,77.41936575 L-0.6632823303137547,56.65542592021898 L-6.785898453911784,63.54843482802241 L-14.534213252291345,58.55207437413076 L-4.889249999999999,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(14.534213252291345,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_206" style="position: absolute; transform: translate(-50%, -50%); left: 173px; top: 877.75px;">replicate</div><svg style="position:absolute;left:135.98171321138253px;top:837.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path></svg><svg style="position:absolute;left:135.97835549527008px;top:965.5px" width="15.521644504729927" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 86 C -10 36 -10 50 0 0 " transform="translate(15.021644504729927,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,64.94400000000002 L-1.2792764656232984,43.975321988607305 L-7.004697339623629,51.20163196089339 L-15.021644504729927,46.64876932823094 L-4.331249999999999,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(15.021644504729927,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,64.94400000000002 L-1.2792764656232984,43.975321988607305 L-7.004697339623629,51.20163196089339 L-15.021644504729927,46.64876932823094 L-4.331249999999999,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(15.021644504729927,0.5)"></path></svg><svg style="position:absolute;left:666.5px;top:709.5px" width="83" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 72 50 62 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.8637169999999985,63.998374500000004 L22.563757325458827,54.03300988919857 L13.35014363534506,53.70236995006823 L12.267752775527054,44.54658325385351 L3.8637169999999985,63.998374500000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.8637169999999985,63.998374500000004 L22.563757325458827,54.03300988919857 L13.35014363534506,53.70236995006823 L12.267752775527054,44.54658325385351 L3.8637169999999985,63.998374500000004" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:692.4657867477086px;top:827.5px" width="15.034213252291345" height="99" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 88 -10 -10 0 0 " transform="translate(14.534213252291345,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.889249999999999,77.41936575 L-0.6632823303137547,56.65542592021898 L-6.785898453911784,63.54843482802241 L-14.534213252291345,58.55207437413076 L-4.889249999999999,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(14.534213252291345,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.889249999999999,77.41936575 L-0.6632823303137547,56.65542592021898 L-6.785898453911784,63.54843482802241 L-14.534213252291345,58.55207437413076 L-4.889249999999999,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(14.534213252291345,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_221" style="position: absolute; transform: translate(-50%, -50%); left: 699px; top: 877.75px;">replicate</div><svg style="position:absolute;left:661.9817132113825px;top:837.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path></svg><svg style="position:absolute;left:661.8846994657227px;top:1091.5px" width="15.615300534277214" height="85" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 84 C -10 34 -10 50 0 0 " transform="translate(15.115300534277214,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,63.10631250000001 L-1.3868194094634143,42.122263117254256 L-7.075116980309219,49.37783137518621 L-15.115300534277214,44.86613009756348 L-4.331249999999999,63.10631250000001" class="" stroke="#666" fill="#666" transform="translate(15.115300534277214,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,63.10631250000001 L-1.3868194094634143,42.122263117254256 L-7.075116980309219,49.37783137518621 L-15.115300534277214,44.86613009756348 L-4.331249999999999,63.10631250000001" class="" stroke="#666" fill="#666" transform="translate(15.115300534277214,0.5)"></path></svg><svg style="position:absolute;left:661.9783554952701px;top:965.5px" width="15.521644504729927" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 86 C -10 36 -10 50 0 0 " transform="translate(15.021644504729927,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,64.94400000000002 L-1.2792764656232984,43.975321988607305 L-7.004697339623629,51.20163196089339 L-15.021644504729927,46.64876932823094 L-4.331249999999999,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(15.021644504729927,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.331249999999999,64.94400000000002 L-1.2792764656232984,43.975321988607305 L-7.004697339623629,51.20163196089339 L-15.021644504729927,46.64876932823094 L-4.331249999999999,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(15.021644504729927,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 329px; top: 572px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 329px; top: 532px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 279px; top: 572px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 191px; top: 700px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 91px; top: 660px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 329px; top: 700px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 279px; top: 660px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 467px; top: 700px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 417px; top: 660px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 867px; top: 572px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 867px; top: 532px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 817px; top: 572px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 729px; top: 700px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 617px; top: 660px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 867px; top: 700px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 817px; top: 660px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1005px; top: 700px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 955px; top: 660px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 602.5px; top: 444px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 141px; top: 828px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 141px; top: 788px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 171px; top: 828px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 141px; top: 956px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 171px; top: 916px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 141px; top: 916px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 141px; top: 1082px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 141px; top: 1042px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 828px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 788px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 697px; top: 828px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 956px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 697px; top: 916px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 916px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 1206px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 1166px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 1082px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 1042px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
