@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="SSH_Terminal_Via_Browser" onTaskError="continueJobExecution" priority="normal" projectName="Service Automation - Deployment" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="shell-terminal-${PA_JOB_ID}"/>
+    <variable model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/hosts)" name="TARGET_HOST" value=""/>
+    <variable model="PA:INTEGER" name="SSH_PORT" value="22"/>
+    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
+  </variables>
+  <description>
+    <![CDATA[ Deploy a Wetty service to provide to users a SSH terminal via a web browser. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="service-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+<info name="pca.states" value="(VOID,RUNNING)"/>
+<info name="Documentation" value="https://github.com/butlerx/wetty"/>
+<info name="pca.service.id" value="SSH_via_Browser"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Start_Shell_Terminal">
+      <description>
+        <![CDATA[ Pull Wetty image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="Documentation" value="PSA/PSAUserGuide.html"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("ENDPOINT_ID","shell-terminal-"+variables.get("PA_JOB_ID"))
+variables.put("HTTP_ENABLED","true")
+
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+def endpointID = variables.get("ENDPOINT_ID")
+def proxified = variables.get("PROXYFIED")
+
+def pcaPublicUrl = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+
+if ("true".equalsIgnoreCase(proxified)) {
+    proxyfiedURL = pcaPublicUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
+    wsURL = proxyfiedURL.replace("https://", "wss://")
+    wsURL = wsURL.replace("http://", "ws://")
+    println "Proxyfied URL :" + proxyfiedURL
+    println "WebSocket URL :" + wsURL
+    variables.put("PROXYFIED_URL", proxyfiedURL)
+    variables.put("WS_PROXYFIED_URL", wsURL)
+}
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+################################################################################
+### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+# Check if the Linux machine supports AVX instructions
+DOCKER_IMAGE=svenihoney/wetty
+TERMINAL_INTERNAL_PORT=3000
+INSTANCE_NAME=$variables_INSTANCE_NAME
+
+
+if [ -z "$variables_TARGET_HOST" ]
+then
+      TARGET_HOST=$variables_PA_NODE_HOST
+else
+      TARGET_HOST=$variables_TARGET_HOST
+fi
+################################################################################
+GET_RANDOM_PORT(){
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+echo "Picking a random port number"
+TERMINAL_HOST_PORT=$(GET_RANDOM_PORT)
+
+echo "[INFO] The service will be initialized on port $TERMINAL_HOST_PORT"
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed."
+    exit 1
+fi
+
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
+
+if [ "$(docker ps --format '{{.Names}}' | grep ^$INSTANCE_NAME$)" ]; then
+    RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+    STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
+    if [ "${RUNNING,,}" = "true" ]; then
+        echo "$INSTANCE_NAME container is running"
+    elif [ "${STOPPED,,}" = "exited" ]; then
+        echo "Starting $INSTANCE_NAME container"
+        docker start $INSTANCE_NAME
+    fi
+else
+    echo "Running $INSTANCE_NAME container"
+    echo docker run -d --name $INSTANCE_NAME -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT -e REMOTE_SSH_SERVER=$TARGET_HOST -e REMOTE_SSH_PORT=$variables_SSH_PORT $DOCKER_IMAGE
+    docker run -d --name $INSTANCE_NAME -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT -e REMOTE_SSH_SERVER=$TARGET_HOST -e REMOTE_SSH_PORT=$variables_SSH_PORT $DOCKER_IMAGE  
+fi
+
+TERMINAL_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$TERMINAL_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$TERMINAL_PORT" > $INSTANCE_NAME"_port"
+
+containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
+echo "$containerID" > $INSTANCE_NAME"_containerID"
+
+echo END "$variables_PA_TASK_NAME"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Post_Start_Service/raw"/>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            392
+        </positionTop>
+        <positionLeft>
+            630.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Check_Status">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="Documentation" value="PSA/PSAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_Shell_Terminal"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Check_Instance_Status/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="Check_Status">
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw"/>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            521
+        </positionTop>
+        <positionLeft>
+            632.25
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2732px;
+            height:3128px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-387px;left:-625.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_419" style="top: 392px; left: 630.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Wetty image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">Start_Shell_Terminal</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_422" style="top: 521px; left: 632.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">Check_Status</span></a></div><svg style="position:absolute;left:671.5px;top:431.5px" width="32.5" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 21.5 50 11.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.8502560000000003,67.21769599999999 L8.594093546719241,48.78089685953242 L0.6388565998119509,53.44074719173851 L-5.1828552615422385,46.29178425972047 L-1.8502560000000003,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.8502560000000003,67.21769599999999 L8.594093546719241,48.78089685953242 L0.6388565998119509,53.44074719173851 L-5.1828552615422385,46.29178425972047 L-1.8502560000000003,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:712.0266769263776px;top:470.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_433" style="position: absolute; transform: translate(-50%, -50%); left: 724px; top: 540.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 683.5px; top: 422px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 672px; top: 551px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 672px; top: 511px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 722px; top: 511px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 722px; top: 551px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
