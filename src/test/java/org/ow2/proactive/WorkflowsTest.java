@@ -75,7 +75,7 @@ public class WorkflowsTest {
 
     @Parameterized.Parameters(name = "{index}: testing workflow - {0}")
     public static Collection<String> data() throws IOException {
-        return Files.list(Paths.get(""))
+        return Files.list(Paths.get("build"))
                     .filter(packagePath -> isPackageDirIncludingCatalogObjects(packagePath))
                     .map(packagePath -> Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH))
                     .flatMap(resourcesPath -> {
