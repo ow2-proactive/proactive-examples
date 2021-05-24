@@ -93,40 +93,6 @@ An example of a catalog object that represents a workflow:
 
 But if you need to have strict order of buckets, then please update `ordered_bucket_list` by adding the package name (order by name). The whole list should be stored as 1 line without any spaces or end line character.
 
-6) Update `build.gradle` by finding `task zip (type: Zip)` function and adding an **include** for your package (e.g. ``include 'TextAnalysis/**'``). Example:
-```
-task zip (type: Zip){
-    archiveName="proactive-examples.zip"
-    destinationDir = file('build/')
-    from '.'
-    include 'AWS/**'
-    include 'Clearwater/**'
-    include 'CloudAutomationTemplate/**'
-    include 'Cron/**'
-    include 'DockerBasics/**'
-    include 'DockerSwarm/**'
-    include 'Email/**'
-    include 'FileFolderManagement/**'
-    include 'FinanceMonteCarlo/**'
-    include 'GetStarted/**'
-    include 'HDFS/**'
-    include 'ImageAnalysis/**'
-    include 'JobAnalysis/**'
-    include 'LogAnalysis/**'
-    include 'MLBasics/**'
-    include 'MLNodeSource/**'
-    include 'OpenStack/**'
-    include 'RemoteVisualization/**'
-    include 'Spark/**'
-    include 'SparkOrchestration/**'
-    include 'Storm/**'
-    include 'TextAnalysis/**'
-    include 'TriggerTemplate/**'
-    include 'TwitterApi/**'
-    include 'WebNotification/**'
-    include 'ordered_bucket_list'
-}
-```
 #  The rules for added workflows
 All the workflows added in proactive-examples project have to follow the next rules:
 
