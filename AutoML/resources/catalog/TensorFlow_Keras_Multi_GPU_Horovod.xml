@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="TensorFlow_Keras_Multi_GPU_Horovod" onTaskError="continueJobExecution" priority="normal" projectName="5. Distributed Training" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable name="NATIVE_SCHEDULER" value=""/>
+    <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
+    <variable name="NODE_ACCESS_TOKEN" value=""/>
+    <variable model="PA:Integer[1,32]" name="NUMBER_OF_GPU" value="1"/>
+    <variable model="PA:Integer" name="NUMBER_OF_EPOCHS" value="10"/>
+    <variable model="PA:JSON" name="INPUT_VARIABLES" value="{&quot;OPTIMIZER&quot;: &quot;Adam&quot;, &quot;LR&quot;: 0.001}"/>
+    <variable model="PA:JSON" name="SEARCH_SPACE" value="{&quot;OPTIMIZER&quot;: {&quot;choice&quot;: [&quot;Adam&quot;, &quot;SGD&quot;, &quot;RMSprop&quot;]}, &quot;LR&quot;: {&quot;choice&quot;: [0.01, 0.001, 0.0001]}}"/>
+    <variable model="PA:LIST(baremetal,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
+    <variable name="CONTAINER_IMAGE" value="docker://activeeon/horovod"/>
+  </variables>
+  <description>
+    <![CDATA[ A Horovod workflow with multi-gpu support. Horovod is a distributed training framework for TensorFlow, Keras, PyTorch, and MXNet. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="auto-ml-optimization"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/horovod.png"/>
+<info name="NS" value="$NATIVE_SCHEDULER"/>
+<info name="PYTHON_COMMAND" value="python"/>
+<info name="Documentation" value="PML/PMLUserGuide.html#_distributed_training"/>
+<info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
+<info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="TensorFlow_Keras_Multi_GPU_Horovod_Task">
+      <description>
+        <![CDATA[ A Horovod workflow with multi-gpu support. Horovod is a distributed training framework for TensorFlow, Keras, PyTorch, and MXNet. ]]>
+      </description>
+      <variables>
+        <variable inherited="false" name="TASK_FILE_PATH" value="main.py"/>
+        <variable inherited="false" model="PA:LIST(python,python3,/home/proactive/anaconda3/bin/python)" name="PYTHON_COMMAND" value="python"/>
+        <variable inherited="true" model="PA:Integer[1,32]" name="NUMBER_OF_GPU" value="1"/>
+        <variable inherited="true" model="PA:Integer" name="NUMBER_OF_EPOCHS" value="10"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/horovod.png"/>
+        <info name="PRE_SCRIPT_AS_FILE" value="$TASK_FILE_PATH"/>
+        <info name="PYTHON_COMMAND" value="$PYTHON_COMMAND"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_distributed_training"/>
+      </genericInformation>
+      <depends>
+        <task ref="get_automl_variables"/>
+      </depends>
+      <parallel numberOfNodes="1">
+        <topology>
+          <singleHostExclusive/>
+        </topology>
+      </parallel>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+# Copyright 2019 Uber Technologies, Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+import os
+import json
+import socket
+import tensorflow as tf
+import horovod.tensorflow.keras as hvd
+
+# Horovod: initialize Horovod.
+hvd.init()
+
+# Get host and script name
+if "variables_PA_TASK_NAME" in os.environ:
+    __file__ = os.environ['variables_PA_TASK_NAME']
+print("BEGIN " + __file__)
+print("Running on: ", socket.gethostname())
+
+# Get the job ID from Proactive
+PA_JOB_ID = 0
+if "variables_PA_TASK_NAME" in os.environ:
+    PA_JOB_ID = int(os.environ['variables_PA_JOB_ID'])
+
+# Default parameters
+OPTIMIZER = "Adam"
+LR = 0.001
+EPOCHS = 10
+
+# Get job variables
+if "variables_NUMBER_OF_EPOCHS" in os.environ:
+    EPOCHS = int(os.environ['variables_NUMBER_OF_EPOCHS'])
+
+############################ INPUT FROM AUTOML ############################
+# Get the workflow input variables generated by AutoML.
+# The AutoML workflow uses the SEARCH_SPACE workflow variable
+# to generate a set of parameters to be used to train your model.
+#
+# Example of search space for hyper parameter optimization:
+#   SEARCH_SPACE: {"OPTIMIZER": {"choice": ["Adam", "SGD", "RMSprop"]}, "LR": {"choice": [0.01, 0.001, 0.0001]}}
+# Put it in your workflow variables.
+#
+# For more info, please see:
+# https://try.activeeon.com/doc/PML/PMLUserGuide.html#_AutoML
+#
+if "variables_INPUT_VARIABLES" in os.environ:
+    input_variables = os.environ['variables_INPUT_VARIABLES']
+    if input_variables is not None and input_variables != '':
+        input_variables = json.loads(input_variables)
+        OPTIMIZER = input_variables["OPTIMIZER"]
+        LR = float(input_variables["LR"])
+        # ...
+if hvd.rank() == 0:
+    print('Selected epochs:        ', EPOCHS)
+    print('Selected optimizer:     ', OPTIMIZER)
+    print('Selected learning rate: ', LR)
+###########################################################################
+
+# Horovod: pin GPU to be used to process local rank (one GPU per process)
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+if gpus:
+    tf.config.experimental.set_visible_devices(gpus[hvd.local_rank()], 'GPU')
+
+(mnist_images, mnist_labels), (mnist_images_test, mnist_labels_test) = \
+    tf.keras.datasets.mnist.load_data(path='mnist-%d.npz' % hvd.rank())
+
+dataset = tf.data.Dataset.from_tensor_slices(
+    (tf.cast(mnist_images[..., tf.newaxis] / 255.0, tf.float32),
+             tf.cast(mnist_labels, tf.int64))
+)
+dataset_test = tf.data.Dataset.from_tensor_slices(
+    (tf.cast(mnist_images_test[..., tf.newaxis] / 255.0, tf.float32),
+             tf.cast(mnist_labels_test, tf.int64))
+)
+dataset = dataset.repeat().shuffle(10000).batch(128)
+dataset_test = dataset_test.batch(32)
+
+mnist_model = tf.keras.Sequential([
+    tf.keras.layers.Conv2D(32, [3, 3], activation='relu'),
+    tf.keras.layers.Conv2D(64, [3, 3], activation='relu'),
+    tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),
+    tf.keras.layers.Dropout(0.25),
+    tf.keras.layers.Flatten(),
+    tf.keras.layers.Dense(128, activation='relu'),
+    tf.keras.layers.Dropout(0.5),
+    tf.keras.layers.Dense(10, activation='softmax')
+])
+
+# Horovod: adjust learning rate based on number of GPUs.
+learning_rate = LR # 0.001
+scaled_lr = learning_rate * hvd.size()
+opt = tf.optimizers.Adam(scaled_lr)
+
+optimizer = None
+if OPTIMIZER.lower() == 'adam':
+    optimizer = tf.optimizers.Adam(scaled_lr)
+if OPTIMIZER.lower() == 'sgd':
+    optimizer = tf.optimizers.SGD(scaled_lr)
+if OPTIMIZER.lower() == 'rmsprop':
+    optimizer = tf.optimizers.RMSprop(scaled_lr)
+if optimizer is None:
+    sys.exit("Optimizer not defined!")
+
+# Horovod: add Horovod DistributedOptimizer.
+opt = hvd.DistributedOptimizer(
+    opt, backward_passes_per_step=1, average_aggregated_gradients=True)
+
+# Horovod: Specify `experimental_run_tf_function=False` to ensure TensorFlow
+# uses hvd.DistributedOptimizer() to compute gradients.
+mnist_model.compile(loss=tf.losses.SparseCategoricalCrossentropy(),
+                    optimizer=opt,
+                    metrics=['accuracy'],
+                    experimental_run_tf_function=False)
+
+callbacks = [
+    # Horovod: broadcast initial variable states from rank 0 to all other processes.
+    # This is necessary to ensure consistent initialization of all workers when
+    # training is started with random weights or restored from a checkpoint.
+    hvd.callbacks.BroadcastGlobalVariablesCallback(0),
+
+    # Horovod: average metrics among workers at the end of every epoch.
+    #
+    # Note: This callback must be in the list before the ReduceLROnPlateau,
+    # TensorBoard or other metrics-based callbacks.
+    hvd.callbacks.MetricAverageCallback(),
+
+    # Horovod: using `lr = 1.0 * hvd.size()` from the very beginning leads to worse final
+    # accuracy. Scale the learning rate `lr = 1.0` ---> `lr = 1.0 * hvd.size()` during
+    # the first three epochs. See https://arxiv.org/abs/1706.02677 for details.
+    hvd.callbacks.LearningRateWarmupCallback(initial_lr=scaled_lr, warmup_epochs=3, verbose=1),
+]
+
+# Horovod: save checkpoints only on worker 0 to prevent other workers from corrupting them.
+# if hvd.rank() == 0:
+#     callbacks.append(tf.keras.callbacks.ModelCheckpoint('./checkpoint-{epoch}.h5'))
+
+# Horovod: write logs on worker 0.
+verbose = 1 if hvd.rank() == 0 else 0
+
+# Number of epochs
+epochs = EPOCHS # 10
+
+# Train the model.
+# Horovod: adjust number of steps based on number of GPUs.
+history = mnist_model.fit(dataset, steps_per_epoch=500 // hvd.size(), callbacks=callbacks, epochs=epochs, verbose=verbose)
+
+############################ OUTPUT FOR AUTOML ############################
+if hvd.rank() == 0:
+    train_acc = history.history['accuracy'][-1]
+    train_loss = history.history['loss'][-1]
+    print("Train loss: ", train_loss)
+    print("Train acc:  ", train_acc)
+###########################################################################
+    test_loss, test_acc = mnist_model.evaluate(dataset_test, verbose=0)
+    print("Test loss: ", test_loss)
+    print("Test acc:  ", test_acc)
+###########################################################################
+    data = {}
+    data['train_loss'] = float(train_loss)
+    data['train_acc'] = float(train_acc)
+    data['test_loss'] = float(test_loss)
+    data['test_acc'] = float(test_acc)
+    result_file = 'job_id_'+str(PA_JOB_ID)+'_result.json'
+    with open(result_file, 'w') as outfile:
+        json.dump(data, outfile)
+###########################################################################
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+# Run on a machine with 4 GPUs:
+# horovodrun -np 4 python train.py
+#
+# Equivalent Open MPI command:
+# mpirun -np 4 \
+#    -bind-to none -map-by slot \
+#    -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
+#    -mca pml ob1 -mca btl ^openib \
+#    python train.py
+#
+# Run on 4 machines with 4 GPUs each:
+# horovodrun -np 16 -H server1:4,server2:4,server3:4,server4:4 python train.py
+#
+# Equivalent Open MPI command:
+# mpirun -np 16 \
+#    -H server1:4,server2:4,server3:4,server4:4 \
+#    -bind-to none -map-by slot \
+#    -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
+#    -mca pml ob1 -mca btl ^openib \
+#    python train.py
+
+echo "NUMBER_OF_GPU = $variables_NUMBER_OF_GPU"
+# echo "NUMBER_OF_NODES = $variables_NUMBER_OF_NODES"
+# echo "GPUS_PER_NODE   = $variables_GPUS_PER_NODE"
+# echo "PA_NODESNUMBER  = $variables_PA_NODESNUMBER"
+# echo "PA_NODESFILE    = $variables_PA_NODESFILE"
+echo "CONTAINER_PLATFORM = $variables_CONTAINER_PLATFORM"
+
+echo python=$variables_PYTHON_COMMAND
+python=$variables_PYTHON_COMMAND
+
+# echo --- PA_NODESFILE ---
+# cat $variables_PA_NODESFILE
+# echo --------------------
+
+# https://horovod.readthedocs.io/en/stable/mpi_include.html
+# echo mpirun -np $variables_NUMBER_OF_GPU -bind-to none -map-by slot -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH -x NCCL_SOCKET_IFNAME=^lo,docker0 -mca pml ob1 -mca btl ^openib $python $variables_TASK_FILE_PATH
+# mpirun -np $variables_NUMBER_OF_GPU -bind-to none -map-by slot -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH -x NCCL_SOCKET_IFNAME=^lo,docker0 -mca pml ob1 -mca btl ^openib $python $variables_TASK_FILE_PATH
+
+# echo horovodrun -np $variables_GPUS_PER_NODE -H `hostname`:$variables_GPUS_PER_NODE $python $variables_TASK_FILE_PATH
+# mpirun -np $variables_GPUS_PER_NODE -hostfile $variables_PA_NODESFILE -bind-to none -map-by slot -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH -mca pml ob1 -mca btl ^openib $python $variables_TASK_FILE_PATH
+
+horovodrun -np $variables_NUMBER_OF_GPU $python $variables_TASK_FILE_PATH
+
+# #
+# # baremetal
+# #
+# if [[ "$variables_CONTAINER_PLATFORM" == "baremetal" ]]; then
+# 	horovodrun -np $variables_NUMBER_OF_GPU $python $variables_TASK_FILE_PATH
+# fi
+# #
+# # docker container
+# #
+# if [[ "$variables_CONTAINER_PLATFORM" == "docker" ]]; then
+# 	docker run --rm --gpus all --privileged -v /tmp:/tmp -w `pwd` activeeon/horovod bash -c "horovodrun -np $variables_NUMBER_OF_GPU $python $variables_TASK_FILE_PATH"
+# fi
+# #
+# # singularity container
+# #
+# if [[ "$variables_CONTAINER_PLATFORM" == "singularity" ]]; then
+# 	echo "singularity not yet supported!"
+# fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"/>
+      <post>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import os
+import json
+
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# Get the job ID from Proactive
+PA_JOB_ID = int(variables.get("PA_JOB_ID"))
+
+############################ OUTPUT FOR AUTOML ############################
+# Read and send the loss to AutoML
+train_loss = 0
+train_acc = 0
+test_loss = 0
+test_acc = 0
+result_file = 'job_id_'+str(PA_JOB_ID)+'_result.json'
+if os.path.isfile(result_file):
+    with open(result_file) as json_file:
+        data = json.load(json_file)
+    train_loss = data['train_loss']
+    train_acc = data['train_acc']
+    test_loss = data['test_loss']
+    test_acc = data['test_acc']
+else:
+    print(result_file + " does not exists!")
+
+print("Train loss: ", train_loss)
+print("Train acc:  ", train_acc)
+print("Test loss: ", test_loss)
+print("Test acc:  ", test_acc)
+
+# Return the token + loss value
+token = variables.get("TOKEN")
+token = json.loads(token)
+result_map = {'token': token, 'loss':  test_loss}
+resultMap.put("RESULT_JSON", json.dumps(result_map))
+
+# To appear in Job Analytics
+resultMap.put("LOSS", str(test_loss))
+resultMap.put("ACCURACY", str(test_acc))
+resultMap.put("LOSS_TRAIN", str(train_loss))
+resultMap.put("ACCURACY_TRAIN", str(train_acc))
+###########################################################################
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            273.515625
+        </positionTop>
+        <positionLeft>
+            221.40625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="false" name="get_automl_variables">
+      <description>
+        <![CDATA[ Get the input variables from the Distributed_Auto_ML workflow during hyperparameter optimization. ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/auto-ml-optimization/resources/get_automl_variables/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"/>
+      <metadata>
+        <positionTop>
+            152
+        </positionTop>
+        <positionLeft>
+            248
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2114px;
+            height:2848px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-147px;left:-216.40625px"><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_37" style="top: 273.516px; left: 221.406px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A Horovod workflow with multi-gpu support. Horovod is a distributed training framework for TensorFlow, Keras, PyTorch, and MXNet."><img src="/automation-dashboard/styles/patterns/img/wf-icons/horovod.png" width="20px">&nbsp;<span class="name">TensorFlow_Keras_Multi_GPU_Horovod_Task</span></a></div><div class="task block-start _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_40" style="top: 152px; left: 248px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Get the input variables from the Distributed_Auto_ML workflow during hyperparameter optimization."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">get_automl_variables</span></a></div><svg style="position:absolute;left:302.5px;top:191.5px" width="49.5" height="83" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 28.5 82 C 38.5 32 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.896144,60.816448 L27.218299148210228,39.69336023676513 L23.239442086195652,48.01013223556711 L14.411983383777345,45.350062150569485 L28.896144,60.816448" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.896144,60.816448 L27.218299148210228,39.69336023676513 L23.239442086195652,48.01013223556711 L14.411983383777345,45.350062150569485 L28.896144,60.816448" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 331.5px; top: 304px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 331.5px; top: 264px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 303px; top: 182px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

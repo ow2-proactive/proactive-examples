@@ -9,13 +9,13 @@
     <variable model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda,docker://activeeon/cuda2,docker://activeeon/nvidia:tensorflow,docker://activeeon/tensorflow:latest,docker://activeeon/tensorflow:latest-gpu)" name="CONTAINER_IMAGE" value=""/>
     <variable model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="True"/>
     <variable model="PA:Boolean" name="CONTAINER_ROOTLESS_ENABLED" value="False"/>
-    <variable model="PA:Integer" name="NUM_EPOCHS" value="3"/>
+    <variable model="PA:Integer" name="NUM_EPOCHS" value="5"/>
     <variable model="PA:JSON" name="INPUT_VARIABLES" value="{&quot;OPTIMIZER&quot;: &quot;Adam&quot;,&quot;LEARNING_RATE&quot;: 0.0001, &quot;BATCH_SIZE&quot;: 32, &quot;WEIGHT_DECAY&quot;: 0.0005}"/>
     <variable model="PA:JSON" name="SEARCH_SPACE" value="{&quot;OPTIMIZER&quot;:{&quot;choice&quot;: [&quot;Adam&quot;, &quot;SGD&quot;, &quot;RMSprop&quot;]}, &quot;LEARNING_RATE&quot;:{&quot;choice&quot;: [0.0001, 0.00025]}, &quot;WEIGHT_DECAY&quot;:{&quot;choice&quot;: [0.0005, 0.005]}, &quot;BATCH_SIZE&quot;:{&quot;choice&quot;: [32, 64]}}"/>
     <variable model="PA:Boolean" name="TENSORBOARD_ENABLED" value="False"/>
-    <variable name="INSTANCE_NAME" value="tensorboard-server"/>
-    <variable name="CONTAINER_LOG_PATH" value="/tmp/$INSTANCE_NAME"/>
-    <variable name="HOST_LOG_PATH" value="/shared/$INSTANCE_NAME"/>
+    <variable name="TENSORBOARD_INSTANCE_NAME" value="tensorboard-server"/>
+    <variable name="TENSORBOARD_CONTAINER_LOG_PATH" value="/tmp/$INSTANCE_NAME"/>
+    <variable name="TENSORBOARD_HOST_LOG_PATH" value="/shared/$INSTANCE_NAME"/>
   </variables>
   <description>
     <![CDATA[ Train a simple deep CNN on the CIFAR10 images dataset using the Keras library. ]]>
@@ -23,29 +23,22 @@
   <genericInformation>
 <info name="bucketName" value="auto-ml-optimization"/>
 <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/keras.png"/>
-<info name="Documentation" value="PML/PMLUserGuide.html#_objective_ml_examples"/>
-<info name="NS" value="$NATIVE_SCHEDULER"/>
-<info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
-<info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
 <info name="NODESOURCENAME" value="$NODE_SOURCE_NAME"/>
+<info name="NS" value="$NATIVE_SCHEDULER"/>
+<info name="PYTHON_COMMAND" value="python3"/>
+<info name="Documentation" value="PML/PMLUserGuide.html#_hyperparameter_optimization"/>
+<info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
+<info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
 <info name="group" value="public-objects"/>
 </genericInformation>
   <taskFlow>
     <task fork="true" name="CIFAR10_Image_Classification">
       <description>
-        <![CDATA[ Train a simple deep CNN on the CIFAR10 images dataset using keras library.
-You can see more details in: https://github.com/prakritidev/DeepLearning/blob/master/Keras/Convolutional%20Neural%20Network/CIFAR10_cnn.py ]]>
+        <![CDATA[ Train a simple deep CNN on the CIFAR10 images dataset using the Keras library. ]]>
       </description>
-      <variables>
-        <variable inherited="true" name="TOKEN" value="{&quot;_token_id&quot;: 0}"/>
-        <variable inherited="false" model="PA:Integer" name="BATCH_SIZE" value="32"/>
-        <variable inherited="false" model="PA:DOUBLE" name="LEARNING_RATE" value="0.0001"/>
-        <variable inherited="false" model="PA:DOUBLE" name="WEIGHT_DECAY" value="1e-6"/>
-        <variable inherited="false" model="PA:LIST(Adam, SGD, RMSprop)" name="OPTIMIZER" value="Adam"/>
-      </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/keras.png"/>
-        <info name="task.documentation" value="PML/PMLUserGuide.html#_objective_ml_examples"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_hyperparameter_optimization"/>
       </genericInformation>
       <selection>
         <script type="static">
@@ -61,7 +54,7 @@ You can see more details in: https://github.com/prakritidev/DeepLearning/blob/ma
       </forkEnvironment>
       <pre>
         <script>
-          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/get_automl_variables/raw"/>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/auto-ml-optimization/resources/get_automl_variables/raw"/>
         </script>
       </pre>
       <scriptExecutable>
@@ -73,6 +66,47 @@ print("BEGIN " + __file__)
 
 import os, json, shutil
 
+######################### CHECK GPU AVAILABILITY ##########################
+try:
+    import GPUtil as GPU
+    from random import randint, uniform
+    # Set CUDA_DEVICE_ORDER so the IDs assigned by CUDA match those from nvidia-smi
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    # Show the utilization of all GPUs in a nice table
+    print("Current GPU utilization:")
+    GPU.showUtilization()
+    # Get the first available GPU
+    # order - The order in which the available GPU device ids are returned: first, last, random, load, memory
+    # limit - Limits the number of GPU device ids returned. Must be positive integer. (default = 1)
+    # maxLoad - Maximum current relative load for a GPU to be considered available. (default = 0.5)
+    # maxMemory - Maximum current relative memory usage for a GPU to be considered available. (default = 0.5)
+    # attempts - Number of attempts before giving up finding an available GPU. (default = 1)
+    # interval - Interval in seconds between each attempt to find an available GPU. (default = 900 --> 15 min)
+    # verbose - If True, prints the attempt number before each attempt and the GPU id if an available is found.
+    # NOTE: this step will fail if all GPUs are busy
+    # deviceIDs = GPUtil.getAvailable(order='first', limit=1, maxLoad=0.5, maxMemory=0.5)
+    maxMemory = 0.4  # round(uniform(0.2, 0.5), 2)
+    maxLoad = 0.4    # round(uniform(0.2, 0.5), 2)
+    attempts = 10    # internal attempts
+    interval = 10    # interval = randint(3, 30)  # 3sec to 30sec
+    print('Looking for available GPU id with memory < ' +
+          str(maxMemory * 100) + '%, and load < ' + str(maxLoad * 100) + '%)')
+    print('# of attempts: ' + str(attempts) + ', interval:' + str(interval))
+    DEVICE_ID_LIST = GPU.getFirstAvailable(
+        order='random', maxMemory=maxMemory, maxLoad=maxLoad, attempts=attempts, interval=interval
+    )
+    DEVICE_ID = DEVICE_ID_LIST[0]  # grab first element from list
+    print('First available GPU id (memory < ' +
+          str(maxMemory * 100) + '%, load < ' + str(maxLoad * 100) + '%):')
+    print(DEVICE_ID)
+    # Set CUDA_VISIBLE_DEVICES to mask out all other GPUs than the first available device id
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(DEVICE_ID)
+except:
+    pass
+###########################################################################
+
+
+################### IMPORT TENSORFLOW + KERAS LIBRARIES ###################
 # import tensorflow.keras as keras
 # from tensorflow.keras.callbacks import TensorBoard
 # from tensorflow.keras.datasets import cifar10
@@ -99,14 +133,67 @@ try:
 except:
     pass
 
+
+########################## CIFAR10 IMAGE DATASET ##########################
+def load_data():
+    """Loads [CIFAR10 dataset](https://www.cs.toronto.edu/~kriz/cifar.html).
+    This is a dataset of 50,000 32x32 color training images and 10,000 test
+    images, labeled over 10 categories. See more info at the
+    [CIFAR homepage](https://www.cs.toronto.edu/~kriz/cifar.html).
+    Returns:
+        Tuple of Numpy arrays: `(x_train, y_train), (x_test, y_test)`.
+        **x_train, x_test**: uint8 arrays of RGB image data with shape
+          `(num_samples, 3, 32, 32)` if `tf.keras.backend.image_data_format()` is
+          `'channels_first'`, or `(num_samples, 32, 32, 3)` if the data format
+          is `'channels_last'`.
+        **y_train, y_test**: uint8 arrays of category labels
+          (integers in range 0-9) each with shape (num_samples, 1).
+    """
+    import os
+    import numpy as np
+    from tensorflow.python.keras import backend as K
+    from tensorflow.python.keras.datasets.cifar import load_batch
+    from tensorflow.python.keras.utils.data_utils import get_file
+    from tensorflow.python.util.tf_export import keras_export
+    dirname = 'cifar-10-batches-py'
+    origin = 'https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'
+    path = get_file(
+        dirname,
+        origin=origin,
+        untar=True,
+        file_hash=
+        '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce',
+        cache_dir='/tmp/'
+    )
+    num_train_samples = 50000
+    x_train = np.empty((num_train_samples, 3, 32, 32), dtype='uint8')
+    y_train = np.empty((num_train_samples,), dtype='uint8')
+    for i in range(1, 6):
+        fpath = os.path.join(path, 'data_batch_' + str(i))
+        (x_train[(i - 1) * 10000:i * 10000, :, :, :],
+        y_train[(i - 1) * 10000:i * 10000]) = load_batch(fpath)
+    fpath = os.path.join(path, 'test_batch')
+    x_test, y_test = load_batch(fpath)
+    y_train = np.reshape(y_train, (len(y_train), 1))
+    y_test = np.reshape(y_test, (len(y_test), 1))
+    if K.image_data_format() == 'channels_last':
+        x_train = x_train.transpose(0, 2, 3, 1)
+        x_test = x_test.transpose(0, 2, 3, 1)
+    x_test = x_test.astype(x_train.dtype)
+    y_test = y_test.astype(y_train.dtype)
+    return (x_train, y_train), (x_test, y_test)
+
+
+########################### GENERAL PARAMETERS ############################
 NUM_CLASSES = 10
 DATA_AUGMENTATION = False
-
-NUM_EPOCHS    = 3
+NUM_EPOCHS    = int(variables.get("NUM_EPOCHS"))
 LEARNING_RATE = 0.0001
 BATCH_SIZE    = 32
 WEIGHT_DECAY  = 1e-6
-OPTIMIZER     = 'Adam' # Adam, RMSPROP, SGD
+OPTIMIZER     = 'Adam' # Adam, SGD, RMSprop
+TENSORBOARD_ENABLED = variables.get("TENSORBOARD_ENABLED")
+
 
 ############################ INPUT FROM AUTOML ############################
 """
@@ -129,13 +216,6 @@ SEARCH_SPACE:
 INPUT_VARIABLES:
 {"OPTIMIZER": "Adam", "LEARNING_RATE": 0.0001, "BATCH_SIZE": 32, "WEIGHT_DECAY": 0.0005}
 """
-NUM_EPOCHS    = int(variables.get("NUM_EPOCHS"))
-LEARNING_RATE = float(variables.get("LEARNING_RATE"))
-BATCH_SIZE    = int(variables.get("BATCH_SIZE"))
-WEIGHT_DECAY  = float(variables.get("WEIGHT_DECAY"))
-OPTIMIZER     = variables.get("OPTIMIZER")
-TENSORBOARD_ENABLED = variables.get("TENSORBOARD_ENABLED")
-
 input_variables = variables.get("INPUT_VARIABLES")
 if input_variables is not None and input_variables != '':
     input_variables = json.loads(input_variables)
@@ -145,13 +225,13 @@ if input_variables is not None and input_variables != '':
     OPTIMIZER = input_variables["OPTIMIZER"]
 ###########################################################################
 
-OPTIMIZER = OPTIMIZER.upper()
 
+######################## CHECK TENSORBOARD SUPPORT ########################
 # Create a TensorBoard instance with the path to the logs directory
 if TENSORBOARD_ENABLED.lower() == "true":
-    CONTAINER_LOG_PATH = variables.get("CONTAINER_LOG_PATH")
+    TENSORBOARD_CONTAINER_LOG_PATH = variables.get("TENSORBOARD_CONTAINER_LOG_PATH")
     PA_JOB_ID = "job_ID_" + variables.get("PA_JOB_ID")
-    PATH = os.path.join(CONTAINER_LOG_PATH, PA_JOB_ID)
+    PATH = os.path.join(TENSORBOARD_CONTAINER_LOG_PATH, PA_JOB_ID)
     print('PATH: ', PATH)
     if os.path.isdir(PATH):
         try:
@@ -161,6 +241,7 @@ if TENSORBOARD_ENABLED.lower() == "true":
             print('Error while deleting directory')
     os.mkdir(PATH)
     tensorboard = TensorBoard(log_dir=PATH)
+###########################################################################
 
 print('-' * 30)
 print('NUM_CLASSES:       ', NUM_CLASSES)
@@ -173,7 +254,8 @@ print('OPTIMIZER:         ', OPTIMIZER)
 print('-' * 30)
 
 # The data, split between train and test sets:
-(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+# (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+(x_train, y_train), (x_test, y_test) = load_data()
 print('x_train shape:', x_train.shape)
 print(x_train.shape[0], 'train samples')
 print(x_test.shape[0], 'test samples')
@@ -181,18 +263,16 @@ print(x_test.shape[0], 'test samples')
 # Convert class vectors to binary class matrices.
 y_train = keras.utils.to_categorical(y_train, NUM_CLASSES)
 y_test = keras.utils.to_categorical(y_test, NUM_CLASSES)
-print(x_train.shape[1:])
 
 # Implementing above stack into code.
 model = Sequential()
 # Adding layers to the sequential model 
 # .add() will push the layer into the stack(sequential model)
 # filter -> 32
-# strides ->(3,3)
+# strides -> (3,3)
 model.add(Conv2D(32, (3, 3), padding='same',input_shape=x_train.shape[1:]))
 # Relu is an activation function faster than sigmoid and reduce the liklehod of vanishing gradient
 model.add(Activation('relu'))
-
 # We don't have to define parameters again.
 model.add(Conv2D(32, (3, 3)))
 model.add(Activation('relu'))
@@ -202,7 +282,6 @@ model.add(MaxPooling2D(pool_size=(2, 2)))
 # Drop put is a regularization technique where randomly selected neurons are ignored during training
 # Here 25% connection will drop
 model.add(Dropout(0.25))
-
 # Depth is changed into 64
 model.add(Conv2D(64, (3, 3), padding='same'))
 model.add(Activation('relu'))
@@ -210,33 +289,29 @@ model.add(Conv2D(64, (3, 3)))
 model.add(Activation('relu'))
 model.add(MaxPooling2D(pool_size=(2, 2)))
 model.add(Dropout(0.25))
-
 # Convert matrix into a vector by stretching it.
 model.add(Flatten())
-
 # Dense layer is use to collect all the info 
 model.add(Dense(512))
-
 model.add(Activation('relu'))
-
 model.add(Dropout(0.5))
 # Number of target classes
 model.add(Dense(NUM_CLASSES))
 # Softmax convert probability into binary number.
 model.add(Activation('softmax'))
 
-# Initiate RMSprop optimizer
-if OPTIMIZER == 'RMSPROP':
-    opt = keras.optimizers.rmsprop(lr=LEARNING_RATE, decay=WEIGHT_DECAY)
-elif OPTIMIZER == 'SGD':
+# Initiate the selected optimizer
+if OPTIMIZER.lower() == 'rmsprop':
+    opt = keras.optimizers.RMSprop(lr=LEARNING_RATE, decay=WEIGHT_DECAY)
+elif OPTIMIZER.lower() == 'sgd':
     opt = keras.optimizers.SGD(lr=LEARNING_RATE, decay=WEIGHT_DECAY)
-else:
+elif OPTIMIZER.lower() == 'adam':
     opt = keras.optimizers.Adam(lr=LEARNING_RATE, decay=WEIGHT_DECAY)
+else:
+    raise Exception("Optimizer not defined!")
 
-# Let's train the model using RMSprop
-model.compile(loss='categorical_crossentropy',
-              optimizer=opt,
-              metrics=['accuracy'])
+# Let's train the model using the selected optimizer
+model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=['accuracy'])
 
 x_train = x_train.astype('float32')
 x_test = x_test.astype('float32')
@@ -247,16 +322,16 @@ if not DATA_AUGMENTATION:
     print('Not using data augmentation.')
     if TENSORBOARD_ENABLED.lower() == "true":
     	model.fit(x_train, y_train,
-             batch_size =BATCH_SIZE,
-              epochs=NUM_EPOCHS,
-              validation_data=(x_test, y_test),
-              shuffle=True, callbacks=[tensorboard])
+            batch_size =BATCH_SIZE,
+            epochs=NUM_EPOCHS,
+            validation_data=(x_test, y_test),
+            shuffle=True, callbacks=[tensorboard])
     else:
         model.fit(x_train, y_train,
-             batch_size =BATCH_SIZE,
-              epochs=NUM_EPOCHS,
-              validation_data=(x_test, y_test),
-              shuffle=True)
+            batch_size =BATCH_SIZE,
+            epochs=NUM_EPOCHS,
+            validation_data=(x_test, y_test),
+            shuffle=True)
 else:
     print('Using real-time data augmentation.')
     # This will do preprocessing and realtime data augmentation:
@@ -314,10 +389,10 @@ print("END " + __file__)
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            183.21022033691406
+            151.515625
         </positionTop>
         <positionLeft>
-            259.5454406738281
+            154.046875
         </positionLeft>
       </metadata>
     </task>
@@ -331,14 +406,14 @@ print("END " + __file__)
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2603px;
-            height:3065px;
+            width:2834px;
+            height:3568px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-178.21022033691406px;left:-254.54544067382812px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_669" style="top: 183.211px; left: 259.546px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Train a simple deep CNN on the CIFAR10 images dataset using keras library.
-You can see more details in: https://github.com/prakritidev/DeepLearning/blob/master/Keras/Convolutional%20Neural%20Network/CIFAR10_cnn.py"><img src="/automation-dashboard/styles/patterns/img/wf-icons/keras.png" width="20px">&nbsp;<span class="name">CIFAR10_Image_Classification</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 336.5px; top: 214px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-146.515625px;left:-149.046875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_10" style="top: 151.516px; left: 154.047px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Train a simple deep CNN on the CIFAR10 images dataset using keras library.
+You can see more details in: https://github.com/prakritidev/DeepLearning/blob/master/Keras/Convolutional%20Neural%20Network/CIFAR10_cnn.py"><img src="/automation-dashboard/styles/patterns/img/wf-icons/keras.png" width="20px">&nbsp;<span class="name">CIFAR10_Image_Classification</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 230.5px; top: 182px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>

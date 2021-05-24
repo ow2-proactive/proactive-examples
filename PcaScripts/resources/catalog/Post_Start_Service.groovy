@@ -18,7 +18,7 @@ def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")
 def endpointID = variables.get("ENDPOINT_ID")
-def httpEnabled = variables.get("HTTP_ENABLED") // e.g. MongoDB, Visdom, Tensorboard
+def httpEnabled = variables.get("HTTP_ENABLED") // e.g. Visdom, Tensorboard
 def httpsEnabled = variables.get("HTTPS_ENABLED") // e.g. MaaS, JupyterLab
 def engine = variables.get("ENGINE") // docker, singularity
 
@@ -33,7 +33,7 @@ if (engine != null && "singularity".equalsIgnoreCase(engine)) {
     containerID = new File(instanceName+"_containerID").text.trim()
 }
 
-def containerUrl = hostname+":"+port
+def containerUrl = hostname + ":" + port
 if (httpsEnabled != null){
     if ("true".equalsIgnoreCase(httpsEnabled)){
         containerUrl = "https://"+containerUrl
@@ -42,9 +42,14 @@ if (httpsEnabled != null){
     }
 }else{
     if (httpEnabled != null && "true".equalsIgnoreCase(httpEnabled)){
-        containerUrl = "http://"+containerUrl
+        containerUrl = "http://" + containerUrl
+    } else if(binding.variables["args"] && args.length > 0 && !args[0].trim().isEmpty()){
+        containerUrl = args[0] + "://" + containerUrl
+    } else {
+        containerUrl = null;
     }
 }
+
 println "containerUrl: " + containerUrl
 
 variables.put("HOSTNAME", hostname)
@@ -71,16 +76,21 @@ try {
     container.setName(instanceName)
 
     // Endpoint
-    def Endpoint endpoint = new Endpoint();
-    endpoint.setId(endpointID);
-    endpoint.setUrl(containerUrl);
-    // Set the endpoint parameters according to the Proxy settings
-    if (proxyfied.toLowerCase()=="true"){
-        proxyfiedURL = variables.get('PROXYFIED_URL')
-        endpoint.setProxyfied(true);
-        endpoint.setProxyfiedUrl(proxyfiedURL)
-    }else{
-        endpoint.setProxyfied(false)
+    def Endpoint endpoint;
+    if(containerUrl != null){
+        endpoint = new Endpoint();
+        endpoint.setId(endpointID);
+        endpoint.setUrl(containerUrl);
+        // Set the endpoint parameters according to the Proxy settings
+        if (proxyfied != null){
+            if (proxyfied.toLowerCase()=="true"){
+                proxyfiedURL = variables.get('PROXYFIED_URL')
+                endpoint.setProxyfied(true);
+                endpoint.setProxyfiedUrl(proxyfiedURL)
+            }else{
+                endpoint.setProxyfied(false)
+            }
+        }
     }
 
     // Node
@@ -91,16 +101,21 @@ try {
     node.setUrl(variables.get("PA_NODE_URL"))
 
     // Deployment
-    def Deployment deployment = new Deployment()
-    deployment.setNode(node)
-    deployment.setContainer(container)
-    deployment.setEndpoint(endpoint)
+    def Deployment deployment;
+    if(endpoint != null){
+        deployment = new Deployment()
+        deployment.setNode(node)
+        deployment.setContainer(container)
+        deployment.setEndpoint(endpoint)
+    }
 
     // Update service instance model (add Deployment, Groups)
     def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
     serviceInstanceData.setInstanceStatus("RUNNING")
-    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-    if (proxyfied.toLowerCase()=="true"){
+    if(deployment != null){
+        serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
+    }
+    if (proxyfied != null && proxyfied.toLowerCase()=="true"){
         serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
         serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
     }
@@ -125,7 +140,7 @@ try {
 
     // Log output
     println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-    println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
+    println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint !=null ? endpoint: "")
 } catch (Exception e) {
     StackTraceUtils.printSanitizedStackTrace(e)
     throw e

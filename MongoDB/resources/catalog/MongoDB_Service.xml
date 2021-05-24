@@ -9,8 +9,6 @@
     <variable name="NODE_SOURCE_NAME" value=""/>
     <variable name="INSTANCE_NAME" value="mongodb-server-$PA_JOB_ID"/>
     <variable name="ENDPOINT_ID" value="mongodb-endpoint-$PA_JOB_ID"/>
-    <variable model="PA:Boolean" name="PROXYFIED" value="False"/>
-    <variable model="PA:Boolean" name="HTTP_ENABLED" value="True"/>
     <variable model="PA:Integer" name="SERVICE_PORT" value="-1"/>
     <variable name="USER" value="activeeon"/>
     <variable model="PA:HIDDEN" name="PASSWORD" value="ENC(KvnQVqWfueBasc1Blj8RZZDKXPrmuHC4)"/>
@@ -20,6 +18,13 @@
     <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/mongodb.sif"/>
     <variable model="PA:Boolean" name="BUILD_IMAGE_IF_NOT_EXISTS" value="True"/>
   </variables>
+  <description>
+    <![CDATA[ Deploy a MongoDB Database server.
+The service can be started using the following variables:
+INSTANCE_NAME (Required): service instance name
+USER (Optional): Username for the root user.
+PASSWORD (Optional): Password for the root user. ]]>
+  </description>
   <genericInformation>
     <info name="bucketName" value="service-automation"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/mongodb.png"/>
@@ -65,8 +70,6 @@
               <argument value="NODE_SOURCE_NAME"/>
               <argument value="INSTANCE_NAME"/>
               <argument value="ENDPOINT_ID"/>
-              <argument value="PROXYFIED"/>
-              <argument value="HTTP_ENABLED"/>
               <argument value="SERVICE_PORT"/>
               <argument value="USER"/>
               <argument value="PASSWORD"/>
@@ -137,13 +140,14 @@
     
     fork="true">
       <description>
-        <![CDATA[ A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then waits until one signal among those specified is received by the job. ]]>
+        <![CDATA[ A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job. ]]>
       </description>
       <variables>
-        <variable name="SIGNALS" value="Stop" inherited="false" model="PA:REGEXP(((\w|-|_)+,?\s?)+)"/>
+        <variable name="SIGNALS" value="Terminate_job_and_service" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="TASK.DOCUMENTATION" value="user/ProActiveUserGuide.html#_task_signal_api"/>
       </genericInformation>
       <depends>
         <task ref="Start_MongoDB_Service"/>
@@ -154,32 +158,63 @@
             <![CDATA[
 import com.google.common.base.Splitter;
 
-// Read the variable SIGNALS
-signals = variables.get("SIGNALS")
+if (variables.get("PA_TASK_ITERATION")==0){
 
-// Split the value of the variable SIGNALS and transform it into a list
-Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+    // Read the variable SIGNALS
+	signals = variables.get("SIGNALS")
 
-// Send a ready notification for each signal in the set
-println("Ready for signals "+ signalsSet)
-signalsSet.each { signal ->
-    signalapi.readyForSignal(signal)
+	// Split the value of the variable SIGNALS and transform it into a list
+	Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+
+    // Send a ready notification for each signal in the set
+    println("Ready for signals "+ signalsSet)
+    signalsSet.each {
+        signal -> signalapi.readyForSignal(signal)
+    }
+
+    // Add the signals set as a variable to be used by next tasks
+    variables.put("SIGNALS_SET", signalsSet)
 }
 
-// Wait until one signal among those specified is received
-println("Waiting for any signal among "+ signalsSet)
-receivedSignal = signalapi.waitForAny(signalsSet)
+//Read the variable SIGNALS_SET
+Set signalsSet =  variables.get("SIGNALS_SET")
 
-// Remove ready signals
-signalapi.removeManySignals(new HashSet<>(signalsSet.collect { signal -> "ready_"+signal }))
+// Check whether one signal among those specified as input is received
+println("Checking whether one signal in the set "+ signalsSet +" is received")
+receivedSignal = signalapi.checkForSignals(signalsSet)
 
-// Display the received signal and add it to the job result
-println("Received signal: "+ receivedSignal)
-result = receivedSignal
+// If a signal is received, remove ready signals and break the loop, else sleep 10 seconds then restart
+if (receivedSignal != null){
+
+    // remove ready signals
+	signalapi.removeManySignals(new HashSet<>(signalsSet.collect { signal -> "ready_"+signal }))
+
+    // print the received signal
+    println("Received signal: "+ receivedSignal)
+    result = receivedSignal
+
+} else {
+    result = null
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow >
+        <loop target="wait_for_stop">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+if (result!=null){
+    loop = false
+} else {
+    loop = "* * * * *"
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
       <metadata>
         <positionTop>
             425.484375

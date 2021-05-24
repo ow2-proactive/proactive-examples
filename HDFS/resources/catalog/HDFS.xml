@@ -1,85 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xmlns="urn:proactive:jobdescriptor:3.11" xsi:schemaLocation="urn:proactive:jobdescriptor:3.11 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.11/schedulerjob.xsd"  name="HDFS" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+        xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="HDFS" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
   <variables>
-    <variable name="HDFS_UI_port" value="6500" />
-    <variable name="datanode_starting_port" value="50010" />
-    <variable name="fs_name" value="25.25.25.2" />
-    <variable name="instance_name" value="my-instance" />
-    <variable name="network_name" value="my-net" />
+    <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="hdfs-$PA_JOB_ID" />
+    <variable model="PA:NOT_EMPTY_STRING" name="swarm_service_instance_id" value="xx" />
+    <variable model="PA:NOT_EMPTY_STRING" name="nb_hdfs_datanodes" value="3" />
   </variables>
   <description>
-    <![CDATA[ Deployment of HDFS. ]]>
+    <![CDATA[ Deploy a HDFS platform of nb_hdfs_datanodes datanodes. swarm_service_instance_id is the service instance id of the targeted Docker Swarm. ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="service-automation"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
-    <info name="pca.states" value="(SWARM_DEPLOYED,HDFS_DEPLOYED)"/>
-    <info name="Documentation" value="https://ow2-proactive.github.io/proactive-examples/DockerSwarm/resources/doc/V1/activeeon-deploy-swarm-hdfs-spark.pdf"/>
-    <info name="pca.service.id" value="HDFS-Spark"/>
+    <info name="pca.states" value="(VOID,RUNNING)"/>
+    <info name="Documentation" value="https://hadoop.apache.org/docs/r2.8.2/hadoop-project-dist/hadoop-common/ClusterSetup.html"/>
+    <info name="pca.service.id" value="HDFS"/>
     <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="get_resources_from_service_instance" >
-      <scriptExecutable>
-        <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
-// Retrieve variables
-def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
-
-// Define other variables
-def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
-
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Get the targeted resources the PCA service instance
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(sessionId, service_instance_id)
-def node_source_name = service_instance_data.getVariables().get("node_source_name")
-def nb_nodes = service_instance_data.getVariables().get("nb_nodes")
-variables.put("node_source_name", node_source_name)
-variables.put("nb_nodes", nb_nodes)
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <metadata>
-        <positionTop>
-          194.13333129882812
-        </positionTop>
-        <positionLeft>
-          596
-        </positionLeft>
-      </metadata>
-    </task>
-    <task name="start_namenode" >
+    <task name="retrieve_service_variables"
+          fork="true">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
       </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
+            <arguments>
+              <argument value="$swarm_service_instance_id"/>
+              <argument value="swarm_token_name"/>
+              <argument value="INSTANCE_NAME"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+    </task>
+
+    <task name="create_overlay_network_and_start_hdfs_namenode" >
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$swarm_token_name"/>
+      </genericInformation>
       <depends>
-        <task ref="get_resources_from_service_instance"/>
+        <task ref="retrieve_service_variables"/>
       </depends>
       <selection>
-        <script>
+        <script type="static">
           <code language="groovy">
             <![CDATA[
-if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
-    selected = true
-} else {
-   selected = false
-}
+// The overlay network must be created on the swarm manager host
+def swarm_manager_pa_node_name = variables.get("swarm_manager_and_workers_pa_node_names").split(",")[0]
+
+selected = (nodename == swarm_manager_pa_node_name)
 ]]>
           </code>
         </script>
@@ -88,37 +64,65 @@ if (variables.get("node_source_name").equals(System.getProperty("proactive.node.
         <script>
           <code language="groovy">
             <![CDATA[
-import org.objectweb.proactive.core.util.ProActiveInet
-
-println "run_namenode_in_container ..."
-
 // Retrieve variables
-def HDFS_UI_port = variables.get("HDFS_UI_port")
-def instance_name = variables.get("instance_name")
-def network_name = variables.get("network_name")
-def fs_name = variables.get("fs_name")
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def instance_name = variables.get("INSTANCE_NAME")
+def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def nb_hdfs_datanodes = variables.get("nb_hdfs_datanodes") as Integer
 
-def namenode_container_name = instance_name + "-namenode"
-
-// Get the current IP address and store it
-def HDFS_UI_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
-variables.put("HDFS_UI_IP_address", HDFS_UI_IP_address)
-
-// Start the namenode docker container
-def cmd = ["docker", "run", "--rm", "-dit", "--publish", HDFS_UI_port + ":9870", "--name", namenode_container_name, "--net", network_name, "activeeon/hdfs-spark:latest"]
+// Create the overlay network
+def hdfs_network_name = instance_name + "-hdfs-network"
+def cmd = ["docker", "network", "create", "-d", "overlay", "--attachable", hdfs_network_name]
+println cmd
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
-// Namenode configuration
-def docker_config_command = "sed s/IP:PORT/" + fs_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml; rm -r /tmp; hdfs namenode -format -force"
-cmd = ["docker", "exec", namenode_container_name, "/bin/sh", "-c", docker_config_command]
+// Find a free port for spark_master_gui_port
+def hdfs_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hdfs_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+// Start the hdfs namenode docker container
+def hdfs_namenode_container_name = instance_name + "-hdfs-namenode"
+cmd = ["docker", "run", "--rm", "-dit", "--publish", hdfs_gui_port + ":9870", "--name", hdfs_namenode_container_name, "--net", hdfs_network_name, "activeeon/hdfs-spark:latest"]
+println cmd
+def hdfs_namenode_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hdfs_namenode_container_id, System.err)
+
+// Namenode configuration + Start
+def config_namenode_core_site_command = "sed s/IP:PORT/" + hdfs_namenode_container_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
+def format_namenode_command = "rm -r /tmp; hdfs namenode -format -force"
+def start_hdfs_namenode_command = "\$HADOOP_HOME/sbin/hadoop-daemon.sh start namenode"
+def command_in_container = config_namenode_core_site_command + ";" + format_namenode_command + ";" + start_hdfs_namenode_command
+cmd = ["docker", "exec", hdfs_namenode_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
-// Start namenode
-def docker_start_command = "\$HADOOP_HOME/sbin/hadoop-daemon.sh start namenode"
-cmd = ["docker", "exec", namenode_container_name, "/bin/sh", "-c", docker_start_command]
-cmd.execute().waitForProcessOutput(System.out, System.err)
+// Ensure namenode is started
+cmd = ["docker", "exec", hdfs_namenode_container_name, "jps"]
+println cmd
+def docker_exec_jps_output = new StringBuilder()
+while (!docker_exec_jps_output.toString().contains("NameNode")){
+	cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+	sleep(1000)
+}
 
-println "... run_namenode_in_container"
+// Propagate variables
+variables.put("hdfs_gui_port", hdfs_gui_port)
+variables.put("hdfs_network_name", hdfs_network_name)
+variables.put("hdfs_namenode_container_name", hdfs_namenode_container_name)
+variables.put("nb_hdfs_deployments", (nb_hdfs_datanodes + 1))
+variables.put("hdfs_namenode_and_datanodes_pa_node_names", pa_node_name)
+resultMap.put("hdfs_service_instance_id", service_instance_id)
+
+// Propagate the container id to the post script
+new File(localspace, "hdfs_namenode_container_id").text = hdfs_namenode_container_id.toString()
+new File(localspace, "hdfs_namenode_container_name").text = hdfs_namenode_container_name
 ]]>
           </code>
         </script>
@@ -128,7 +132,7 @@ println "... run_namenode_in_container"
           <script>
             <code language="groovy">
               <![CDATA[
-runs=variables.get("nb_nodes")
+runs = variables.get("nb_hdfs_datanodes")
 ]]>
             </code>
           </script>
@@ -138,49 +142,60 @@ runs=variables.get("nb_nodes")
         <script>
           <code language="groovy">
             <![CDATA[
-import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
 
-def namenode_container_name = variables.get("instance_name") + "-namenode"
-def network_name = variables.get("network_name")
+// Retrieve the script arguments
+def hdfs_namenode_container_id = new File(localspace, "hdfs_namenode_container_id").text
+def hdfs_namenode_container_name = new File(localspace, "hdfs_namenode_container_name").text
 
-// Retrieve the namenode IP address in the overlay network
-def jsonToParse = new StringBuilder()
-["docker","inspect", namenode_container_name].execute().waitForProcessOutput(jsonToParse , System.err)
-def jsonSlurper = new JsonSlurper()
-def object = jsonSlurper.parseText(jsonToParse+"")
-def namenode_IP_address = object.get(0).get("NetworkSettings").get("Networks").get(network_name).get("IPAddress")
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def hdfs_gui_port = variables.get("hdfs_gui_port")
 
-// And store it
-variables.put("namenode_IP_address", namenode_IP_address)
+// Build the endpoint url
+def hdfs_namenode_endpoint_url = "http://" + pa_node_host + ":" + hdfs_gui_port
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":"hdfs_namenode_gui","url":hdfs_namenode_endpoint_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hdfs_namenode_container_id,"name":hdfs_namenode_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("hdfs_deployment_json_0", deployment_json)
 ]]>
           </code>
         </script>
       </post>
       <metadata>
         <positionTop>
-          322.1333312988281
+          334.6333312988281
         </positionTop>
         <positionLeft>
           596
         </positionLeft>
       </metadata>
     </task>
-    <task name="start_datanode" >
+    <task name="start_hdfs_datanode" >
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$swarm_token_name"/>
       </genericInformation>
       <depends>
-        <task ref="start_namenode"/>
+        <task ref="create_overlay_network_and_start_hdfs_namenode"/>
       </depends>
       <selection>
-        <script>
+        <script type="static">
           <code language="groovy">
             <![CDATA[
-if (variables.get("node_source_name").equals(System.getProperty("proactive.node.nodesource"))) {
-    selected = true
-} else {
-   selected = false
-}
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def swarm_manager_and_workers_pa_node_names = variables.get("swarm_manager_and_workers_pa_node_names")
+
+def targeted_pa_node_name = swarm_manager_and_workers_pa_node_names.split(",")[task_replication_id]
+
+selected = (nodename == targeted_pa_node_name)
 ]]>
           </code>
         </script>
@@ -189,97 +204,241 @@ if (variables.get("node_source_name").equals(System.getProperty("proactive.node.
         <script>
           <code language="groovy">
             <![CDATA[
-println "start_datanode ..."
-
 // Retrieve variables
-def fs_name = variables.get("fs_name")
-def task_id = variables.get("PA_TASK_REPLICATION") as Integer
-def datanode_starting_port = variables.get("datanode_starting_port") as Integer
-def network_name = variables.get("network_name")
+def pa_job_id = variables.get("PA_JOB_ID")
+def instance_name = variables.get("INSTANCE_NAME")
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def hdfs_network_name = variables.get("hdfs_network_name")
+def hdfs_namenode_container_name = variables.get("hdfs_namenode_container_name")
+def pa_node_name = variables.get("PA_NODE_NAME")
 
-def datanode_container_name = variables.get("instance_name") + "-datanode-" + task_id
-def datanode_port = datanode_starting_port + task_id
+// Start the hdfs datanode container
+def hdfs_datanode_container_name = instance_name + "-hdfs-datanode-" + task_replication_id
+def cmd = ["docker", "run", "--rm", "-dit", "--name", hdfs_datanode_container_name, "--net", hdfs_network_name, "activeeon/hdfs-spark:latest"]
+println cmd
+def hdfs_datanode_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hdfs_datanode_container_id, System.err)
 
-// Start the datanode docker container
-def cmd = ["docker", "run", "--rm", "-dit", "--name", datanode_container_name, "--net", network_name, "activeeon/hdfs-spark:latest"]
+// HDFS datanode configuration + Start
+def config_datanode_core_site_command = "sed s/IP:PORT/" + hdfs_namenode_container_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
+//def config_datanode_hdfs_site_command = "sed s/PORT/" + datanode_port + "/ \$HADOOP_HOME/etc/hadoop/hdfs-site.xml.template > \$HADOOP_HOME/etc/hadoop/hdfs-site.xml"
+def clean_start_datanode_command = "rm -r /tmp; \$HADOOP_HOME/sbin/hadoop-daemon.sh start datanode"
+def command_in_container = config_datanode_core_site_command + /* ";" + config_datanode_hdfs_site_command +*/ ";" + clean_start_datanode_command
+cmd = ["docker", "exec", hdfs_datanode_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
 cmd.execute().waitForProcessOutput(System.out, System.err)
 
-// Datanode configuration + Start
-def docker_config_command = "sed s/IP:PORT/" + fs_name + ":9000/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml; sed s/PORT/" + datanode_port + "/ \$HADOOP_HOME/etc/hadoop/hdfs-site.xml.template > \$HADOOP_HOME/etc/hadoop/hdfs-site.xml; rm -r /tmp; \$HADOOP_HOME/sbin/hadoop-daemon.sh start datanode"
-cmd = ["docker", "exec", datanode_container_name, "/bin/sh", "-c", docker_config_command]
-cmd.execute().waitForProcessOutput(System.out, System.err)
+// Propagate variables
+variables.put("hdfs_datanode_" + task_replication_id + "_pa_node_name", pa_node_name)
 
-println "... start_datanode"
+// Propagate the container id to the post script
+new File(localspace, "hdfs_datanode_container_id").text = hdfs_datanode_container_id.toString()
+new File(localspace, "hdfs_datanode_container_name").text = hdfs_datanode_container_name
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hdfs_datanode_container_id = new File(localspace, "hdfs_datanode_container_id").text
+def hdfs_datanode_container_name = new File(localspace, "hdfs_datanode_container_name").text
+
+// Retrieve variables
+def task_replication_id = variables.get("PA_TASK_REPLICATION")
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+
+// Create the deployment map and json
+def endpoint_id = instance_name + "_" + task_replication_id
+def deployment_map = ["endpoint":["id":endpoint_id],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hdfs_datanode_container_id,"name":hdfs_datanode_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("hdfs_deployment_json_" + ((task_replication_id as Integer) + 1), deployment_json)
+
+// Add token to the current node (RM API)
+rmapi.connect()
+println "Adding token " + instance_name + " to node " + pa_node_url
+rmapi.addNodeToken(pa_node_url, instance_name)
+]]>
+          </code>
+        </script>
+      </post>
       <metadata>
         <positionTop>
-          450.1333312988281
+          462.6333312988281
         </positionTop>
         <positionLeft>
           596
         </positionLeft>
       </metadata>
     </task>
-    <task name="update_service_instance" >
+
+    <task name="merge_json_deployments_and_propagate"
+
+
+
+
+          fork="true">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
       </genericInformation>
       <depends>
-        <task ref="start_datanode"/>
+        <task ref="start_hdfs_datanode"/>
       </depends>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
 // Retrieve variables
-def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
-def namenode_IP_address = variables.get("namenode_IP_address")
-def HDFS_UI_IP_address = variables.get("HDFS_UI_IP_address")
-def HDFS_UI_port = variables.get("HDFS_UI_port")
+def nb_hdfs_datanodes = variables.get("nb_hdfs_datanodes") as Integer
+def hdfs_namenode_and_datanodes_pa_node_names = variables.get("hdfs_namenode_and_datanodes_pa_node_names")
 
-// Define other variables
-def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+for (i = 0; i < nb_hdfs_datanodes; i++) {
+    hdfs_namenode_and_datanodes_pa_node_names += "," + variables.get("hdfs_datanode_" + i + "_pa_node_name")
+}
 
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-//Update endpoints
-def endpointsMap = [:]
-endpointsMap.put("HDFS_UI", "http://" + HDFS_UI_IP_address + ":" + HDFS_UI_port)
-service_instance_rest_api.createNewInstanceEndpointsUsingPUT(sessionId, service_instance_id, endpointsMap)
-
-// Update the related service instance
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(sessionId, service_instance_id)
-service_instance_data.setInstanceStatus("HDFS_DEPLOYED")
-service_instance_data.getVariables().put("namenode_IP_address", namenode_IP_address)
-service_instance_rest_api.updateServiceInstanceUsingPUT(sessionId, service_instance_id, service_instance_data)
+variables.put("hdfs_namenode_and_datanodes_pa_node_names", hdfs_namenode_and_datanodes_pa_node_names)
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <metadata>
         <positionTop>
-          578.1333312988281
+          542.5
         </positionTop>
         <positionLeft>
-          596
+          668
         </positionLeft>
       </metadata>
     </task>
+
+    <task name="propagate_variables_and_update_deployments_with_service"
+
+
+
+
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="merge_json_deployments_and_propagate"/>
+      </depends>
+      <pre>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Propagate_variables_to_current_service/raw" language="groovy">
+            <arguments>
+              <argument value="hdfs_network_name"/>
+              <argument value="VARIABLE_VALUE"/>
+              <argument value="hdfs_namenode_host_port"/>
+              <argument value="$hdfs_namenode_container_name:9000"/>
+              <argument value="hdfs_namenode_and_datanodes_pa_node_names"/>
+              <argument value="VARIABLE_VALUE"/>
+            </arguments>
+          </file>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
+            <arguments>
+              <argument value="hdfs_deployment_json_"/>
+              <argument value="$nb_hdfs_deployments"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <cleaning>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
+        </script>
+      </cleaning>
+    </task>
+
+    <task name="loop_over_hdfs_namenode_status"
+
+
+
+
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="propagate_variables_and_update_deployments_with_service"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+def hdfs_namenode_and_datanodes_pa_node_names = variables.get("hdfs_namenode_and_datanodes_pa_node_names")
+
+def hdfs_namenode_pa_node_name = hdfs_namenode_and_datanodes_pa_node_names.split(",")[0]
+
+selected = (nodename == hdfs_namenode_pa_node_name)
+]]>
+          </code>
+        </script>
+      </selection>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def hdfs_namenode_container_name = variables.get("hdfs_namenode_container_name")
+def instance_name = variables.get("INSTANCE_NAME")
+
+// Ensure namenode is running
+def cmd = ["docker", "exec", hdfs_namenode_container_name, "jps"]
+println cmd
+def docker_exec_jps_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+
+def is_hdfs_namenode_ok = docker_exec_jps_output.toString().contains("NameNode")
+println "DEBUG is_hdfs_namenode_ok " + is_hdfs_namenode_ok
+def is_docker_based_service = true
+def token_to_remove = instance_name
+
+// Propagate to the current task script
+new File(localspace, "arguments.txt").text = String.valueOf(is_hdfs_namenode_ok) + "," + String.valueOf(is_docker_based_service) + "," + token_to_remove
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Loop_over_service_instance_status/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="loop_over_hdfs_namenode_status">
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw" language="groovy"></file>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          798.5
+        </positionTop>
+        <positionLeft>
+          668
+        </positionLeft>
+      </metadata>
+    </task>
+
   </taskFlow>
   <metadata>
     <visualization>
@@ -290,39 +449,39 @@ service_instance_rest_api.updateServiceInstanceUsingPUT(sessionId, service_insta
             width:2735px;
             height:2924px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-189.13333129882812px;left:-591px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 194.133px; left: 596px;" id="jsPlumb_1_37"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">get_resources_from_service_instance</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 322.133px; left: 596px;" id="jsPlumb_1_40"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" width="20px">&nbsp;<span class="name">start_namenode</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 450.133px; left: 596px;" id="jsPlumb_1_43"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" width="20px">&nbsp;<span class="name">start_datanode</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 578.133px; left: 596px;" id="jsPlumb_1_46"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hdfs.png" width="20px">&nbsp;<span class="name">update_service_instance</span></a></div><svg style="position:absolute;left:643px;top:233.5px" width="75.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 64.5 50 54.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-201.63333129882812px;left:-591px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 206.633px; left: 596px;" id="jsPlumb_1_10"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">get_resources_from_service_instance</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 334.633px; left: 596px;" id="jsPlumb_1_13"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">start_spark_master</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 462.633px; left: 596px;" id="jsPlumb_1_16"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">start_spark_slave</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 590.633px; left: 596px;" id="jsPlumb_1_19"><a class="task-name"><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">update_service_instance</span></a></div><svg style="position:absolute;left:651.5px;top:246.5px" width="67" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 56 50 46 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M2.7879999999999985,64.44800000000001 L20.764285697995007,53.229570853989415 L11.549590064876533,53.5285430750858 L9.844828773080803,44.46798078911287 L2.7879999999999985,64.44800000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M2.7879999999999985,64.44800000000001 L20.764285697995007,53.229570853989415 L11.549590064876533,53.5285430750858 L9.844828773080803,44.46798078911287 L2.7879999999999985,64.44800000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:673.5px;top:351.5px" width="25" height="99" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 88 14 -10 4 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M1.6926389999999976,64.9032055 L18.66180608105043,52.21276151346453 L9.504895730542636,53.285604853735244 L7.044205434785677,44.400504782921885 L1.6926389999999976,64.9032055" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M1.6926389999999976,64.9032055 L18.66180608105043,52.21276151346453 L9.504895730542636,53.285604853735244 L7.044205434785677,44.400504782921885 L1.6926389999999976,64.9032055" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:683.9px;top:364.5px" width="28.200000000000045" height="99" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 88 17.200000000000045 -10 7.2000000000000455 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4492785,77.41936575 L6.063350403498591,58.01485212168866 L-1.3760184612358701,63.46056519661462 L-7.895450149886791,56.94159208292453 L-2.4492785,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4492785,77.41936575 L6.063350403498591,58.01485212168866 L-1.3760184612358701,63.46056519661462 L-7.895450149886791,56.94159208292453 L-2.4492785,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div style="position: absolute; transform: translate(-50%, -50%); left: 685.5px; top: 401.75px;" class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_57">replicate</div><svg style="position:absolute;left:640.5px;top:361.5px" width="23.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 12.5 50 2.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.1009752999999947,77.41936575 L7.046180412470953,58.30577000320734 L-0.568522702436107,63.50349031809778 L-6.869695019431264,56.77331740564345 L-2.1009752999999947,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.1009752999999947,77.41936575 L7.046180412470953,58.30577000320734 L-0.568522702436107,63.50349031809778 L-6.869695019431264,56.77331740564345 L-2.1009752999999947,77.41936575" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div style="position: absolute; transform: translate(-50%, -50%); left: 697.5px; top: 414.75px;" class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_30">replicate</div><svg style="position:absolute;left:647px;top:374.5px" width="25.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 14.5 50 4.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.612421875,66.78168750000002 L5.589799912231152,47.243940502122534 L-1.7618140918536094,52.80755187738454 L-8.384335710384322,46.39333271897615 L-2.612421875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-2.612421875,66.78168750000002 L5.589799912231152,47.243940502122534 L-1.7618140918536094,52.80755187738454 L-8.384335710384322,46.39333271897615 L-2.612421875,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:640.5px;top:489.5px" width="45" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 24 88 C 34 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4501093750000003,66.78168750000002 L6.253690937044999,47.46216731630898 L-1.2390824053543916,52.834163932040326 L-7.69383263091469,46.25114034666338 L-2.4501093750000003,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M-2.4501093750000003,66.78168750000002 L6.253690937044999,47.46216731630898 L-1.2390824053543916,52.834163932040326 L-7.69383263091469,46.25114034666338 L-2.4501093750000003,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:647px;top:502.5px" width="38.5" height="89" pointer-events="none" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 17.5 88 C 27.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M24.6893655,65.8307285 L24.589910726622772,44.64134179938849 L20.002489702214802,52.63856433879676 L11.397746565419528,49.32821759717368 L24.6893655,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M24.6893655,65.8307285 L24.589910726622772,44.64134179938849 L20.002489702214802,52.63856433879676 L11.397746565419528,49.32821759717368 L24.6893655,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div style="position: absolute; height: 20px; width: 20px; left: 698px; top: 224px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M18.83704,66.303232 L20.538982678279996,45.182072204196906 L15.288421492048318,52.76043662072092 L6.996187299000918,48.73069071214858 L18.83704,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" d="M18.83704,66.303232 L20.538982678279996,45.182072204196906 L15.288421492048318,52.76043662072092 L6.996187299000918,48.73069071214858 L18.83704,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div style="position: absolute; height: 20px; width: 20px; left: 698px; top: 237px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 643.5px; top: 352px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 652px; top: 365px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 643.5px; top: 312px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 652px; top: 325px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 678px; top: 352px;" class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 691.6px; top: 365px;" class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 641px; top: 480px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 647.5px; top: 493px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 674px; top: 440px;" class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 684.4px; top: 453px;" class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 641px; top: 440px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 647.5px; top: 453px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 665px; top: 608px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 665px; top: 621px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 665px; top: 568px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
+      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 665px; top: 581px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
       xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
  ]]>

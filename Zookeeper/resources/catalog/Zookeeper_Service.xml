@@ -4,10 +4,13 @@
   xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Zookeeper_Service" projectName="Service Automation - Management" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
     <variable name="INSTANCE_NAME" value="zookeeper-server-${PA_JOB_ID}" />
-    <variable name="PROXYFIED" value="False" model="PA:Boolean"/>
     <variable name="ENDPOINT_ID" value="zookeeper-endpoint" />
-    <variable name="HTTP_ENABLED" value="False" model="PA:Boolean"/>
   </variables>
+  <description>
+    <![CDATA[ Deploy a Zookeeper Database server.
+The service can be started using the variable:
+$INSTANCE_NAME (Required): service instance name ]]>
+  </description>
   <genericInformation>
     <info name="bucketName" value="service-automation"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/zookeeper.jpg"/>
@@ -48,8 +51,6 @@
               <argument value="true"/>
               <argument value="false"/>
               <argument value="INSTANCE_NAME"/>
-              <argument value="HTTP_ENABLED"/>
-              <argument value="PROXYFIED"/>
               <argument value="ENDPOINT_ID"/>
             </arguments>
           </file>
@@ -113,13 +114,14 @@
     
     fork="true">
       <description>
-        <![CDATA[ A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then waits until one signal among those specified is received by the job. ]]>
+        <![CDATA[ A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job. ]]>
       </description>
       <variables>
-        <variable name="SIGNALS" value="Stop" inherited="false" model="PA:REGEXP(((\w|-|_)+,?\s?)+)"/>
+        <variable name="SIGNALS" value="Terminate_job_and_service" inherited="false" />
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="TASK.DOCUMENTATION" value="user/ProActiveUserGuide.html#_task_signal_api"/>
       </genericInformation>
       <depends>
         <task ref="Start_Zookeeper_Service"/>
@@ -130,32 +132,63 @@
             <![CDATA[
 import com.google.common.base.Splitter;
 
-// Read the variable SIGNALS
-signals = variables.get("SIGNALS")
+if (variables.get("PA_TASK_ITERATION")==0){
 
-// Split the value of the variable SIGNALS and transform it into a list
-Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+    // Read the variable SIGNALS
+	signals = variables.get("SIGNALS")
 
-// Send a ready notification for each signal in the set
-println("Ready for signals "+ signalsSet)
-signalsSet.each { signal ->
-    signalapi.readyForSignal(signal)
+	// Split the value of the variable SIGNALS and transform it into a list
+	Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+
+    // Send a ready notification for each signal in the set
+    println("Ready for signals "+ signalsSet)
+    signalsSet.each {
+        signal -> signalapi.readyForSignal(signal)
+    }
+
+    // Add the signals set as a variable to be used by next tasks
+    variables.put("SIGNALS_SET", signalsSet)
 }
 
-// Wait until one signal among those specified is received
-println("Waiting for any signal among "+ signalsSet)
-receivedSignal = signalapi.waitForAny(signalsSet)
+//Read the variable SIGNALS_SET
+Set signalsSet =  variables.get("SIGNALS_SET")
 
-// Remove ready signals
-signalapi.removeManySignals(new HashSet<>(signalsSet.collect { signal -> "ready_"+signal }))
+// Check whether one signal among those specified as input is received
+println("Checking whether one signal in the set "+ signalsSet +" is received")
+receivedSignal = signalapi.checkForSignals(signalsSet)
 
-// Display the received signal and add it to the job result
-println("Received signal: "+ receivedSignal)
-result = receivedSignal
+// If a signal is received, remove ready signals and break the loop, else sleep 10 seconds then restart
+if (receivedSignal != null){
+
+    // remove ready signals
+	signalapi.removeManySignals(new HashSet<>(signalsSet.collect { signal -> "ready_"+signal }))
+
+    // print the received signal
+    println("Received signal: "+ receivedSignal)
+    result = receivedSignal
+
+} else {
+    result = null
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow >
+        <loop target="wait_for_stop">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+if (result!=null){
+    loop = false
+} else {
+    loop = "* * * * *"
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
       <metadata>
         <positionTop>
             425.484375

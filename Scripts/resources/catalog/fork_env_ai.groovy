@@ -9,6 +9,8 @@ Variables:
  - USE_NVIDIA_RAPIDS: true/false, set to true to use activeeon/rapidsai image (default=false)
  - HOST_LOG_PATH: optional host path to store logs
  - CONTAINER_LOG_PATH: mounting point of optional logs in the container
+ - TENSORBOARD_HOST_LOG_PATH: optional host path to store Tensorboard logs
+ - TENSORBOARD_CONTAINER_LOG_PATH: mounting point of optional Tensorboard logs in the container
  - CONTAINER_ROOTLESS_ENABLED: true/false, set to false to disable rootless mode (default=true)
 
 If used on windows:
@@ -103,6 +105,16 @@ if (variables.get("CONTAINER_LOG_PATH") != null && !variables.get("CONTAINER_LOG
     CONTAINER_LOG_PATH = variables.get("CONTAINER_LOG_PATH")
 } else if (variables.get("DOCKER_LOG_PATH") != null && !variables.get("DOCKER_LOG_PATH").isEmpty()) {
     CONTAINER_LOG_PATH = variables.get("DOCKER_LOG_PATH") // backwards compatibility
+}
+
+def TENSORBOARD_HOST_LOG_PATH = null
+if (variables.get("TENSORBOARD_HOST_LOG_PATH") != null && !variables.get("TENSORBOARD_HOST_LOG_PATH").isEmpty()) {
+    TENSORBOARD_HOST_LOG_PATH = variables.get("TENSORBOARD_HOST_LOG_PATH")
+}
+
+def TENSORBOARD_CONTAINER_LOG_PATH = null
+if (variables.get("TENSORBOARD_CONTAINER_LOG_PATH") != null && !variables.get("TENSORBOARD_CONTAINER_LOG_PATH").isEmpty()) {
+    TENSORBOARD_CONTAINER_LOG_PATH = variables.get("TENSORBOARD_CONTAINER_LOG_PATH")
 }
 
 def CONTAINER_ROOTLESS_ENABLED = true
@@ -201,13 +213,16 @@ if (CONTAINER_ENABLED && (
         // /etc/nvidia-container-runtime/config.toml => no-cgroups = true
         cmd.add("--privileged") // https://github.com/NVIDIA/nvidia-docker/issues/1171
     }
-
+ 
+    isWindows = false
+    isMac = false
     switch (family) {
         case OperatingSystemFamily.WINDOWS:
             isWindows = true
             break
-        default:
-            isWindows = false
+        case OperatingSystemFamily.MAC:
+            isMac = true
+            break
     }
     forkEnvironment.setDockerWindowsToLinux(isWindows)
 
@@ -249,7 +264,7 @@ if (CONTAINER_ENABLED && (
         println cachespaceHost + " does not exist or is not readable, access to cache space will be disabled in the container"
     }
 
-    if (!isWindows) {
+    if (!isWindows && !isMac) {
         // when not on windows, mount and use the current JRE
         currentJavaHome = System.getProperty("java.home")
         forkEnvironment.setJavaHome(currentJavaHome)
@@ -270,6 +285,12 @@ if (CONTAINER_ENABLED && (
     if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
         cmd.add("-v")
         cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
+    }
+
+    // Add Tensorboard log directory
+    if (TENSORBOARD_HOST_LOG_PATH && TENSORBOARD_CONTAINER_LOG_PATH) {
+        cmd.add("-v")
+        cmd.add(TENSORBOARD_HOST_LOG_PATH + ":" + TENSORBOARD_CONTAINER_LOG_PATH)
     }
 
     // Prepare container working directory
@@ -411,6 +432,12 @@ if (CONTAINER_ENABLED &&
     if (HOST_LOG_PATH && CONTAINER_LOG_PATH) {
         cmd.add("-B")
         cmd.add(HOST_LOG_PATH + ":" + CONTAINER_LOG_PATH)
+    }
+
+    // Add Tensorboard log directory
+    if (TENSORBOARD_HOST_LOG_PATH && TENSORBOARD_CONTAINER_LOG_PATH) {
+        cmd.add("-B")
+        cmd.add(TENSORBOARD_HOST_LOG_PATH + ":" + TENSORBOARD_CONTAINER_LOG_PATH)
     }
 
     forkEnvironment.setDockerWindowsToLinux(isWindows)
