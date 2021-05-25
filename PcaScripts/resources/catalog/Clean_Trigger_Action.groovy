@@ -21,7 +21,9 @@ def pcaUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/service-automation-serv
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()
-schedulerapi.removeThirdPartyCredential(credentialsKey)
+if (credentialsKey != null){
+    schedulerapi.removeThirdPartyCredential(credentialsKey)
+}
 def sessionId = schedulerapi.getSession()
 
 // Connect to Cloud Automation API
