@@ -199,16 +199,15 @@ def get_token_api(user) -> str:
         return token
 
 
-def predict_api(api_token, model_name, image) -> str:
+def predict_api(api_token, model_name, instances) -> str:
     api_token = connexion.request.form['api_token']
     if auth_token(api_token):
         model_name = connexion.request.form['model_name']
-        image = connexion.request.files["image"]
+        instances = connexion.request.form["instances"]
+        instances = json.loads(instances)
         class_names = connexion.request.form['class_names']
         class_names = class_names.split(",")
         log("[INFO] Calling predict_api", api_token)
-        image_path = '/model_as_service/' + str(uuid.uuid4()) + '.png'
-        image.save(image_path)
 
         try:
             model_version = int(connexion.request.form["model_version"])
@@ -220,11 +219,7 @@ def predict_api(api_token, model_name, image) -> str:
 
         if model_version_status == "version deployed":
             try:
-                # data_preprocessing
-                img = utils.load_image(image_path)
-
-                data = json.dumps({"signature_name": "serving_default", "instances": img.tolist()})
-
+                data = json.dumps({"signature_name": "serving_default", "instances": instances})
                 headers = {"content-type": "application/json"}
                 prediction_link = "http://localhost:8501/v1/models/" + model_name + "/versions/" + str(
                     model_version) + ":predict"
