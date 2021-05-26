@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 import base64
 import json
 import logging

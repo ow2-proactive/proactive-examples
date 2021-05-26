@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 # -------------------------------------------------------------
 # You can use the following search space to optimize the hyperparameters
 # SEARCH_SPACE: {"n_clusters": choice([2, 3]), "random_state": choice([0, 3])}

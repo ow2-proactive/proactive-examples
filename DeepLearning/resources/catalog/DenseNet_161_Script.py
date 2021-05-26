@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 print("BEGIN DesNet_161")
 
 import json

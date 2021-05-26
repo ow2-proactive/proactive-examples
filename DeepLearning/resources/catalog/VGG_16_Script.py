@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 print("BEGIN VGG_16")
 
 import json
