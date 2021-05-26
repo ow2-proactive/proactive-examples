@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 # -*- coding: utf-8 -*-
 """Proactive Append Data for Machine Learning
 

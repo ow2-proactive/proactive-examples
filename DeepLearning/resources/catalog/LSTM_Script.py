@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 print("BEGIN LSTM")
 import torch
 from torch.autograd import Variable

@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 __file__ = variables.get("PA_TASK_NAME")
 
 import re
