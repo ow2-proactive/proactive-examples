@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 # -*- coding: utf-8 -*-
 """Proactive Visdom_Visualize_Results for Machine Learning
 
