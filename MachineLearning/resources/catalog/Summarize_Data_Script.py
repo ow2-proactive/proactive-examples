@@ -1,4 +1,4 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
+
 # -*- coding: utf-8 -*-
 """Proactive Summarize Data for Machine Learning
 

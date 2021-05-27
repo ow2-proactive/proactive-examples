@@ -1,4 +1,4 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
+
 import math
 import numpy as np
 import urllib3
