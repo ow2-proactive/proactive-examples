@@ -1,4 +1,4 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
+
 __file__ = variables.get("PA_TASK_NAME")
 
 if str(variables.get("TASK_ENABLED")).lower() == 'false':

@@ -1,4 +1,4 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
+
 # -*- coding: utf-8 -*-
 """Proactive Load_Breast_Cancer_Dataset for Machine Learning
 

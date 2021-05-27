@@ -1,4 +1,4 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
+
 print("BEGIN Predict_Image_Object_Detection_Model")
 
 import os
