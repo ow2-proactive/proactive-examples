@@ -1,4 +1,4 @@
-// Copyright Activeeon 2007-2021. All rights reserved.
+
 token_encoded = variables.get('token_encoded')
 
 // If encoded variables are found
