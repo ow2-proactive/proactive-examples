@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 # [deprecated] solve mnist download issue, fix from: https://github.com/pytorch/vision/issues/1938
 # from six.moves import urllib
 # opener = urllib.request.build_opener()
