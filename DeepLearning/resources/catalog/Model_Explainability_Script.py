@@ -1,3 +1,4 @@
+
 __file__ = variables.get("PA_TASK_NAME")
 print("BEGIN " + __file__)
 

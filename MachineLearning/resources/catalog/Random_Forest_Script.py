@@ -1,3 +1,4 @@
+
 # -------------------------------------------------------------
 # You can use the following search space to optimize the hyperparameters
 # SEARCH_SPACE: {"kernel": choice(["rbf", "sigmoid"])}

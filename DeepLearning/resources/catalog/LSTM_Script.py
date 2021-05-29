@@ -1,3 +1,4 @@
+
 print("BEGIN LSTM")
 import torch
 from torch.autograd import Variable

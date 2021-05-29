@@ -1,3 +1,4 @@
+
 print("BEGIN RNN")
 import torch
 from torch.autograd import Variable

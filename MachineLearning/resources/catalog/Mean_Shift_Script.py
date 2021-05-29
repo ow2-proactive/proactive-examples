@@ -1,3 +1,4 @@
+
 # -------------------------------------------------------------
 # You can use this search space to optimize the hyperparameters
 # SEARCH_SPACE = {"bandwidth": choice([2, 3, 4])}
