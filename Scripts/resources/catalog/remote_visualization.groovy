@@ -1,3 +1,4 @@
+// Copyright Activeeon 2007-2021. All rights reserved.
 /**
  * Pre-Script which enables Remote Visualization using a VNC command and X terminal session
  *
@@ -9,13 +10,27 @@
  * visu_command : command used to start the VNC session (e.g. "Xvnc :${DISPLAY} -geometry 1280x1024 -SecurityTypes None")
  */
 
-def display = args[0]
-def visu_command = args[1]
+def visu_command = args[0]
+findPortScript = new File("find_port.sh")
+findPortScript << '''
+while :
+do
+    RND_PORT="`shuf -i 5911-5999 -n 1`"
+	ss -lpn | grep -q ":$RND_PORT " || break
+done
+echo $RND_PORT
+'''
+'chmod u+x find_port.sh'.execute().text
+port = "./find_port.sh".execute().text
+display = port.trim().substring(2)
+variables.put("DISPLAY", display)
+visu_command_final = visu_command.replace('$DISPLAY',display).replace('${DISPLAY}',display)
+println "visu_command = " + visu_command_final
+def processVisu = visu_command_final.execute()
 
-def processVisu = visu_command.execute()
 processVisu.consumeProcessOutput(System.out, System.err)
 Thread.sleep(1000)
-grepProc = 'ps -aux'.execute() | ['grep', visu_command].execute() | 'grep -v grep'.execute() | ['awk', '{ print $2 }'].execute()
+grepProc = 'ps -aux'.execute() | ['grep', visu_command_final].execute() | 'grep -v grep'.execute() | ['awk', '{ print $2 }'].execute()
 grepProc.waitFor()
 visu_pidText = grepProc.text
 
