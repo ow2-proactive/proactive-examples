@@ -1,4 +1,3 @@
-// Copyright Activeeon 2007-2021. All rights reserved.
 /**
  * Pre-Script which enables Remote Visualization using a VNC command and X terminal session
  *
