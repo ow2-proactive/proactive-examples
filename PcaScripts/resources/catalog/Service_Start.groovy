@@ -131,6 +131,10 @@ if (!instance_exists){
     serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
     def instanceId = serviceInstanceData.getInstanceId()
     endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
+    
+    // Acquire service job id
+    serviceJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId().toString()
+    variables.put("SERVICE_JOB_ID", serviceJobId)
 
     if (publishService) {
         schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
