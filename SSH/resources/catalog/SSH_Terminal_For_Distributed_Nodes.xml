@@ -1,0 +1,506 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="SSH_Terminal_For_Distributed_Nodes" onTaskError="continueJobExecution" priority="normal" projectName="Service Automation - Deployment" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="ssh-terminal-for-distributed-nodes-${PA_JOB_ID}"/>
+    <variable model="PA:INTEGER" name="SSH_PORT" value="22"/>
+    <variable model="PA:INTEGER" name="NUMBER_OF_NODES" value="2"/>
+    <variable model="PA:Boolean" name="PROXYFIED" value="True"/>
+  </variables>
+  <description>
+    <![CDATA[ Reserves a number of hosts given as input, and deploys a SSH terminal (using the WeTTy software) in one of the reserved hosts, thus allowing to execute distributed commands via the SSH terminal. The service assumes that SSH is configured in the reserved machines (e.g., they use the SSH port given as input).
+This service takes as input:
+- INSTANCE_NAME: name of the service instance to be deployed
+- NUMBER_OF_NODES: number of hosts to be reserved, among those managed by ProActive Resource Manager
+- SSH_PORT: port used by SSH in the reserved hosts.
+- PROXYFIED: whether the service should be accessed via our proxy (for restricted access control) ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="service-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+<info name="pca.states" value="(VOID,RUNNING)"/>
+<info name="Documentation" value="https://github.com/butlerx/wetty"/>
+<info name="pca.service.id" value="SSH_Terminal_For_Distributed_Nodes"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Start_SSH_Terminal">
+      <description>
+        <![CDATA[ Pull Wetty image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="Documentation" value="PSA/PSAUserGuide.html"/>
+      </genericInformation>
+      <parallel numberOfNodes="${NUMBER_OF_NODES}">
+        <topology>
+          <differentHostsExclusive/>
+        </topology>
+      </parallel>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("ENDPOINT_ID","ssh-terminal-at-"+variables.get("PA_NODE_HOST"))
+variables.put("HTTP_ENABLED","true")
+variables.put("MASTER_HOST",variables.get("PA_NODE_HOST"))
+
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+def endpointID = variables.get("ENDPOINT_ID")
+def proxified = variables.get("PROXYFIED")
+
+def pcaPublicUrl = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+
+if ("true".equalsIgnoreCase(proxified)) {
+    proxyfiedURL = pcaPublicUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/"
+    wsURL = proxyfiedURL.replace("https://", "wss://")
+    wsURL = wsURL.replace("http://", "ws://")
+    println "Proxyfied URL :" + proxyfiedURL
+    println "WebSocket URL :" + wsURL
+    variables.put("PROXYFIED_URL", proxyfiedURL)
+    variables.put("WS_PROXYFIED_URL", wsURL)
+}
+
+ println("MASTER_HOST: " + variables.get("MASTER_HOST"))
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+################################################################################
+### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+# Check if the Linux machine supports AVX instructions
+DOCKER_IMAGE=svenihoney/wetty
+TERMINAL_INTERNAL_PORT=3000
+INSTANCE_NAME=$variables_INSTANCE_NAME
+################################################################################
+GET_RANDOM_PORT(){
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+echo "Picking a random port number"
+TERMINAL_HOST_PORT=$(GET_RANDOM_PORT)
+
+echo "[INFO] The service will be initialized on port $TERMINAL_HOST_PORT"
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed."
+    exit 1
+fi
+
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
+
+if [ "$(docker ps --format '{{.Names}}' | grep ^$INSTANCE_NAME$)" ]; then
+    RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+    STOPPED=$(docker inspect --format="{{ .State.Status }}" $INSTANCE_NAME 2> /dev/null)
+    if [ "${RUNNING,,}" = "true" ]; then
+        echo "$INSTANCE_NAME container is running"
+    elif [ "${STOPPED,,}" = "exited" ]; then
+        echo "Starting $INSTANCE_NAME container"
+        docker start $INSTANCE_NAME
+    fi
+else
+    echo "Running $INSTANCE_NAME container"
+    echo docker run -d --name $INSTANCE_NAME -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT -e REMOTE_SSH_SERVER=$variables_PA_NODE_HOST -e REMOTE_SSH_PORT=$variables_SSH_PORT $DOCKER_IMAGE
+    docker run -d --name $INSTANCE_NAME -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT -e REMOTE_SSH_SERVER=$variables_PA_NODE_HOST -e REMOTE_SSH_PORT=$variables_SSH_PORT $DOCKER_IMAGE  
+fi
+
+TERMINAL_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$TERMINAL_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$TERMINAL_PORT" > $INSTANCE_NAME"_port"
+
+containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
+echo "$containerID" > $INSTANCE_NAME"_containerID"
+
+echo END "$variables_PA_TASK_NAME"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*********************************************************************************
+* THIS POSTSCRIPT PROPAGATES USEFUL INFORMATION SUCH AS:                         *
+* 1) SERVICE ENDPOINT (PROTOCOL://HOSTNAME:PORT)                                 *
+* 2) CREDENTIALS (IF THERE ARE ANY) BY ADDING THEM TO 3RD PARTY CREDENTIALS      *
+*********************************************************************************/
+
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.Container
+import org.ow2.proactive.pca.service.client.model.Endpoint
+import org.ow2.proactive.pca.service.client.model.Deployment
+import org.ow2.proactive.pca.service.client.model.Node
+import org.codehaus.groovy.runtime.StackTraceUtils
+
+// Acquire variables
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+def proxyfied = variables.get("PROXYFIED")
+def endpointID = variables.get("ENDPOINT_ID")
+def httpEnabled = variables.get("HTTP_ENABLED") // e.g. MongoDB, Visdom, Tensorboard
+def httpsEnabled = variables.get("HTTPS_ENABLED") // e.g. MaaS, JupyterLab
+def engine = variables.get("ENGINE") // docker, singularity
+
+// Handle service parameters
+def hostname = variables.get("PA_NODE_HOST")
+def port = new File(instanceName+"_port").text.trim()
+
+def containerID = ""
+if (engine != null && "singularity".equalsIgnoreCase(engine)) {
+    containerID = "0"
+} else {
+    containerID = new File(instanceName+"_containerID").text.trim()
+}
+
+def containerUrl = hostname+":"+port
+if (httpsEnabled != null){
+    if ("true".equalsIgnoreCase(httpsEnabled)){
+        containerUrl = "https://"+containerUrl
+    }else{
+        containerUrl = "http://"+containerUrl
+    }
+}else{
+    if (httpEnabled != null && "true".equalsIgnoreCase(httpEnabled)){
+        containerUrl = "http://"+containerUrl
+    }
+}
+println "containerUrl: " + containerUrl
+
+variables.put("HOSTNAME", hostname)
+variables.put("PORT", port)
+
+// Determine Cloud Automation URL
+def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+
+try {
+    // Get schedulerapi access and acquire session id
+    schedulerapi.connect()
+    def sessionId = schedulerapi.getSession()
+
+    // Connect to Cloud Automation API
+    def apiClient = new ApiClient()
+    apiClient.setBasePath(pcaUrl)
+    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+    // Implement service model
+
+    // Container
+    def Container container = new Container()
+    container.setId(containerID)
+    container.setName(instanceName)
+
+    // Endpoint
+    def Endpoint endpoint = new Endpoint();
+    endpoint.setId(endpointID);
+    endpoint.setUrl(containerUrl);
+    // Set the endpoint parameters according to the Proxy settings
+    if (proxyfied.toLowerCase()=="true"){
+        proxyfiedURL = variables.get('PROXYFIED_URL')
+        endpoint.setProxyfied(true);
+        endpoint.setProxyfiedUrl(proxyfiedURL)
+    }else{
+        endpoint.setProxyfied(false)
+    }
+
+    // Node
+    def Node node = new Node();
+    node.setName(variables.get("PA_NODE_NAME"))
+    node.setHost(variables.get("PA_NODE_HOST"))
+    node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
+    node.setUrl(variables.get("PA_NODE_URL"))
+
+    // Deployment
+    def Deployment deployment = new Deployment()
+    deployment.setNode(node)
+    deployment.setContainer(container)
+    deployment.setEndpoint(endpoint)
+
+    // Update service instance model (add Deployment, Groups)
+    def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+    serviceInstanceData.setInstanceStatus("RUNNING")
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
+    if (proxyfied.toLowerCase()=="true"){
+        serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
+        serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
+    }
+    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+    println(serviceInstanceData)
+
+    schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)
+
+    // Inform other platforms that service is running through Synchronization API
+    channel = "Service_Instance_" + instanceId
+    synchronizationapi.createChannelIfAbsent(channel, true)
+    synchronizationapi.put(channel, "RUNNING", true)
+    synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
+    synchronizationapi.put(channel, "MASTER_HOST", variables.get("MASTER_HOST"))
+
+    println("MASTER_HOST:    " + variables.get("MASTER_HOST"))
+    
+    // Add tokens to the used nodes
+    token = instanceName
+    nodeUrl = variables.get("PA_NODE_URL")
+    println("Current nodeUrl: " + nodeUrl)
+    println("Adding token:    " + token)
+    rmapi.connect()
+    allnodesurl.each {
+        rmapi.addNodeToken(it, token)         
+    }
+
+    // Log output
+    println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
+    println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
+    
+    // Display the reserved hosts
+    resultMap.put("SSH Host", variables.get("MASTER_HOST"))
+    def Set<String> hostSet = new HashSet();
+	def File hosts = new File(variables.get("PA_NODESFILE").toString())
+	hosts.withReader { reader ->
+        while ((line = reader.readLine()) != null) {
+           hostSet.add(line)
+        }
+	}
+	resultMap.put("Reserved Hosts", hostSet.toString())
+    
+} catch (Exception e) {
+    StackTraceUtils.printSanitizedStackTrace(e)
+    throw e
+}
+
+println("END " + variables.get("PA_TASK_NAME"))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            257.6704559326172
+        </positionTop>
+        <positionLeft>
+            557.4715881347656
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Check_Status">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="Documentation" value="PSA/PSAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_SSH_Terminal"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Script which verifies that the current node runs on a host which matches the given regular expression
+ *
+ * Arguments:
+ * machine host name (regexp)
+ */
+
+import com.google.common.base.Strings;
+import org.ow2.proactive.scripting.helper.selection.SelectionUtils
+
+if (args.length != 1) {
+    println "Incorrect number of arguments, expected 1, received " + args.length;
+    selected = false;
+    return;
+}
+
+machineName = args[0]
+
+if (Strings.isNullOrEmpty(machineName)) {
+    println "Given host name was empty";
+    selected = false;
+    return;
+}
+
+machineName = machineName.trim()
+
+println "Hostname " + nodehost + " (expected :  " + machineName + ")";
+
+selected = SelectionUtils.checkHostName(machineName)
+]]>
+          </code>
+          <arguments>
+            <argument value="${MASTER_HOST}"/>
+          </arguments>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+
+def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+def channel = "Service_Instance_" + instanceId
+def credentialsKey = variables.get("CREDENTIALS_KEY")
+
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionId = schedulerapi.getSession()
+
+// Connect to Cloud Automation API
+def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
+
+// If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
+def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId).getInstanceStatus()
+if (currentStatus.equals("FINISHED")){
+    variables.put("IS_FINISHED",true)
+    if(credentialsKey){
+        schedulerapi.removeThirdPartyCredential(credentialsKey)
+    }
+    synchronizationapi.deleteChannel(channel)
+
+    // detach service to the current and parent job
+    schedulerapi.detachService(variables.get("PA_JOB_ID"), instanceId as int)
+    if (genericInformation.containsKey("PARENT_JOB_ID") && !schedulerapi.isJobFinished(genericInformation.get("PARENT_JOB_ID"))) {
+        try {
+            schedulerapi.detachService(genericInformation.get("PARENT_JOB_ID"), instanceId as int)
+        } catch (Exception e) {
+            // for the rare case where parent job just terminated
+            printn "WARN: could not detach service from job " + genericInformation.get("PARENT_JOB_ID") + " : " + e.getMessage()
+        }
+    }
+    
+} else {
+    // Check if container has been stopped abnormally
+    def isContainerRunning = ["docker", "inspect", "--format", "{{ .State.Running }}", "${instanceName}"].execute().getText().trim().toBoolean()
+    if ((!isContainerRunning) && (!synchronizationapi.get(channel, "FINISH_LAUNCHED")) && (!synchronizationapi.get(channel, "PAUSE_LAUNCHED"))){
+        currentStatus = 'ERROR'
+        println("[ERROR] An internal error occured in docker container: " + instanceName)
+        // Update docker container is not running
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+        serviceInstanceData.setInstanceStatus(currentStatus)
+        serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+        // Tell the CRON loop to stop
+        variables.put("IS_FINISHED",true)
+        // Exit with error
+        System.exit(1)
+    } else {
+        // Fetch all logs or only new logs since last fetch time mark
+        def lastTime=variables.get('LAST_TIME_MARKER')
+        def fetchLogsCmd = lastTime ? ["docker", "logs", "--since", lastTime, instanceName] : ["docker", "logs", instanceName]
+        fetchLogsCmd.execute().waitForProcessOutput(System.out, System.err)
+    }
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="Check_Status">
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw"/>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            384.68748474121094
+        </positionTop>
+        <positionLeft>
+            557.4715881347656
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Remove_Tokens">
+      <description>
+        <![CDATA[ Remove all tokens created by the service. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Check_Status"/>
+      </depends>
+      <parallel numberOfNodes="${NUMBER_OF_NODES}">
+        <topology>
+          <differentHostsExclusive/>
+        </topology>
+      </parallel>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def instanceName = variables.get("INSTANCE_NAME")
+
+// Remove token in the current node
+token = instanceName
+nodeUrl = variables.get("PA_NODE_URL")
+println("Current nodeUrl: " + nodeUrl)
+println("Removing token:  " + token)
+rmapi.connect()
+allnodesurl.each {
+   rmapi.removeNodeToken(it, token)         
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            512.7130584716797
+        </positionTop>
+        <positionLeft>
+            557.4715881347656
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2483px;
+            height:2810px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-252.6704559326172px;left:-552.4715881347656px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_669" style="top: 257.671px; left: 557.486px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull Wetty image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">Start_SSH_Terminal</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_672" style="top: 384.688px; left: 557.486px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">Check_Status</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_675" style="top: 512.713px; left: 557.486px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Remove all tokens created by the service."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">Remove_Tokens</span></a></div><svg style="position:absolute;left:596.5px;top:296.5px" width="33.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 22.5 50 12.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.7647200000000005,66.303232 L8.955147275230877,48.02525493465072 L0.9308726161701921,52.565190638595936 L-4.782894086173185,45.32966231848053 L-1.7647200000000005,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.7647200000000005,66.303232 L8.955147275230877,48.02525493465072 L0.9308726161701921,52.565190638595936 L-4.782894086173185,45.32966231848053 L-1.7647200000000005,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:637.0266769263776px;top:334.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_686" style="position: absolute; transform: translate(-50%, -50%); left: 649px; top: 404.5px;">loop</div><svg style="position:absolute;left:596.5px;top:424.5px" width="26" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 5 88 C 15 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.409531250000001,66.78168750000002 L12.520990380459518,46.21781175738666 L6.108748919827519,52.84224829573104 L-1.4184488238094648,47.518594087559144 L7.409531250000001,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.409531250000001,66.78168750000002 L12.520990380459518,46.21781175738666 L6.108748919827519,52.84224829573104 L-1.4184488238094648,47.518594087559144 L7.409531250000001,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 609.5px; top: 287px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 597px; top: 415px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 597px; top: 375px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 647px; top: 375px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 647px; top: 415px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 602px; top: 543px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 602px; top: 503px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
