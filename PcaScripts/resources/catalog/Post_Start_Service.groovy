@@ -24,10 +24,6 @@ def engine = variables.get("ENGINE") // docker, singularity
 
 // Handle service parameters
 def hostname = variables.get("PA_NODE_HOST")
-def hostaddressFile = new File(instanceName + "_hostaddress")
-if(hostaddressFile.exists()){
-    hostname = hostaddressFile.text.trim()
-}
 def port = new File(instanceName+"_port").text.trim()
 
 def containerID = ""
