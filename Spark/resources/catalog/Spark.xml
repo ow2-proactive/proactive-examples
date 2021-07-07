@@ -80,12 +80,14 @@ selected = (nodename == swarm_manager_pa_node_name)
 // Retrieve variables
 def spark_service_instance_id = variables.get("PCA_INSTANCE_ID")
 def instance_name = variables.get("INSTANCE_NAME")
+def instance_id = variables.get("PCA_INSTANCE_ID")
 def job_id = variables.get("PA_JOB_ID")
 def pa_node_name = variables.get("PA_NODE_NAME")
 def pa_node_host = variables.get("PA_NODE_HOST")
 def hdfs_network_name = variables.get("hdfs_network_name")
 def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
 def nb_spark_workers = variables.get("nb_spark_workers") as Integer
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
 
 // If hdfs wkw param is not set, create a spark overlay network rather than using the hdfs one
 def spark_network_name = hdfs_network_name
@@ -107,6 +109,10 @@ try {
   throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
 }
 
+// Build the proxified url
+def endpoint_id = "spark-gui-" + job_id
+def spark_master_endpoint_proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
 // Start the spark master docker container
 def spark_master_container_name = instance_name + "-spark-master"
 cmd = ["docker", "run", "--rm", "-dit", "--publish", spark_master_gui_port + ":" + spark_master_gui_port, "--name", spark_master_container_name, "--net", spark_network_name, "activeeon/hdfs-spark:latest"]
@@ -115,12 +121,19 @@ def spark_master_container_id = new StringBuilder()
 cmd.execute().waitForProcessOutput(spark_master_container_id, System.err)
 
 // Spark master configuration + Start
+// core-site.xml
 def hdfs_config_command = "sed s/IP:PORT/" + hdfs_namenode_host_port + "/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
-def spark_create_spark_env_file_config_command = "touch \$SPARK_HOME/conf/spark-env.sh"
+// spark-env.sh
+def create_spark_env_file_command = "touch \$SPARK_HOME/conf/spark-env.sh"
 def spark_public_dns_config_command = "echo \"export SPARK_PUBLIC_DNS=" + pa_node_host + "\" >> \$SPARK_HOME/conf/spark-env.sh"
 def spark_master_webui_port_config_command = "echo \"export SPARK_MASTER_WEBUI_PORT=" + spark_master_gui_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+// spark-defaults.conf
+def create_spark_defaults_conf_file_command = "touch \$SPARK_HOME/conf/spark-defaults.conf"
+def spark_ui_reverse_proxy_command = "echo \"spark.ui.reverseProxy true\" >> \$SPARK_HOME/conf/spark-defaults.conf"
+def spark_ui_reverse_proxy_url_command = "echo \"spark.ui.reverseProxyUrl " + spark_master_endpoint_proxyfied_url + "\" >> \$SPARK_HOME/conf/spark-defaults.conf"
+// start-master.sh"
 def start_master_command = "\$SPARK_HOME/sbin/start-master.sh"
-def command_in_container = hdfs_config_command + ";" + spark_create_spark_env_file_config_command + ";" + spark_public_dns_config_command + ";" + spark_master_webui_port_config_command + ";" + start_master_command
+def command_in_container = hdfs_config_command + ";" + create_spark_env_file_command + ";" + spark_public_dns_config_command + ";" + spark_master_webui_port_config_command + ";" + create_spark_defaults_conf_file_command + ";" + spark_ui_reverse_proxy_command + ";" + spark_ui_reverse_proxy_url_command + ";" + start_master_command
 cmd = ["docker", "exec", spark_master_container_name, "/bin/sh", "-c", command_in_container]
 println cmd
 cmd.execute().waitForProcessOutput(System.out, System.err)
@@ -144,6 +157,7 @@ variables.put("spark_master_container_name", spark_master_container_name)
 variables.put("spark_master_url", spark_master_url)
 variables.put("nb_spark_deployments", (nb_spark_workers + 1))
 variables.put("spark_master_and_workers_pa_node_names", pa_node_name)
+variables.put("spark_master_endpoint_proxyfied_url", spark_master_endpoint_proxyfied_url)
 
 // To results
 resultMap.put("spark_service_instance_id", spark_service_instance_id)
@@ -153,6 +167,8 @@ resultMap.put("spark_master_url", spark_master_url)
 // Propagate variables to the current post script
 new File(localspace, "spark_master_container_id").text = spark_master_container_id.toString()
 new File(localspace, "spark_master_container_name").text = spark_master_container_name
+new File(localspace, "endpoint_id").text = endpoint_id
+new File(localspace, "spark_master_endpoint_proxyfied_url").text = spark_master_endpoint_proxyfied_url
 ]]>
           </code>
         </script>
@@ -177,6 +193,8 @@ import groovy.json.JsonOutput
 // Retrieve the script arguments
 def spark_master_container_id = new File(localspace, "spark_master_container_id").text
 def spark_master_container_name = new File(localspace, "spark_master_container_name").text
+def endpoint_id = new File(localspace, "endpoint_id").text
+def spark_master_endpoint_proxyfied_url = new File(localspace, "spark_master_endpoint_proxyfied_url").text
 
 // Retrieve variables
 def instance_name = variables.get("INSTANCE_NAME")
@@ -186,10 +204,11 @@ def pa_node_source_name = variables.get("PA_NODE_SOURCE")
 def pa_node_url = variables.get("PA_NODE_URL")
 def spark_master_gui_port = variables.get("spark_master_gui_port")
 
-def spark_master_endpoint_url = "http://" + pa_node_host + ":" + spark_master_gui_port
+// Build the endpoint url
+def endpoint_url = "http://" + pa_node_host + ":" + spark_master_gui_port
 
 // Create the deployment map and json
-def deployment_map = ["endpoint":["id":"spark_master_gui","url":spark_master_endpoint_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":spark_master_container_id,"name":spark_master_container_name]]
+def deployment_map = ["endpoint":["id":endpoint_id,"url":endpoint_url,"proxyfied_url":spark_master_endpoint_proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":spark_master_container_id,"name":spark_master_container_name]]
 def deployment_json = JsonOutput.toJson(deployment_map)
 
 // Propagate the deployment map
@@ -241,6 +260,7 @@ def spark_master_url = variables.get("spark_master_url")
 def pa_node_host = variables.get("PA_NODE_HOST")
 def pa_node_name = variables.get("PA_NODE_NAME")
 def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
+def spark_master_endpoint_proxyfied_url = variables.get("spark_master_endpoint_proxyfied_url")
 
 // Find a free port for spark_master_gui_port
 def spark_worker_gui_port = null
@@ -260,12 +280,20 @@ def spark_worker_container_id = new StringBuilder()
 cmd.execute().waitForProcessOutput(spark_worker_container_id, System.err)
 
 // Spark worker configuration + Start
+// core-site.xml
 def hdfs_config_command = "sed s/IP:PORT/" + hdfs_namenode_host_port + "/ \$HADOOP_HOME/etc/hadoop/core-site.xml.template > \$HADOOP_HOME/etc/hadoop/core-site.xml"
-def spark_create_spark_env_file_config_command = "touch \$SPARK_HOME/conf/spark-env.sh"
+// spark-env.sh
+def create_spark_env_file_command = "touch \$SPARK_HOME/conf/spark-env.sh"
 def spark_public_dns_config_command = "echo \"export SPARK_PUBLIC_DNS=" + pa_node_host + "\" >> \$SPARK_HOME/conf/spark-env.sh"
-def worker_webui_port_config_command = "echo \"export SPARK_WORKER_WEBUI_PORT=" + spark_worker_gui_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+def spark_worker_webui_port_config_command = "echo \"export SPARK_WORKER_WEBUI_PORT=" + spark_worker_gui_port + "\" >> \$SPARK_HOME/conf/spark-env.sh"
+// spark-defaults.conf
+def create_spark_defaults_conf_file_command = "touch \$SPARK_HOME/conf/spark-defaults.conf"
+def spark_ui_reverse_proxy_command = "echo \"spark.ui.reverseProxy true\" >> \$SPARK_HOME/conf/spark-defaults.conf"
+def spark_ui_reverse_proxy_url_command = "echo \"spark.ui.reverseProxyUrl " + spark_master_endpoint_proxyfied_url + "\" >> \$SPARK_HOME/conf/spark-defaults.conf"
+// start-slave.sh
 def start_worker_command = "\$SPARK_HOME/sbin/start-slave.sh " + spark_master_url
-def command_in_container = hdfs_config_command + ";" + spark_create_spark_env_file_config_command + ";" + spark_public_dns_config_command + ";" + worker_webui_port_config_command + ";" + start_worker_command
+// docker exec
+def command_in_container = hdfs_config_command + ";" + create_spark_env_file_command + ";" + spark_public_dns_config_command + ";" + spark_worker_webui_port_config_command + ";" + create_spark_defaults_conf_file_command + ";" + spark_ui_reverse_proxy_command + ";" + spark_ui_reverse_proxy_url_command + ";" + start_worker_command
 cmd = ["docker", "exec", spark_worker_container_name, "/bin/sh", "-c", command_in_container]
 println cmd
 cmd.execute().waitForProcessOutput(System.out, System.err)
@@ -291,6 +319,7 @@ def spark_worker_container_id = new File(localspace, "spark_worker_container_id"
 def spark_worker_container_name = new File(localspace, "spark_worker_container_name").text
 
 // Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
 def task_replication_id = variables.get("PA_TASK_REPLICATION")
 def instance_name = variables.get("INSTANCE_NAME")
 def pa_node_name = variables.get("PA_NODE_NAME")
@@ -298,13 +327,12 @@ def pa_node_host = variables.get("PA_NODE_HOST")
 def pa_node_source_name = variables.get("PA_NODE_SOURCE")
 def pa_node_url = variables.get("PA_NODE_URL")
 
-def spark_worker_endpoint_name = "spark_worker_" + task_replication_id + "_gui_url"
-
 // Create the deployment map and json
-def deployment_map = ["endpoint":["id":spark_worker_endpoint_name],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":spark_worker_container_id,"name":spark_worker_container_name]]
+def endpoint_id = "spark-" + job_id + "-" + task_replication_id
+def deployment_map = ["endpoint":["id":endpoint_id],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":spark_worker_container_id,"name":spark_worker_container_name]]
 def deployment_json = JsonOutput.toJson(deployment_map)
 
-// Propagate the deployment map
+// Propagate the deployment map (spark_deployment_json_0 is the master deployment)
 variables.put("spark_deployment_json_" + ((task_replication_id as Integer) + 1), deployment_json)
 
 // Add token to the current node (RM API)
