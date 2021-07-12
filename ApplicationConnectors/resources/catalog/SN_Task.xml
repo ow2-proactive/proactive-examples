@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="SN_Create_Task" onTaskError="continueJobExecution" priority="normal" projectName="ServiceNow" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:URL" name="SN_ENDPOINT" value="https://SN_SERVER/api/now/table/{tableName}"/>
+    <variable model="PA:NOT_EMPTY_STRING" name="SN_USER" value="admin"/>
+    <variable model="PA:HIDDEN" name="SN_PASSWORD" value="ENC(4vzvbNULmKlWZC4vJCWOmQ==)"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that runs a REST request to create a Task in a ServiceNow instance such as an incident, a problem, a ticket or a change request.
+Before the execution, the user has to provide the following variables:
+SN_ENDPOINT (required) is the ServiceNow instance endpoint.
+SN_USER (required) is the ServiceNow login used to query the instance.
+SN_PASSWORD (required) is the ServiceNow password of the user defined above used to query to the instance. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="application-connectors"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ServiceNow.png"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Create_SN_Task">
+      <description>
+        <![CDATA[ A task performing a rest POST request to create a task on a servicenow instance using a json request body.
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+USER: basic auth user for servicenow (inherited from job variable)
+PASSWORD: basic auth password for servicenow (inherited from job variable)
+TASK_TYPE: the type of task to create in ServiceNow. It corresponds to a table in ServiceNow. It can be incident, ticket, problem, change_request.
+PARAM_response_fields: Fields of the queried table to be returned in the response
+SSL_DISABLE_CHECK: to disable ssl certificate check
+CONTENT_TYPE: content-type of the request, should be "application/json" with eventual encoding.
+REQUEST_BODY: a json parameter containing the request body. Example at https://developer.servicenow.com/dev.do#!/reference/api/quebec/rest/c_TableAPI#table-POST (Make sure to select the correct
+release name)
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+]]>
+      </description>
+      <variables>
+        <variable inherited="true" model="PA:URL" name="ENDPOINT" value="${SN_ENDPOINT}"/>
+        <variable inherited="true" model="PA:NOT_EMPTY_STRING" name="USER" value="${SN_USER}"/>
+        <variable inherited="true" model="PA:HIDDEN" name="PASSWORD" value="ENC(b6R6bg2ZaaxJgAY7NKjxIpmPbSOjeh4G)"/>
+        <variable inherited="false" model="PA:LIST(incident,ticket,problem,change_request)" name="TASK_TYPE" value="incident"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{&quot;caller_id&quot;:&quot;caller&quot;,&quot;assigned_to&quot;:&quot;user&quot;,&quot;short_description&quot;:&quot;A short description&quot;,&quot;description&quot;:&quot;A full description&quot;,&quot;due_date&quot;:&quot;2021-07-11&quot;,&quot;impact&quot;:&quot;2&quot;,&quot;urgency&quot;:&quot;2&quot;}"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="DEBUG" value="false"/>
+        <variable inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="html"/>
+        <variable inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable inherited="false" name="PARAM_returned_fields" value="number,sys_created_on,assigned_to,short_description,description,priority"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ServiceNow.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+restCall = given().urlEncodingEnabled(false)
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+if (Strings.isNullOrEmpty(variables.get("TASK_TYPE"))) {
+     throw new IllegalArgumentException("Table to query cannot be empty")
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")})
+	.forEach({ entry -> 
+        restCall = restCall.queryParam(entry.getKey().replace("PARAM_",""), entry.getValue().replaceAll(",","%2C")) 
+    });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+restCall.pathParam("tableName",variables.get("TASK_TYPE"));
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            329.48333740234375
+        </positionTop>
+        <positionLeft>
+            506
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2470px;
+            height:3032px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-324.48333740234375px;left:-501px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 329.483px; left: 506px;" id="jsPlumb_1_19"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a rest POST request to create a task on a servicenow instance using a json request body.
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+USER: basic auth user for servicenow (inherited from job variable)
+PASSWORD: basic auth password for servicenow (inherited from job variable)
+TASK_TYPE: the type of task to create in ServiceNow. It corresponds to a table in ServiceNow. It can be incident, ticket, problem, change_request
+PARAM_response_fields: Fields of the queried table to be returned in the response
+SSL_DISABLE_CHECK: to disable ssl certificate check
+CONTENT_TYPE: content-type of the request, should be "application/json" with eventual encoding.
+REQUEST_BODY: a json parameter containing the request body. Example at https://developer.servicenow.com/dev.do#!/reference/api/quebec/rest/c_TableAPI#table-POST (Make sure to select the correct
+release name)
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+   </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
