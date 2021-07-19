@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Finish_Hive" onTaskError="continueJobExecution" priority="normal" projectName="Service Automation - Lifecycle" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+    <description>
+        <![CDATA[ Delete a hive platform. ]]>
+    </description>
+    <genericInformation>
+        <info name="bucketName" value="basic-examples"/>
+        <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+        <info name="pca.states" value="(RUNNING,FINISHED)(ERROR,FINISHED)"/>
+        <info name="Documentation" value="https://cwiki.apache.org/confluence/display/Hive/GettingStarted"/>
+        <info name="pca.service.id" value="hive"/>
+        <info name="group" value="public-objects"/>
+    </genericInformation>
+    <taskFlow>
+        <task fork="true" name="retrieve_service_variables">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <scriptExecutable>
+                <script>
+                    <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw">
+                        <arguments>
+                            <argument value="$PCA_INSTANCE_ID"/>
+                            <argument value="targeted_network_name"/>
+                            <argument value="targeted_network_name"/>
+                            <argument value="hive_pa_node_name"/>
+                            <argument value="hive_pa_node_name"/>
+                        </arguments>
+                    </file>
+                </script>
+            </scriptExecutable>
+            <metadata>
+                <positionTop>
+                    288
+                </positionTop>
+                <positionLeft>
+                    563.5
+                </positionLeft>
+            </metadata>
+        </task>
+        <task fork="true" name="inform_FINISH_LAUNCHED">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <depends>
+                <task ref="retrieve_service_variables"/>
+            </depends>
+            <scriptExecutable>
+                <script>
+                    <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Pre_Trigger_Action/raw">
+                        <arguments>
+                            <argument value="FINISH_LAUNCHED"/>
+                        </arguments>
+                    </file>
+                </script>
+            </scriptExecutable>
+            <metadata>
+                <positionTop>
+                    416
+                </positionTop>
+                <positionLeft>
+                    562.5
+                </positionLeft>
+            </metadata>
+        </task>
+        <task fork="true" name="docker_rm_hive_containers">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <depends>
+                <task ref="inform_FINISH_LAUNCHED"/>
+            </depends>
+            <selection>
+                <script type="static">
+                    <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_name/raw" language="groovy">
+                        <arguments>
+                            <argument value="$hive_pa_node_name"/>
+                        </arguments>
+                    </file>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+
+// List the docker containers to remove
+def container_ids = new StringBuilder()
+def cmd = ["docker", "ps", "-aqf", "name=^" + instance_name]
+println cmd
+cmd.execute().waitForProcessOutput(container_ids, System.err)
+println "DEBUG container ids to remove " + container_ids
+
+// Remove remaining container
+def cmd_err = null
+if (!container_ids.toString().trim().isEmpty()){
+  println "Removing containers from node " + variables.get("PA_NODE_NAME")
+  cmd_err = new StringBuilder()
+  cmd = ["docker", "rm", "-fv"] + container_ids.toString().split("\n").toList()
+  cmd.execute().waitForProcessOutput(System.out, cmd_err)
+}
+
+// Propagate the status of the clean
+if (cmd_err != null && !cmd_err.toString().isEmpty() && !cmd_err.toString().contains("is already in progress") && !cmd_err.toString().contains("No such container")){
+  println "DEBUG adding ko since cmd_err " + cmd_err.toString()
+  variables.put("DOCKER_RM_FORCED_EXECUTED")
+}
+
+//remove mysql container
+ cmd = ["docker", "rm", "-f", "mysql"]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <metadata>
+                <positionTop>
+                    544
+                </positionTop>
+                <positionLeft>
+                    563.5
+                </positionLeft>
+            </metadata>
+        </task>
+        <task fork="true" name="Set_service_FINISHED_if_all_clean_OK">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <depends>
+                <task ref="docker_rm_hive_containers"/>
+            </depends>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+// Propagate all the err message of the clean commands
+def status_file_content = ""
+status_file_content += variables.get("DOCKER_RM_FORCED_EXECUTED")
+new File(localspace, instance_name + "_status").text = status_file_content
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <post>
+                <script>
+                    <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Set_service_FINISHED_if_all_clean_OK/raw">
+                        <arguments>
+                            <argument value="FINISHED"/>
+                            <argument value="${INSTANCE_NAME}_status"/>
+                        </arguments>
+                    </file>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    711
+                </positionTop>
+                <positionLeft>
+                    559.5
+                </positionLeft>
+            </metadata>
+        </task>
+        <task fork="true" name="remove_tokens_if_failing_platform">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="Set_service_FINISHED_if_all_clean_OK"/>
+            </depends>
+            <scriptExecutable>
+                <script>
+                    <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Update_service_and_remove_tokens/raw">
+                        <arguments>
+                            <argument value="null"/>
+                            <argument value="$INSTANCE_NAME"/>
+                        </arguments>
+                    </file>
+                </script>
+            </scriptExecutable>
+            <metadata>
+                <positionTop>
+                    928
+                </positionTop>
+                <positionLeft>
+                    563.5
+                </positionLeft>
+            </metadata>
+        </task>
+    </taskFlow>
+    <metadata>
+        <visualization>
+            <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2726px;
+            height:3360px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-283px;left:-554.5px"><div class="task ui-draggable" id="jsPlumb_1_34" style="top: 288px; left: 563.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">retrieve_service_variables</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_37" style="top: 416px; left: 562.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">inform_FINISH_LAUNCHED</span></a></div><div class="task ui-draggable" id="jsPlumb_1_40" style="top: 544px; left: 563.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">docker_rm_hive_containers</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_46" style="top: 711px; left: 559.5px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">Set_service_FINISHED_if_all_clean_OK</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_49" style="top: 928px; left: 563.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">remove_tokens_if_failing_platform</span></a></div><svg style="position:absolute;left:628.5px;top:327.5px" width="25.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4.5 88 C 14.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,66.78168750000002 L12.19383263091469,46.25114034666338 L5.739082405354392,52.834163932040326 L-1.7536909370449987,47.46216731630898 L6.950109375,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,66.78168750000002 L12.19383263091469,46.25114034666338 L5.739082405354392,52.834163932040326 L-1.7536909370449987,47.46216731630898 L6.950109375,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:628.4817132113825px;top:455.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path></svg><svg style="position:absolute;left:647px;top:750.5px" width="30" height="178" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 177 C -10 127 19 50 9 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4741527500000007,136.18210575 L7.284465567817336,116.88737576581016 L-0.2235300539237215,122.23807681744042 L-6.659563364742254,115.63675306973389 L-1.4741527500000007,136.18210575" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4741527500000007,136.18210575 L7.284465567817336,116.88737576581016 L-0.2235300539237215,122.23807681744042 L-6.659563364742254,115.63675306973389 L-1.4741527500000007,136.18210575" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 629px; top: 318px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 633.5px; top: 446px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 633.5px; top: 406px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 633.5px; top: 574px; visibility: visible;" dragid="jsPlumb_1_68" elid="jsPlumb_1_40"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 633.5px; top: 534px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 656.5px; top: 741px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 656.5px; top: 701px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 647.5px; top: 958px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 647.5px; top: 918px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:633px;top:583.5px" width="44" height="128" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 23 127 C 33 77 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M23.033088,96.84979200000001 L24.951994277018393,75.74723768304541 L19.623830615820932,83.27124406259446 L11.373446339612842,79.15649506722447 L23.033088,96.84979200000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg></div></div>
+    </body>
+</html>
+ ]]>
+        </visualization>
+    </metadata>
+</job>
