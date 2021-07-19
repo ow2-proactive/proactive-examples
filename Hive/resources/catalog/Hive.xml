@@ -1,0 +1,401 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Hive" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
+    <variables>
+        <variable name="INSTANCE_NAME" value="hive-$PA_JOB_ID" model="PA:NOT_EMPTY_STRING"/>
+        <variable name="hdfs_service_instance_id" value="xx" model="PA:NOT_EMPTY_STRING"/>
+        <variable name="yarn_service_instance_id" value="xx" model="PA:NOT_EMPTY_STRING"/>
+    </variables>
+    <description>
+        <![CDATA[ Deploy Hive. with a hql (hive queries language) file ]]>
+    </description>
+    <genericInformation>
+        <info name="bucketName" value="service-automation"/>
+        <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+        <info name="pca.states" value="(VOID,RUNNING)"/>
+        <info name="Documentation" value="https://cwiki.apache.org/confluence/display/Hive/GettingStarted"/>
+        <info name="pca.service.id" value="hive"/>
+        <info name="group" value="public-objects"/>
+    </genericInformation>
+    <taskFlow>
+        <task name="retrieve_services_variables"
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+            </genericInformation>
+            <scriptExecutable>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
+                        <arguments>
+                            <argument value="$yarn_service_instance_id"/>
+                            <argument value="yarn_master_and_workers_pa_node_names"/>
+                            <argument value="yarn_master_and_workers_pa_node_names"/>
+                            <argument value="yarn_master_container_name"/>
+                            <argument value="yarn_master_container_name"/>
+                            <argument value="yarn_token_name"/>
+                            <argument value="INSTANCE_NAME"/>
+                        </arguments>
+                    </file>
+                </script>
+            </scriptExecutable>
+            <post>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
+                        <arguments>
+                            <argument value="$hdfs_service_instance_id"/>
+                            <argument value="hdfs_network_name"/>
+                            <argument value="hdfs_network_name"/>
+                            <argument value="hdfs_namenode_host_port"/>
+                            <argument value="hdfs_namenode_host_port"/>
+                            <argument value="hdfs_namenode_and_datanodes_pa_node_names"/>
+                            <argument value="hdfs_namenode_and_datanodes_pa_node_names"/>
+                        </arguments>
+                    </file>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    92.27272033691406
+                </positionTop>
+                <positionLeft>
+                    538.9772644042969
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="start_hive"
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$yarn_token_name"/>
+            </genericInformation>
+            <depends>
+                <task ref="retrieve_services_variables"/>
+            </depends>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def instance_name = variables.get("INSTANCE_NAME")
+def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def hdfs_network_name = variables.get("hdfs_network_name")
+def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
+def hdfs_namenode_container_name = hdfs_namenode_host_port.split(":")[0]
+def yarn_master_container_name = variables.get("yarn_master_container_name")
+def yarn_master_and_workers_pa_node_names = variables.get("yarn_master_and_workers_pa_node_names")
+def yarn_master_pa_node_name = yarn_master_and_workers_pa_node_names.split(",")[0]
+def targeted_network_name = hdfs_network_name
+
+// Find a free port for hive_gui_port & hiveServe2_gui_port
+def hive_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hive_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+def hiveServer2_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hiveServer2_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+// Start  mysql(metastore)  container
+def mysql_container_name =  "mysql"
+cmd = ["docker", "run", "--rm", "-dit", "--name", mysql_container_name, "--net", targeted_network_name, "-e", "MYSQL_ROOT_PASSWORD=123456", "-e", "MYSQL_DATABASE=hive", "mysql:5.7"]
+println cmd
+def mysql_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(mysql_container_id, System.err)
+
+// make sure mysql container is running
+cmd = ["docker", "logs", "mysql"]
+println cmd
+def docker_exec_control_output = new StringBuilder()
+while (!docker_exec_control_output.toString().contains("mysqld: ready for connections")){
+	cmd.execute().waitForProcessOutput(docker_exec_control_output, System.err)
+	sleep(1000)
+}
+
+// Start  hive  container
+def hive_container_name = instance_name + "-hive"
+cmd = ["docker", "run", "--rm","-v", localspace + ":" + localspace, "-dit", "--publish", hive_gui_port + ":" + 9999, "-p", hiveServer2_gui_port + ":" + 10002, "--name", hive_container_name, "--net", targeted_network_name, "activeeon/hive:latest"]
+println cmd
+def hive_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hive_container_id, System.err)
+
+//Commande inspect
+cmd = ["docker", "inspect", hive_container_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"]
+println cmd
+def hive_container_ip = new StringBuilder()
+cmd.execute().waitForProcessOutput(hive_container_ip, System.err)
+
+// hive configuration + Start
+def hdfs_core_site_config_command = "sed -i 's/toreplace:port/" + hdfs_namenode_host_port + "/g' \$HADOOP_HOME/etc/hadoop/core-site.xml"
+def hdfs_hdfs_site_config = "sed -i 's/toreplace/" + hdfs_namenode_container_name + "/g' \$HADOOP_HOME/etc/hadoop/hdfs-site.xml"
+def yarn_mapred_site_config = "sed -i 's/toreplace/" + yarn_master_container_name + "/g' \$HADOOP_HOME/etc/hadoop/mapred-site.xml"
+def yarn_yarn_site_config = "sed -i 's/toreplace/" + yarn_master_container_name + "/g' \$HADOOP_HOME/etc/hadoop/yarn-site.xml"
+def command_in_container = hdfs_core_site_config_command + ";" + hdfs_hdfs_site_config + ";"  + yarn_mapred_site_config + ";" + yarn_yarn_site_config
+cmd = ["docker", "exec", hive_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+//metastore(mysql) initialisation
+def schematool_command = 'schematool --dbType mysql --initSchema'
+cmd = ["docker", "exec", hive_container_name, "/bin/sh", "-c", schematool_command]
+println cmd
+def docker_exec_schematool_output = new StringBuilder()
+while (!docker_exec_schematool_output.toString().contains("completed")){
+	cmd.execute().waitForProcessOutput(docker_exec_schematool_output, System.err)
+	sleep(1000)
+}
+println docker_exec_schematool_output
+
+//add  directories in hdfs container
+def hdfs_command = "hdfs dfs -mkdir /tmp ; hdfs dfs -mkdir -p /user/hive/warehouse ; hdfs dfs -chmod g+w /tmp ; hdfs dfs -chmod g+w /user/hive/warehouse"
+cmd = ["docker", "exec", hive_container_name, "/bin/sh", "-c", hdfs_command]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+def hive_metastore_start = "hive --service metastore &"
+cmd = ["docker", "exec", hive_container_name, "/bin/sh", "-c", hive_metastore_start]
+println cmd
+def docker_exec_metastore_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_metastore_output, System.err)
+
+//starting hiveServer2 interface
+def start_ui_cmd = "hive --service hiveserver2 &"
+cmd = ["docker", "exec", hive_container_name, "/bin/sh", "-c", start_ui_cmd]
+println cmd
+cmd.execute()
+
+println "config terminated you can upload your sql or hql file and run hive"
+
+//add  directories in hdfs container
+def hdfs_com = "hdfs dfs -chmod 777 /tmp/hive;"
+cmd = ["docker", "exec", hive_container_name, "/bin/sh", "-c", hdfs_com]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Propagate variables
+variables.put("hive_gui_port", hiveServer2_gui_port)
+variables.put("targeted_network_name", targeted_network_name)
+variables.put("hive_container_name", hive_container_name)
+variables.put("hive_url", "hive://" + hive_container_name + ":10002")
+variables.put("nb_hive_deployments", 1)
+variables.put("hive_pa_node_name", pa_node_name)
+variables.put("hdfs_namenode_container_name", hdfs_namenode_container_name)
+variables.put("hive_container_ip", hive_container_ip.toString())
+resultMap.put("hiveservice_instance_id", service_instance_id)
+
+// Propagate variables to the current post script
+new File(localspace, "hive_container_id").text = hive_container_id.toString()
+new File(localspace, "hive_container_name").text = hive_container_name
+
+// Add token to the current node (RM API)
+rmapi.connect()
+nodeUrl = variables.get("PA_NODE_URL")
+println "Adding token " + instance_name + " to node " + nodeUrl
+rmapi.addNodeToken(nodeUrl, instance_name)
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+            <post>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hive_container_id = new File(localspace, "hive_container_id").text
+def hive_container_name = new File(localspace, "hive_container_name").text
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def job_id = variables.get("PA_JOB_ID")
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+def instance_id = variables.get("PCA_INSTANCE_ID")
+def hive_gui_port = variables.get("hive_gui_port")
+def hive_endpoint_url = "http://" + pa_node_host + ":" + hive_gui_port
+
+// Build the proxified url
+def endpoint_id = "hive-gui-" + job_id
+def proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":endpoint_id,"url":hive_endpoint_url,"proxyfied_url":proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hive_container_id,"name":hive_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("hive_deployment_json_0", deployment_json)
+]]>
+                    </code>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    220.28407287597656
+                </positionTop>
+                <positionLeft>
+                    538.9772644042969
+                </positionLeft>
+            </metadata>
+        </task>
+
+        <task name="propagate_variables_and_update_deployments_with_service"
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <depends>
+                <task ref="start_hive"/>
+            </depends>
+            <pre>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Propagate_variables_to_current_service/raw" language="groovy">
+                        <arguments>
+                            <argument value="targeted_network_name"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="hive_url"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="hdfs_namenode_host_port"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="hive_pa_node_name"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="hive_container_ip"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="yarn_token_name"/>
+                            <argument value="VARIABLE_VALUE"/>
+                        </arguments>
+                    </file>
+                </script>
+            </pre>
+            <scriptExecutable>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
+                        <arguments>
+                            <argument value="hive_deployment_json_"/>
+                            <argument value="$nb_hive_deployments"/>
+                        </arguments>
+                    </file>
+                </script>
+            </scriptExecutable>
+            <cleaning>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
+                </script>
+            </cleaning>
+            <metadata>
+                <positionTop>
+                    395.31248474121094
+                </positionTop>
+                <positionLeft>
+                    511.9602355957031
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="loop_over_hive_status"
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hive.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <depends>
+                <task ref="propagate_variables_and_update_deployments_with_service"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+def hive_pa_node_name = variables.get("hive_pa_node_name")
+selected = (nodename == hive_pa_node_name)
+]]>
+                    </code>
+                </script>
+            </selection>
+            <pre>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def hive_container_name = variables.get("hive_container_name")
+def instance_name = variables.get("INSTANCE_NAME")
+
+// Ensure hive  is running
+def hive_command = "hive -e 'show databases;'"
+def cmd = ["docker", "exec", hive_container_name,"/bin/sh", "-c", hive_command]
+println cmd
+def docker_exec_show_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_show_output, System.err)
+println  docker_exec_show_output.toString()
+def is_hive_ok = docker_exec_show_output.toString().contains("default")
+println "DEBUG is_hive_ok " + is_hive_ok
+def is_docker_based_service = true
+def token_to_remove = instance_name
+
+// Propagate to the current task script
+new File(localspace, "arguments.txt").text = String.valueOf(is_hive_ok) + "," + String.valueOf(is_docker_based_service) + "," + token_to_remove
+]]>
+                    </code>
+                </script>
+            </pre>
+            <scriptExecutable>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Loop_over_service_instance_status/raw" language="groovy"></file>
+                </script>
+            </scriptExecutable>
+            <controlFlow >
+                <loop target="loop_over_hive_status">
+                    <script>
+                        <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw" language="groovy"></file>
+                    </script>
+                </loop>
+            </controlFlow>
+            <metadata>
+                <positionTop>
+                    581.3068084716797
+                </positionTop>
+                <positionLeft>
+                    534.9573669433594
+                </positionLeft>
+            </metadata>
+        </task>
+    </taskFlow>
+    <metadata>
+        <visualization>
+            <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2477px;
+            height:3021px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-87.27272033691406px;left:-506.9602355957031px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_190" style="top: 92.2729px; left: 538.991px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title=""><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">retrieve_services_variables</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_193" style="top: 220.284px; left: 538.991px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">start_hive</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_196" style="top: 395.313px; left: 511.974px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">propagate_variables_and_update_deployments_with_service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_199" style="top: 581.307px; left: 534.971px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hive.png" width="20px">&nbsp;<span class="name">loop_over_hive_status</span></a></div><svg style="position:absolute;left:578.5px;top:132.5px" width="49" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 87 C -10 37 38 50 28 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.32931850000000173,64.92074025000001 L13.79129717691298,49.12174620275386 L5.028077876181541,51.986355685264165 L0.8569126121771378,43.76434982657232 L-0.32931850000000173,64.92074025000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.32931850000000173,64.92074025000001 L13.79129717691298,49.12174620275386 L5.028077876181541,51.986355685264165 L0.8569126121771378,43.76434982657232 L-0.32931850000000173,64.92074025000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:578.5px;top:259.5px" width="97.5" height="136" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 76.5 135 C 86.5 85 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M68.669899875,101.84578875 L62.699226467563,81.51475190822224 L60.509030911577774,90.47036709795334 L51.32380481551635,89.67562087164445 L68.669899875,101.84578875" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M68.669899875,101.84578875 L62.699226467563,81.51475190822224 L60.509030911577774,90.47036709795334 L51.32380481551635,89.67562087164445 L68.669899875,101.84578875" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:592px;top:434.5px" width="84" height="147" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 146 C -10 96 73 50 63 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.943890249999999,111.30887700000001 L21.65733793647248,97.09312651666313 L12.64015262159305,99.01415983160663 L9.362620768079099,90.39686414507007 L5.943890249999999,111.30887700000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.943890249999999,111.30887700000001 L21.65733793647248,97.09312651666313 L12.64015262159305,99.01415983160663 L9.362620768079099,90.39686414507007 L5.943890249999999,111.30887700000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:650.0266769263776px;top:530.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_216" style="position: absolute; transform: translate(-50%, -50%); left: 662px; top: 600.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 607px; top: 123px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 579px; top: 250px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 579px; top: 210px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 655.5px; top: 425px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 655.5px; top: 385px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 592.5px; top: 611px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 592.5px; top: 571px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 660px; top: 571px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 660px; top: 611px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+        </visualization>
+    </metadata>
+</job>

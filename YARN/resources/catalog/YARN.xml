@@ -1,0 +1,480 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Yarn" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
+  <variables>
+    <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="yarn-$PA_JOB_ID" />
+    <variable model="PA:NOT_EMPTY_STRING" name="swarm_service_instance_id" value="xx" />
+    <variable model="PA:NOT_EMPTY_STRING" name="hdfs_service_instance_id" value="xx" />
+    <variable model="PA:NOT_EMPTY_STRING" name="nb_yarn_nodemanagers" value="3" />
+  </variables>
+  <description>
+    <![CDATA[ Deploy a yarn resource manager of nb_YARN_nodemanagers. Swarm_service_instance_id is the service instance id of the targeted Docker Swarm. Hdfs_service_instance_id is the service instance id of the targeted HDFS platform (optional). ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="service-automation"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/yarn.png"/>
+    <info name="pca.states" value="(VOID,RUNNING)"/>
+    <info name="Documentation" value="https://hadoop.apache.org/docs/r2.7.2/hadoop-yarn/hadoop-yarn-site/index.html"/>
+    <info name="pca.service.id" value="yarn"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="retrieve_services_variables"
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/yarn.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
+            <arguments>
+              <argument value="$swarm_service_instance_id"/>
+              <argument value="swarm_token_name"/>
+              <argument value="INSTANCE_NAME"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
+              <argument value="swarm_manager_and_workers_pa_node_names"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
+            <arguments>
+              <argument value="$hdfs_service_instance_id"/>
+              <argument value="hdfs_network_name"/>
+              <argument value="hdfs_network_name"/>
+              <argument value="hdfs_namenode_host_port"/>
+              <argument value="hdfs_namenode_host_port"/>
+            </arguments>
+          </file>
+        </script>
+      </post>
+    </task>
+    <task name="create_overlay_network_or_not_and_start_yarn_master" fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/yarn.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$swarm_token_name"/>
+      </genericInformation>
+      <depends>
+        <task ref="retrieve_services_variables"/>
+      </depends>
+      <selection>
+        <script type="dynamic">
+          <code language="groovy">
+            <![CDATA[
+// The overlay network must be created on the swarm manager host
+def swarm_manager_pa_node_name = variables.get("swarm_manager_and_workers_pa_node_names").split(",")[0]
+selected = (nodename == swarm_manager_pa_node_name)
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def instance_name = variables.get("INSTANCE_NAME")
+def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def hdfs_network_name = variables.get("hdfs_network_name")
+def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
+def nb_yarn_nodemanagers = variables.get("nb_yarn_nodemanagers") as Integer
+def targeted_network_name = hdfs_network_name
+
+// Find a free port for yarn_master_gui_port
+def yarn_master_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  yarn_master_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+// Start the yarn master docker container
+def yarn_master_container_name = instance_name + "-yarn-master"
+cmd = ["docker", "run", "--rm", "-dit", "--publish", yarn_master_gui_port + ":" + 8088, "--name", yarn_master_container_name, "--net", targeted_network_name, "activeeon/yarn:latest"]
+println cmd
+def yarn_master_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(yarn_master_container_id, System.err)
+
+// Yarn master configuration + Start
+def hdfs_namenode_container_name = hdfs_namenode_host_port.split(":")[0]
+def hdfs_core_site_config_command = "sed -i 's/toreplace:port/" + hdfs_namenode_host_port + "/g' \$HADOOP_HOME/etc/hadoop/core-site.xml"
+def hdfs_hdfs_site_config = "sed -i 's/toreplace/" + hdfs_namenode_container_name + "/g' \$HADOOP_HOME/etc/hadoop/hdfs-site.xml"
+def yarn_mapred_site_config = "sed -i 's/toreplace/" + yarn_master_container_name + "/g' \$HADOOP_HOME/etc/hadoop/mapred-site.xml"
+def yarn_yarn_site_config = "sed -i 's/toreplace/" + "" + "/g' \$HADOOP_HOME/etc/hadoop/yarn-site.xml"
+def start_master_command = "\$HADOOP_HOME/sbin/yarn-daemon.sh start resourcemanager"
+def command_in_container = hdfs_core_site_config_command + ";" + hdfs_hdfs_site_config + ";"  + yarn_mapred_site_config + ";" + yarn_yarn_site_config + ";" + start_master_command
+cmd = ["docker", "exec", yarn_master_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Ensure Master is started
+cmd = ["docker", "exec", yarn_master_container_name, "jps"]
+println cmd
+
+def docker_exec_jps_output = new StringBuilder()
+while (!docker_exec_jps_output.toString().contains("ResourceManager")){
+	cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+	println(docker_exec_jps_output)
+	sleep(1000)
+}
+
+// Propagate variables
+variables.put("yarn_master_gui_port", yarn_master_gui_port)
+variables.put("targeted_network_name", targeted_network_name)
+variables.put("yarn_master_container_name", yarn_master_container_name)
+variables.put("yarn_master_url", "yarn://" + yarn_master_container_name + ":8088")
+variables.put("nb_yarn_deployments", (nb_yarn_nodemanagers + 1))
+variables.put("yarn_master_and_workers_pa_node_names", pa_node_name)
+variables.put("hdfs_namenode_container_name", hdfs_namenode_container_name)
+resultMap.put("yarn_service_instance_id", service_instance_id)
+
+// Propagate variables to the current post script
+new File(localspace, "yarn_master_container_id").text = yarn_master_container_id.toString()
+new File(localspace, "yarn_master_container_name").text = yarn_master_container_name
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs = variables.get("nb_yarn_nodemanagers")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def yarn_master_container_id = new File(localspace, "yarn_master_container_id").text
+def yarn_master_container_name = new File(localspace, "yarn_master_container_name").text
+
+// Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+def instance_id = variables.get("PCA_INSTANCE_ID")
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def yarn_master_gui_port = variables.get("yarn_master_gui_port")
+def yarn_master_endpoint_url = "http://" + pa_node_host + ":" + yarn_master_gui_port
+
+// Build the proxified url
+def endpoint_id = "yarn_master-gui-" + job_id
+def proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":endpoint_id,"url":yarn_master_endpoint_url,"proxyfied_url":proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":yarn_master_container_id,"name":yarn_master_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("yarn_deployment_json_0", deployment_json)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+          418.5
+        </positionTop>
+        <positionLeft>
+          643
+        </positionLeft>
+      </metadata>
+    </task>
+
+    <task name="start_yarn_nodemanager">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/yarn.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$swarm_token_name"/>
+      </genericInformation>
+      <depends>
+        <task ref="create_overlay_network_or_not_and_start_yarn_master"/>
+      </depends>
+      <selection>
+        <script type="dynamic">
+          <code language="groovy">
+            <![CDATA[
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def swarm_manager_and_workers_pa_node_names = variables.get("swarm_manager_and_workers_pa_node_names")
+def targeted_pa_node_name = swarm_manager_and_workers_pa_node_names.split(",")[task_replication_id]
+selected = (nodename == targeted_pa_node_name)
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def targeted_network_name = variables.get("targeted_network_name")
+def yarn_master_url = variables.get("yarn_master_url")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def hdfs_namenode_host_port = variables.get("hdfs_namenode_host_port")
+def hdfs_namenode_container_name = variables.get("hdfs_namenode_container_name")
+def yarn_master_container_name = variables.get("yarn_master_container_name")
+
+// Find a free port for spark_master_gui_port
+def yarn_nodemanager_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  yarn_nodemanager_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+// Start the yarn worker container
+def yarn_nodemanager_container_name = instance_name + "-yarn-nodemanager-" + task_replication_id
+def cmd = ["docker", "run", "--rm", "-dit","-p", yarn_nodemanager_gui_port + ":" + 8042, "--name", yarn_nodemanager_container_name, "--net", targeted_network_name, "activeeon/yarn:latest"]
+println cmd
+def yarn_nodemanager_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(yarn_nodemanager_container_id, System.err)
+
+// yarn nodemanager configuration + Start
+def hdfs_core_site_config_command = "sed -i 's/toreplace:port/" + hdfs_namenode_host_port + "/g' \$HADOOP_HOME/etc/hadoop/core-site.xml"
+def hdfs_hdfs_site_config = "sed -i 's/toreplace/" + hdfs_namenode_container_name + "/g' \$HADOOP_HOME/etc/hadoop/hdfs-site.xml"
+def yarn_mapred_site_config = "sed -i 's/toreplace/" + yarn_master_container_name + "/g' \$HADOOP_HOME/etc/hadoop/mapred-site.xml"
+def yarn_yarn_site_config = "sed -i 's/toreplace/" + yarn_master_container_name + "/g' \$HADOOP_HOME/etc/hadoop/yarn-site.xml"
+def start_nodemanager_command = "\$HADOOP_HOME/sbin/yarn-daemon.sh start nodemanager"
+def command_in_container = hdfs_core_site_config_command + ";" + hdfs_hdfs_site_config + ";" + yarn_mapred_site_config + ";" + yarn_yarn_site_config + ";" + start_nodemanager_command
+cmd = ["docker", "exec", yarn_nodemanager_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Ensure Master is started
+cmd = ["docker", "exec", yarn_nodemanager_container_name, "jps"]
+println cmd
+
+def docker_exec_jps_output = new StringBuilder()
+while (!docker_exec_jps_output.toString().contains("NodeManager")){
+	cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+	println(docker_exec_jps_output)
+	sleep(1000)
+}
+
+// Propagate variables
+variables.put("yarn_nodemanager_" + task_replication_id + "_pa_node_name", pa_node_name)
+
+// Propagate variables to the current post script
+new File(localspace, "yarn_nodemanager_gui_port").text = yarn_nodemanager_gui_port
+new File(localspace, "yarn_nodemanager_container_id").text = yarn_nodemanager_container_id.toString()
+new File(localspace, "yarn_nodemanager_container_name").text = yarn_nodemanager_container_name
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def yarn_nodemanager_gui_port = new File(localspace, "yarn_nodemanager_gui_port").text
+def yarn_nodemanager_container_id = new File(localspace, "yarn_nodemanager_container_id").text
+def yarn_nodemanager_container_name = new File(localspace, "yarn_nodemanager_container_name").text
+
+// Retrieve variables
+def task_replication_id = variables.get("PA_TASK_REPLICATION")
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def yarn_nodemanager_endpoint_name = "yarn_nodemanager_" + task_replication_id + "_gui_url"
+def yarn_nodemanager_endpoint_url = "http://" + pa_node_host + ":" + yarn_nodemanager_gui_port
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":yarn_nodemanager_endpoint_name,"url":yarn_nodemanager_endpoint_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":yarn_nodemanager_container_id,"name":yarn_nodemanager_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("yarn_deployment_json_" + ((task_replication_id as Integer) + 1), deployment_json)
+
+// Add token to the current node (RM API)
+rmapi.connect()
+println "Adding token " + instance_name + " to node " + pa_node_url
+rmapi.addNodeToken(pa_node_url, instance_name)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+          546.5
+        </positionTop>
+        <positionLeft>
+          643
+        </positionLeft>
+      </metadata>
+    </task>
+
+    <task name="merge_json_deployments_and_propagate"
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/yarn.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="start_yarn_nodemanager"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def nb_yarn_nodemanagers = variables.get("nb_yarn_nodemanagers") as Integer
+def yarn_master_and_workers_pa_node_names = variables.get("yarn_master_and_workers_pa_node_names")
+for (i = 0; i < nb_yarn_nodemanagers; i++) {
+    yarn_master_and_workers_pa_node_names += "," + variables.get("yarn_nodemanager_" + i + "_pa_node_name")
+}
+
+variables.put("yarn_master_and_workers_pa_node_names", yarn_master_and_workers_pa_node_names)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+          542.5
+        </positionTop>
+        <positionLeft>
+          668
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="propagate_variables_and_update_deployments_with_service"
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/yarn.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="merge_json_deployments_and_propagate"/>
+      </depends>
+      <pre>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Propagate_variables_to_current_service/raw" language="groovy">
+            <arguments>
+              <argument value="targeted_network_name"/>
+              <argument value="VARIABLE_VALUE"/>
+              <argument value="yarn_master_url"/>
+              <argument value="VARIABLE_VALUE"/>
+              <argument value="hdfs_namenode_host_port"/>
+              <argument value="VARIABLE_VALUE"/>
+              <argument value="yarn_master_and_workers_pa_node_names"/>
+              <argument value="VARIABLE_VALUE"/>
+              <argument value="yarn_master_container_name"/>
+              <argument value="VARIABLE_VALUE"/>
+            </arguments>
+          </file>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
+            <arguments>
+              <argument value="yarn_deployment_json_"/>
+              <argument value="$nb_yarn_deployments"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <cleaning>
+        <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
+        </script>
+      </cleaning>
+    </task>
+    <task name="loop_over_yarn_master_status"
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/yarn.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="propagate_variables_and_update_deployments_with_service"/>
+      </depends>
+      <selection>
+        <script type="dynamic">
+          <code language="groovy">
+            <![CDATA[
+def yarn_master_and_workers_pa_node_names = variables.get("yarn_master_and_workers_pa_node_names")
+def yarn_master_pa_node_name = yarn_master_and_workers_pa_node_names.split(",")[0]
+selected = (nodename == yarn_master_pa_node_name)
+]]>
+          </code>
+        </script>
+      </selection>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Retrieve variables
+def yarn_master_container_name = variables.get("yarn_master_container_name")
+def instance_name = variables.get("INSTANCE_NAME")
+
+// Ensure yarn master is running
+def cmd = ["docker", "exec", yarn_master_container_name, "jps"]
+println cmd
+def docker_exec_jps_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+
+def is_yarn_master_ok = docker_exec_jps_output.toString().contains("ResourceManager")
+println "DEBUG is_yarn_master_ok " + is_yarn_master_ok
+def is_docker_based_service = true
+def token_to_remove = instance_name
+
+// Propagate to the current task script
+new File(localspace, "arguments.txt").text = String.valueOf(is_yarn_master_ok) + "," + String.valueOf(is_docker_based_service) + "," + token_to_remove
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Loop_over_service_instance_status/raw" language="groovy"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="loop_over_yarn_master_status">
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw" language="groovy"></file>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          798.5
+        </positionTop>
+        <positionLeft>
+          668
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+</job>
