@@ -30,8 +30,8 @@ def containerID="";
 if ("docker".equalsIgnoreCase(engine)) {
     containerID = new File(instanceName+"_containerID").text.trim()
     if ("".equals(containerID)) {
-        println("Docker container didn't started, terminating execution")
-        System.exit(1);
+        println("Docker container didn't started, terminating execution.")
+        return;
     }
 }
 
