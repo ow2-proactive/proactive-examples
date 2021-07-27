@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Informatica" projectName="ETL" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="ENDPOINT" value="https://usw5-apigw.dm-us.informaticacloud.com/test/test" model="PA:URL"/>
+    <variable name="USERNAME" value="" />
+    <variable name="PASSWORD" value="" model="PA:Hidden"/>
+    <variable name="JWT_TOKEN" value="" model="PA:Hidden"/>
+  </variables>
+  <description>
+    <![CDATA[ This WorkFlow performs a GET request to an Informatica API.
+This template supports: a basic authentication using a username and a password, an advanced authentication using a JWT access token and finally an anonymous authentication where no authorization is required. The authentication method is determined based on the definition of the parameters when launching the WF. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="application-connectors"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/informatica.png"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Informatica" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ This WF accepts the following parameters:
+ENDPOINT: base url of the request (Inherited from the WF variables)
+USERNAME: basic auth user default value is empty (Inherited from the WF variables)
+PASSWORD: basic auth password default value is empty (Inherited from the WF variables)
+JWT_TOKEN: Alternative authentication method (Inherited from the WF variables)
+If all authentication fields are empty, the Get request will be executed anonymously.
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+PARAM_<param_name> ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="https://usw5-apigw.dm-us.informaticacloud.com/test/test" inherited="true" model="PA:URL"/>
+        <variable name="USERNAME" value="" inherited="true" />
+        <variable name="PASSWORD" value="" inherited="true" model="PA:Hidden"/>
+        <variable name="RESPONSE_FORMAT" value="json" inherited="false" model="PA:LIST(string,json,xml,html,contentView)"/>
+        <variable name="RESPONSE_PATH" value="." inherited="false" />
+        <variable name="PARAM_var" value="" inherited="false" />
+        <variable name="HEADER_header1" value="" inherited="false" />
+        <variable name="JWT_TOKEN" value="" inherited="true" model="PA:Hidden"/>
+        <variable name="DEBUG" value="false" inherited="false" model="PA:BOOLEAN"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/informatica.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+def username = variables.get("USERNAME")
+def password = variables.get("PASSWORD")
+def jwtToken = variables.get("JWT_TOKEN")
+
+if (username != "" && password != "") {
+    restCall = restCall.auth().preemptive().basic(username, password)
+    if(debug){
+    	println "-------------- USERNAME/PASSWORD authentication method is chosen -------------------"
+    }
+} else if (jwtToken != "") {
+    restCall = restCall.auth().oauth2(jwtToken)
+    if(debug){
+    	println "-------------- JWT TOKEN authentication method is chosen -------------------"
+    }
+}
+
+// Check if both authentication methods are used at the same time
+if ((username != "" || password != "") && jwtToken != ""){
+    throw new IllegalArgumentException("You must authenticate using either the basic authentication method i.e. username/password or the JWT TOKEN authentication method.")
+}
+
+if(username == "" && password == "" && jwtToken == ""){
+    println "-------------- Anonymous authentication method is chosen -------------------"
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+          217.09375
+        </positionTop>
+        <positionLeft>
+            472
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2144px;
+            height:2580px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-212.09375px;left:-467px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_4" style="top: 217.109px; left: 472px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This WF accepts the following parameters:
+ENDPOINT: base url of the request (Inherited from the WF variables)
+USERNAME: basic auth user default value is empty (Inherited from the WF variables)
+PASSWORD: basic auth password default value is empty (Inherited from the WF variables)
+JWT_TOKEN: Alternative authentication method (Inherited from the WF variables)
+If all authentication fields are empty, the Get request will be executed anonymously.
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+PARAM_<param_name>"><img src="/automation-dashboard/styles/patterns/img/wf-icons/informatica.png" width="20px">&nbsp;<span class="name">Informatica</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 512px; top: 247px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
