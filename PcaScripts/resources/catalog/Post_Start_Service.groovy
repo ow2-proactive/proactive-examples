@@ -26,11 +26,13 @@ def engine = variables.get("ENGINE") // docker, singularity
 def hostname = variables.get("PA_NODE_HOST")
 def port = new File(instanceName+"_port").text.trim()
 
-def containerID = ""
-if (engine != null && "singularity".equalsIgnoreCase(engine)) {
-    containerID = "0"
-} else {
+def containerID="";
+if ("docker".equalsIgnoreCase(engine)) {
     containerID = new File(instanceName+"_containerID").text.trim()
+    if ("".equals(containerID)) {
+        println("Docker container didn't started, terminating execution.")
+        return;
+    }
 }
 
 def containerUrl = hostname + ":" + port
