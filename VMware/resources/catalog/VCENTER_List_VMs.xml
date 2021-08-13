@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="VCENTER_List_VMs" onTaskError="continueJobExecution" priority="normal" projectName="2. Rest Simple Tasks" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable model="PA:URL" name="VCENTER_ENDPOINT" value="https://xxx-vcenter/rest"/>
+  </variables>
+  <genericInformation>
+<info name="bucketName" value="vmware"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/vsphere.png"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="list_vms">
+      <description>
+        <![CDATA[ A task performing a rest GET request.
+This template supports only basic authentication, for more advanced authentication settings, please modify the template according to the rest-assured documentation:
+https://github.com/rest-assured/rest-assured/wiki/Usage#authentication
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+USER: basic auth user (if required, inherited from job variable)
+PASSWORD: basic auth password (if required, inherited from job variable)
+PATH: path of the request (relative to the base url)
+SSL_DISABLE_CHECK: to disable ssl certificate check
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+PARAM_<param_name> ]]>
+      </description>
+      <variables>
+        <variable inherited="false" model="PA:URL" name="ENDPOINT" value="${VCENTER_ENDPOINT}"/>
+        <variable inherited="false" name="USER" value=""/>
+        <variable inherited="false" model="PA:HIDDEN" name="PASSWORD" value=""/>
+        <variable inherited="false" name="PATH" value="/vcenter/vm"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable inherited="false" name="HEADER_vmware-api-session-id" value="${VCENTER_SESSIONID}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/vsphere.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_host_name/raw">
+            <arguments>
+              <argument value="srv-scheduler"/>
+            </arguments>
+          </file>
+        </script>
+      </selection>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/propagate_error/raw"/>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            421.5
+        </positionTop>
+        <positionLeft>
+            650.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2830px;
+            height:3108px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-416.5px;left:-645.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_3874" style="top: 421.5px; left: 650.5px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a rest GET request.
+This template supports only basic authentication, for more advanced authentication settings, please modify the template according to the rest-assured documentation:
+https://github.com/rest-assured/rest-assured/wiki/Usage#authentication
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+USER: basic auth user (if required, inherited from job variable)
+PASSWORD: basic auth password (if required, inherited from job variable)
+PATH: path of the request (relative to the base url)
+SSL_DISABLE_CHECK: to disable ssl certificate check
+DEBUG: to print the full request and response content in the task output
+RESPONSE_FORMAT: format of the response, either
+  - string : plain text
+  - json: a json response which will be parsed using RESPONSE_PATH
+  - xml: a xml response which will be parsed using RESPONSE_PATH
+  - html: an html response which will be parsed using RESPONSE_PATH
+  - contentView: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)
+RESPONSE_PATH: which data to extract in the response if json, xml or html format is selected. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)
+
+Header or query parameters can also be added dynamically, by adding variables in the format:
+HEADER_<header_name>
+PARAM_<param_name>"><img src="/automation-dashboard/styles/patterns/img/wf-icons/vsphere.png" width="20px">&nbsp;<span class="name">list_vms</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 690.5px; top: 451.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
