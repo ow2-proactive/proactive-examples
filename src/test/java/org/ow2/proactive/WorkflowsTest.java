@@ -51,7 +51,7 @@ public class WorkflowsTest {
 
     private final static String PCW_RULE_NAME = "rule";
 
-    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d][a-zA-Z\\d]*)*$";
+    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:[_A-Z\\d][a-zA-Z\\d]*)*$";
 
     private final String filePath;
 
