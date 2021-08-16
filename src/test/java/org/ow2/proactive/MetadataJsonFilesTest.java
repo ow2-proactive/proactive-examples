@@ -26,7 +26,7 @@ public class MetadataJsonFilesTest {
 
     private final static String METADATA_JSON_FILE_NAME = "METADATA.json";
 
-    private final static String DATASPACE_KEY_NAME = "dataspace";
+    private final static String DATASPACE_KEY_NAME = "dataspace ";
 
     private final static String FILES_KEY_NAME = "files";
 
@@ -48,7 +48,7 @@ public class MetadataJsonFilesTest {
 
     private final static String WORKFLOW_KIND_VALUE = "workflow";
 
-    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d][a-zA-Z\\d]*)*$";
+    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d\\$][a-zA-Z\\d{}]*)*$";
 
     private final String packageDirPath;
 
