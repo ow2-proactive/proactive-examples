@@ -1,0 +1,403 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.12" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Start_VM_${VCENTER_VM_NAME}" onTaskError="continueJobExecution" priority="normal" projectName="1. PowerCLI Simple Tasks" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd">
+  <variables>
+    <variable model="" name="VCENTER_ENDPOINT" value="https://xxx-vcenter/rest"/>
+    <variable model="" name="VCENTER_VM_NAME" value=""/>
+    <variable model="" name="SERVICE_NAME" value=""/>
+    <variable model="" name="VCENTER_USER" value=""/>
+    <variable model="PA:HIDDEN" name="VCENTER_PASSWORD" value=""/>
+    <variable model="PA:Integer" name="CHECK_SERVICE_ATTEMPTS" value="30"/>
+    <variable model="" name="START_ITERATION" value="600"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that executes Groovy in JVM. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="vmware"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/powercli.png"/>
+<info name="PARENT_JOB_ID" value="350795"/>
+<info name="Documentation" value="user/ProActiveUserGuide.html#_replicate"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" maxNumberOfExecution="2" name="start_vm" taskRetryDelay="1:00">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Script which verifies that the current node runs on a host which matches the given regular expression
+ *
+ * Arguments:
+ * machine host name (regexp)
+ */
+
+import com.google.common.base.Strings;
+import org.ow2.proactive.scripting.helper.selection.SelectionUtils
+
+if (args.length != 1) {
+    println "Incorrect number of arguments, expected 1, received " + args.length;
+    selected = false;
+    return;
+}
+
+machineName = args[0]
+
+if (Strings.isNullOrEmpty(machineName)) {
+    println "Given host name was empty";
+    selected = false;
+    return;
+}
+
+machineName = machineName.trim()
+
+println "Hostname " + nodehost + " (expected :  " + machineName + ")";
+
+selected = SelectionUtils.checkHostName(machineName)
+]]>
+          </code>
+          <arguments>
+            <argument value="SRV-EXEC"/>
+          </arguments>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="powershell">
+            <![CDATA[
+Import-Module VMware.VimAutomation.Core
+
+$VM = $variables.Get_Item("VCENTER_VM_NAME")
+
+Connect-VIServer -Protocol https -Server $variables.Get_Item("VCENTER_ENDPOINT") -User $variables.Get_Item("VCENTER_USER") -Password $variables.Get_Item("VCENTER_PASSWORD") -WarningAction SilentlyContinue | out-null
+
+$commandResult = Get-VMGuest -VM $VM -ErrorAction Stop 
+
+If ($commandResult.State -eq ’NotRunning’) 
+{ 
+# Start VM
+  try
+  {
+    Start-VM -VM $VM -Confirm:$false -RunAsync:$false 2>&1 | out-host
+  }
+  catch
+  {
+    Write-Host $_.Exception.Message
+  }
+   
+   # Wait for VM to start
+   $counter = 0
+   $iteration = $variables.Get_Item("START_ITERATION")
+   While ($commandResult.State -ne ’Running’ -And ($counter++ -lt $iteration))
+   {
+    Write-Host "Iteration $counter :" $commandResult.State
+    Start-Sleep -Seconds 1
+    $commandResult =  Get-VMGuest -VM $VM -ErrorAction Stop 
+   }
+   
+   # Throw error
+   If ($counter -ge $iteration) {
+       Write-Error "VM failed to start"
+   }
+   
+} 
+ElseIf ($commandResult.State -eq ’Running’) 
+{
+   Write-Host "VM $VM is already started" 
+}
+Else 
+{
+   Write-Error "Unexpected command result: $commandResult" 
+}
+
+Disconnect-VIServer -Server $variables.Get_Item("VCENTER_ENDPOINT") -confirm:$false |  out-null
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            171.984375
+        </positionTop>
+        <positionLeft>
+            290.875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" maxNumberOfExecution="1" name="check_service">
+      <description>
+        <![CDATA[ The simplest task, ran by a bash engine. ]]>
+      </description>
+      <depends>
+        <task ref="start_checking_services"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Script which verifies that the current node runs on a host which matches the given regular expression
+ *
+ * Arguments:
+ * machine host name (regexp)
+ */
+
+import com.google.common.base.Strings;
+import org.ow2.proactive.scripting.helper.selection.SelectionUtils
+
+if (args.length != 1) {
+    println "Incorrect number of arguments, expected 1, received " + args.length;
+    selected = false;
+    return;
+}
+
+machineName = args[0]
+
+if (Strings.isNullOrEmpty(machineName)) {
+    println "Given host name was empty";
+    selected = false;
+    return;
+}
+
+machineName = machineName.trim()
+
+println "Hostname " + nodehost + " (expected :  " + machineName + ")";
+
+selected = SelectionUtils.checkHostName(machineName)
+]]>
+          </code>
+          <arguments>
+            <argument value="SRV-EXEC"/>
+          </arguments>
+        </script>
+      </selection>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Pre script which allows to propagate an error which occurred in a parent task.
+ * If a parent task contained an error, the current task will throw an IllegalStateException with message:
+ * Parent task id=task_id (task_name) failed
+ */
+
+results.each { res ->
+    if (res.hadException()) {
+        throw new IllegalStateException("Parent task id=" + res.getTaskId().value() + " (" + res.getTaskId().getReadableName() + ") failed")
+    }
+}
+
+variables.put("SINGLE_SERVICE",variables.get("Parallel_Services")[variables.get("PA_TASK_REPLICATION")].trim())
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="powershell">
+            <![CDATA[
+Import-Module VMware.VimAutomation.Core
+
+$service = $variables.Get_Item("SINGLE_SERVICE")
+
+If ([string]::IsNullOrEmpty($service)) {
+   Write-Host 'No service to check'
+   $result = "EmptyService"
+} 
+Else {
+	Connect-VIServer -Protocol https -Server $variables.Get_Item("VCENTER_ENDPOINT") -User $variables.Get_Item("VCENTER_USER") -Password $variables.Get_Item("VCENTER_PASSWORD") -WarningAction SilentlyContinue | 		out-null
+
+	try {
+        Write-Host "Checking service $service .."
+$script = @'
+$(get-service -Name '#service#').status
+'@
+		$script = $script.Replace('#service#',$service)
+
+		$commandResult = Invoke-VMScript -VM $variables.Get_Item("VCENTER_VM_NAME") -GuestUser $variables.Get_Item("VCENTER_USER") -GuestPassword $variables.Get_Item("VCENTER_PASSWORD") -ScriptText $script 2>$null 
+
+		Write-Host $commandResult.ScriptOutput
+
+		if ($commandResult.ScriptOutput.Trim() -eq "Running") {
+			$result = "OK"
+		} else {
+			$result = "KO"
+		}
+
+	} catch {    
+        Write-Host 'An error occurred'
+		$result = "KO"
+	}
+
+	Disconnect-VIServer -Server $variables.Get_Item("VCENTER_ENDPOINT") -confirm:$false | out-null
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="check_service">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+int attempts = Integer.parseInt(variables.get("CHECK_SERVICE_ATTEMPTS"))
+loop = !(result.equals("OK") || result.equals("EmptyService") || variables.get("PA_TASK_ITERATION") >= attempts-1)
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+int attempts = Integer.parseInt(variables.get("CHECK_SERVICE_ATTEMPTS"))
+
+if (variables.get("PA_TASK_ITERATION") >= attempts-1) {
+    throw new RuntimeException("Checking service "+variables.get("SINGLE_SERVICE")+" failed after "+attempts+" attempts")    
+}
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            427.984375
+        </positionTop>
+        <positionLeft>
+            290.875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="start_checking_services">
+      <description>
+        <![CDATA[ This task defines some input, here strings to be processed. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png"/>
+        <info name="Documentation" value="user/ProActiveUserGuide.html#_replicate"/>
+      </genericInformation>
+      <depends>
+        <task ref="start_vm"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Pre script which allows to propagate an error which occurred in a parent task.
+ * If a parent task contained an error, the current task will throw an IllegalStateException with message:
+ * Parent task id=task_id (task_name) failed
+ */
+
+results.each { res ->
+    if (res.hadException()) {
+        variables.put("Parallel_Services", "")
+        throw new IllegalStateException("Parent task id=" + res.getTaskId().value() + " (" + res.getTaskId().getReadableName() + ") failed")
+    }
+}
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+if (variables.get("SERVICE_NAME")==""){
+   variables.put("Parallel_Services", "")
+} else {
+   variables.put("Parallel_Services", variables.get("SERVICE_NAME").split(","))
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start">
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("Parallel_Services").size()
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            299.984375
+        </positionTop>
+        <positionLeft>
+            290.875
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="end_checking_services">
+      <depends>
+        <task ref="check_service"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/**
+ * Pre script which allows to propagate an error which occurred in a parent task.
+ * If a parent task contained an error, the current task will throw an IllegalStateException with message:
+ * Parent task id=task_id (task_name) failed
+ */
+
+results.each { res ->
+    if (res.hadException()) {
+        throw new IllegalStateException("Parent task id=" + res.getTaskId().value() + " (" + res.getTaskId().getReadableName() + ") failed")
+    }
+}
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "Finished checking services"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"/>
+      <metadata>
+        <positionTop>
+            555.984375
+        </positionTop>
+        <positionLeft>
+            290.875
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2144px;
+            height:2780px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-166.984375px;left:-285.875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_22" style="top: 172px; left: 290.875px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a bash engine."><img src="/studio/images/PowerShell.png" width="20px">&nbsp;<span class="name">start_vm</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_25" style="top: 428px; left: 290.875px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a bash engine."><img src="/studio/images/PowerShell.png" width="20px">&nbsp;<span class="name">check_service</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_28" style="top: 300px; left: 290.875px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task defines some input, here strings to be processed."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_replicate.png" width="20px">&nbsp;<span class="name">start_checking_services</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_31" style="top: 556px; left: 290.875px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">end_checking_services</span></a></div><svg style="position:absolute;left:330.5px;top:339.5px" width="41.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 30.5 50 20.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.080432000000001,66.303232 L11.3951921061979,49.175511685817675 L2.9611229197005473,52.899283558177174 L-2.0087563356249163,45.13395676611713 L-1.080432000000001,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.080432000000001,66.303232 L11.3951921061979,49.175511685817675 L2.9611229197005473,52.899283558177174 L-2.0087563356249163,45.13395676611713 L-1.080432000000001,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:371.0266769263776px;top:377.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_42" style="position: absolute; transform: translate(-50%, -50%); left: 383px; top: 447.5px;">loop</div><svg style="position:absolute;left:330.5px;top:211.5px" width="41.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 20.5 88 C 30.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M21.580432,66.303232 L22.50875633562492,45.13395676611712 L17.538877080299457,52.899283558177174 L9.1048078938021,49.17551168581767 L21.580432,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M21.580432,66.303232 L22.50875633562492,45.13395676611712 L17.538877080299457,52.899283558177174 L9.1048078938021,49.17551168581767 L21.580432,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:360.5px;top:329.5px" width="53.80000000000001" height="99" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 88 42.80000000000001 -10 32.80000000000001 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M1.0105301,76.45715525 L14.657327019890719,60.24712953048736 L5.982736374069404,63.36986505041686 L1.5700368203075818,55.27492325641796 L1.0105301,76.45715525" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M1.0105301,76.45715525 L14.657327019890719,60.24712953048736 L5.982736374069404,63.36986505041686 L1.5700368203075818,55.27492325641796 L1.0105301,76.45715525" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_51" style="position: absolute; transform: translate(-50%, -50%); left: 386.9px; top: 379.75px;">replicate</div><svg style="position:absolute;left:330.5px;top:467.5px" width="40.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 19.5 88 C 29.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M20.665968,66.303232 L21.850572046463647,45.146750410352304 L16.787023539475157,52.8513254484303 L8.398665494893953,49.02569487087714 L20.665968,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M20.665968,66.303232 L21.850572046463647,45.146750410352304 L16.787023539475157,52.8513254484303 L8.398665494893953,49.02569487087714 L20.665968,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 331px; top: 202px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 331px; top: 458px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 331px; top: 418px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 381px; top: 418px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 381px; top: 458px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 361px; top: 418px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 351.5px; top: 330px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 351.5px; top: 290px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 393.8px; top: 330px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 350.5px; top: 586px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 350.5px; top: 546px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
