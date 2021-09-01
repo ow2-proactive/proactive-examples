@@ -4,10 +4,11 @@
   xmlns="urn:proactive:jobdescriptor:3.12" xsi:schemaLocation="urn:proactive:jobdescriptor:3.12 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.12/schedulerjob.xsd"  name="Iterative_ETL" projectName="2. Advanced Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
     <variable name="DATABASE" value="demo" />
-    <variable name="HOST" value="" />
-    <variable name="PORT" value="58640" model="PA:Integer"/>
+    <variable name="HOST" value="xx" />
+    <variable name="PORT" value="37021" model="PA:Integer"/>
     <variable name="USER" value="demo" />
     <variable name="CREDENTIALS_KEY" value="mysql://${USER}@${HOST}:${PORT}" model="PA:Credential"/>
+    <variable name="spark_service_instance_id" value="xx"  model="PA:NOT_EMPTY_STRING"/>
   </variables>
   <description>
     <![CDATA[ Iterative workflow performing ETL (Extract Transform Load) operations. For each iteration, data are retrieved from a csv file stored in Amazon S3, and pushed to a MySQL server. Then a Scala Spark task retrieves data from the MySQL server, transforms data, and stores data in a HDFS (Hadoop File System). If a cumulative count of rows in the HDFS is reached, the loop condition is broken and a web notification is sent. This workflow requires a full running Spark HDFS platform, with a running MySQL server. ]]>
@@ -160,13 +161,13 @@ INPUT_FILE (required) is the relative path in the data space of the CSV file tha
         <![CDATA[ A workflow to submit a Spark job from a docker container, to read/write files from/to HDFS. This workflow requires a Spark/HDFS platform. ]]>
       </description>
       <variables>
-        <variable name="spark_hdfs_instance_id" value="" inherited="false" />
         <variable name="MYSQL_TABLE" value="iris" inherited="false" />
         <variable name="output_hdfs_csv_file_name" value="iris_PROCESSED.csv" inherited="false" />
       </variables>
       <genericInformation>
         <info name="PRE_SCRIPT_AS_FILE" value="script.scala"/>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$spark_token_name"/>
       </genericInformation>
       <depends>
         <task ref="Feed_MySQL"/>
@@ -210,7 +211,7 @@ object Application {
     val mysql_psswd = args(3)
     val mysql_db_name = args(4)
     val mysql_table_name = args(5)
-    val hdfs_master = args(6)
+    val hdfs_url = args(6)
     val output_hdfs_csv_file_name = args(7)
       
     // MySQL to DF
@@ -224,7 +225,7 @@ object Application {
     processed_df.show()
       
     // Write DF to HDFS as CSV
-    processed_df.write.mode(SaveMode.Overwrite).csv(hdfs_master + "/" + output_hdfs_csv_file_name)  
+    processed_df.write.mode(SaveMode.Overwrite).csv(hdfs_url + "/" + output_hdfs_csv_file_name)
 
   }
 }
@@ -238,28 +239,7 @@ Application.main()
         <script>
           <code language="groovy">
             <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
-
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to APIs
-def api_client = new ApiClient()
-def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
-api_client.setBasePath(pca_url)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Get the service instance variables
-def spark_hdfs_instance_id = variables.get("spark_hdfs_instance_id") as Long
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(sessionId, spark_hdfs_instance_id)
-def service_instance_variables = service_instance_data.getVariables()
-def network_name = service_instance_variables.get("network_name")
-def instance_name = service_instance_variables.get("instance_name")
-
+// Retrieve variables
 def mysql_host = variables.get("HOST")
 def mysql_port = variables.get("PORT")
 def mysql_user = variables.get("USER")
@@ -267,13 +247,14 @@ def mysql_cred_keys = variables.get("CREDENTIALS_KEY")
 def mysql_passwd = credentials.get(mysql_cred_keys)
 def mysql_database = variables.get("DATABASE")
 def mysql_table = variables.get("MYSQL_TABLE")
-def hdfs_master = "hdfs://" + instance_name + "-namenode:9000"
+def spark_network_name = variables.get("spark_network_name")
+def spark_master_url = variables.get("spark_master_url")
+def hdfs_url = "hdfs://" + variables.get("hdfs_namenode_host_port")
 def output_hdfs_csv_file_name = variables.get("output_hdfs_csv_file_name")
 
 // Submit the Spark job
-def spark_shell_command = "/usr/local/spark/bin/spark-shell --driver-memory 800m --executor-memory 800m --master spark://" + instance_name + "-spark-master:7077 --jars /usr/local/spark/jars/*,mysql-connector-java-8.0.22.jar -I script.scala --conf spark.driver.args='" + mysql_host + " " + mysql_port + " " + mysql_user + " " + mysql_passwd + " " + mysql_database + " " + mysql_table + " " + hdfs_master + " " + output_hdfs_csv_file_name + "'"
-cmd = ["docker", "run", "--rm", "--net", network_name, "-w", localspace, "-v", localspace + ":" + localspace, "activeeon/hdfs-spark:latest", "bash", "-c", spark_shell_command]
-
+def spark_shell_command = "/usr/local/spark/bin/spark-shell --driver-memory 800m --executor-memory 800m --master " + spark_master_url + " --jars /usr/local/spark/jars/*,mysql-connector-java-8.0.22.jar -I /localspace/script.scala --conf spark.driver.args='" + mysql_host + " " + mysql_port + " " + mysql_user + " " + mysql_passwd + " " + mysql_database + " " + mysql_table + " " + hdfs_url + " " + output_hdfs_csv_file_name + "'"
+cmd = ["docker", "run", "--rm", "--net", spark_network_name, "-w", "/localspace", "-v", localspace + ":/localspace", "activeeon/hdfs-spark:latest", "bash", "-c", spark_shell_command]
 println cmd
 
 cmd.execute().waitForProcessOutput(System.out, System.err)
@@ -307,6 +288,7 @@ cmd.execute().waitForProcessOutput(System.out, System.err)
       <genericInformation>
         <info name="PRE_SCRIPT_AS_FILE" value="script.scala"/>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="$spark_token_name"/>
       </genericInformation>
       <depends>
         <task ref="MySQL_to_Spark_to_HDFS"/>
@@ -340,14 +322,14 @@ object Application {
 
     // Get args
     val args = sc.getConf.get("spark.driver.args").split("\\s+")
-    val hdfs_master = args(0)
+    val hdfs_url = args(0)
     val input_hdfs_csv_file_name = args(1)
       
     // HDFS CSV to DF
     val df = spark
       			.read
       			.options(Map("inferSchema"->"true","delimiter"->",","header"->"false"))
-      			.csv(hdfs_master + "/" + input_hdfs_csv_file_name)      
+      			.csv(hdfs_url + "/" + input_hdfs_csv_file_name)
 
       
     println("CSV>>")
@@ -365,39 +347,18 @@ Application.main()
         <script>
           <code language="groovy">
             <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-
 import org.apache.commons.lang3.StringUtils
 
-
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to APIs
-def api_client = new ApiClient()
-def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
-api_client.setBasePath(pca_url)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
-
-// Get the service instance variables
-def spark_hdfs_instance_id = variables.get("spark_hdfs_instance_id") as Long
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(sessionId, spark_hdfs_instance_id)
-def service_instance_variables = service_instance_data.getVariables()
-def network_name = service_instance_variables.get("network_name")
-def instance_name = service_instance_variables.get("instance_name")
-
-def hdfs_master = "hdfs://" + instance_name + "-namenode:9000"
+def spark_network_name = variables.get("spark_network_name")
+def spark_master_url = variables.get("spark_master_url")
+def hdfs_url = "hdfs://" + variables.get("hdfs_namenode_host_port")
 def input_hdfs_csv_file_name = variables.get("input_hdfs_csv_file_name")
 def OUTPUT_FILE = variables.get("OUTPUT_FILE")
 def output_file_path = new File(localspace, OUTPUT_FILE).getAbsolutePath()
 
 // Submit the Spark job
-def spark_shell_command = "/usr/local/spark/bin/spark-shell --driver-memory 800m --executor-memory 800m --master spark://" + instance_name + "-spark-master:7077 --jars /usr/local/spark/jars/* -I script.scala --conf spark.driver.args='" + hdfs_master + " " + input_hdfs_csv_file_name + "'"
-cmd = ["docker", "run", "--rm", "--net", network_name, "-w", localspace, "-v", localspace + ":" + localspace, "activeeon/hdfs-spark:latest", "bash", "-c", spark_shell_command]
-
+def spark_shell_command = "/usr/local/spark/bin/spark-shell --driver-memory 800m --executor-memory 800m --master " + spark_master_url + " --jars /usr/local/spark/jars/* -I /localspace/script.scala --conf spark.driver.args='" + hdfs_url + " " + input_hdfs_csv_file_name + "'"
+cmd = ["docker", "run", "--rm", "--net", spark_network_name, "-v", localspace + ":/localspace", "activeeon/hdfs-spark:latest", "bash", "-c", spark_shell_command]
 println cmd
 
 def output_with_csv = new StringBuilder()
@@ -430,6 +391,23 @@ new File(output_file_path).text = StringUtils.substringBetween(output_with_csv.t
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_loop.png"/>
         <info name="Documentation" value="user/ProActiveUserGuide.html#_loop"/>
       </genericInformation>
+      <pre>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
+            <arguments>
+              <argument value="$spark_service_instance_id"/>
+              <argument value="spark_network_name"/>
+              <argument value="spark_network_name"/>
+              <argument value="spark_master_url"/>
+              <argument value="spark_master_url"/>
+              <argument value="spark_token_name"/>
+              <argument value="INSTANCE_NAME"/>
+              <argument value="hdfs_namenode_host_port"/>
+              <argument value="hdfs_namenode_host_port"/>
+            </arguments>
+          </file>
+        </script>
+      </pre>
       <scriptExecutable>
         <script>
           <code language="javascript">
