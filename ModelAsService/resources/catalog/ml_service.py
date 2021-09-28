@@ -312,7 +312,7 @@ def predict_api(data: str) -> str:
         else:
             dataframe = pd.DataFrame()
 
-        if exists(baseline_data_file_path) and get_config('DRIFT_ENABLED'): # and isfile(CURRENT_BASELINE_DATA):
+        if exists(baseline_data_file_path) and drift_enabled: # and isfile(CURRENT_BASELINE_DATA):
             if GPU_ENABLED:
                 dataframe = read_csv(baseline_data_file_path)
             else:
