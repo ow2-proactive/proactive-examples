@@ -29,18 +29,10 @@ def publishService = false
 def enableServiceActions = true
 if (binding.variables["args"]) {
     if (args.length > 0) {
-        try {
-            publishService = Boolean.parseBoolean(args[0])
-        } catch (Exception e) {
-            println "Invalid first argument, expected boolean, received " + args[0]
-        }
+        publishService = Boolean.parseBoolean(args[0])
     }
     if (args.length > 1) {
-        try {
-            enableServiceActions = Boolean.parseBoolean(args[1])
-        } catch (Exception e) {
-            println "Invalid second argument, expected boolean, received " + args[1]
-        }
+        enableServiceActions = Boolean.parseBoolean(args[1])
     }
 }
 
