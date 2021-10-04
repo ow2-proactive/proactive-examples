@@ -279,7 +279,7 @@ def get_token_api(user) -> str:
     addr = connexion.request.remote_addr
     token = TOKENS.get(user)
     if not token:
-        log('[EROOR] Invalid user: {u} ({a})'.format(u=user, a=addr))
+        log('[ERROR] Invalid user: {u} ({a})'.format(u=user, a=addr))
         return "Invalid user"
     else:
         log('[INFO] {u} token is {t} ({a})'.format(u=user, t=token, a=addr))
