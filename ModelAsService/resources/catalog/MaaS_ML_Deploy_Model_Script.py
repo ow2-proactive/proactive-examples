@@ -4,6 +4,7 @@ import wget
 import requests
 import urllib.request
 import ssl
+from urllib.parse import unquote
 
 global variables, resultMetadata
 
@@ -27,12 +28,16 @@ DRIFT_DETECTION_WINDOW_SIZE = variables.get("DRIFT_DETECTION_WINDOW_SIZE")
 LABEL_COLUMN = variables.get("LABEL_COLUMN")
 API_DEPLOY = variables.get("API_EXTENSION") if variables.get("API_EXTENSION") else raiser_ex("API_EXTENSION is None")
 LOG_PREDICTIONS = variables.get("LOG_PREDICTIONS") if variables.get("LOG_PREDICTIONS") else raiser_ex("LOG_PREDICTIONS is None")
-DRIFT_ENABLED = variables.get("DRIFT_ENABLED") if variables.get("DRIFT_ENABLED") else raiser_ex("DRIFT_ENABLED is None")
-DRIFT_NOTIFICATION = variables.get("DRIFT_NOTIFICATION") if variables.get("DRIFT_NOTIFICATION") else raiser_ex("DRIFT_NOTIFICATION is None")
 SERVICE_TOKEN = variables.get("SERVICE_TOKEN") if variables.get("SERVICE_TOKEN") else variables.get(
     "SERVICE_TOKEN_PROPAGATED")
 API_ENDPOINT = variables.get("DEPLOY_MODEL_ENDPOINT") if variables.get("DEPLOY_MODEL_ENDPOINT") else variables.get(
     "ENDPOINT_MODEL")
+MODEL_NAME = variables.get("MODEL_NAME") if variables.get("MODEL_NAME") else variables.get(
+    "MODEL_NAME")
+MODEL_VERSION = variables.get("MODEL_VERSION") if variables.get("MODEL_VERSION") else variables.get(
+    "MODEL_VERSION")
+BASELINE_DATA_URL = variables.get("BASELINE_DATA_URL")
+
 API_DEPLOY_ENDPOINT = API_ENDPOINT + API_DEPLOY
 print("API_DEPLOY_ENDPOINT: ", API_DEPLOY_ENDPOINT)
 
@@ -41,7 +46,6 @@ print("API_DEPLOY_ENDPOINT: ", API_DEPLOY_ENDPOINT)
 #
 input_variables = {
     'task.model_id': None,
-    'task.model_metadata_id': None,
     'task.feature_names': None,
     'task.dataframe_id': None,
     'task.label_column': None
@@ -49,21 +53,6 @@ input_variables = {
 get_input_variables(input_variables)
 
 model_id = input_variables['task.model_id']
-model_metadata_id = input_variables['task.model_metadata_id']
-
-dataframe_id = None
-if input_variables['task.dataframe_id'] is not None:
-    dataframe_id = input_variables['task.dataframe_id']
-
-dataframe = get_and_decompress_dataframe(dataframe_id)
-
-dataframe_sampled = dataframe.sample(n=int(DRIFT_DETECTION_WINDOW_SIZE))
-columns = list(dataframe.columns)
-columns_copy = columns.copy()
-columns_copy.remove(input_variables['task.label_column'])
-ds = dataframe_sampled[columns_copy]
-dataframe_sampled_id = compress_and_transfer_dataframe(dataframe_sampled)
-
 model_path = os.path.join(os.getcwd(), "model.pkl")
 if model_id is not None and variables.get(model_id) is not None:
     model = get_and_decompress_model(model_id)
@@ -72,25 +61,38 @@ else:
     MODEL_URL = variables.get("MODEL_URL") if variables.get("MODEL_URL") else raiser_ex("MODEL_URL is None")
     wget.download(MODEL_URL, model_path)
 print('model size (original):   ', sys.getsizeof(model_path), " bytes")
-
-sampled_data_path = os.path.join(os.getcwd(), "baseline_data.csv")
-ds.to_csv(sampled_data_path, index=False)
 model_file = open(model_path, 'rb')
-baseline_data = open(sampled_data_path, 'rb')
-files = {'model_file': model_file, 'baseline_data': baseline_data}
-data = {'api_token': SERVICE_TOKEN, 'log_predictions': LOG_PREDICTIONS}
 
-# [deprecated]
-# import warnings
-# warnings.warn("model_metadata is deprecated", DeprecationWarning)
-# if model_metadata_id is not None and variables.get(model_metadata_id) is not None:
-#     print("model_metadata_id: ", model_metadata_id)
-#     model_metadata_json = get_and_decompress_json_dataframe(model_metadata_id)
-#     print("model_metadata_json: ", model_metadata_json)
-#     data['model_metadata_json'] = model_metadata_json
+dataframe_id = None
+if (input_variables['task.dataframe_id'] is not None) and (int(DRIFT_DETECTION_WINDOW_SIZE)!=0):
+    dataframe_id = input_variables['task.dataframe_id']
+    dataframe = get_and_decompress_dataframe(dataframe_id)
+    dataframe_sampled = dataframe.sample(n=int(DRIFT_DETECTION_WINDOW_SIZE))
+    #dataframe_sampled_id = compress_and_transfer_dataframe(dataframe_sampled)
+    columns = list(dataframe.columns)
+    columns_copy = columns.copy()
+    columns_copy.remove(input_variables['task.label_column'])
+    baseline_dataframe = dataframe_sampled[columns_copy]
+    baseline_data_path = os.path.join(os.getcwd(), "baseline_data.csv")
+    baseline_dataframe.to_csv(baseline_data_path, index=False)
+    baseline_data = open(baseline_data_path, 'rb')
+    files = {'model_file': model_file, 'baseline_data': baseline_data}
+
+elif BASELINE_DATA_URL:
+    baseline_data_url = unquote(BASELINE_DATA_URL)
+    baseline_data_path = os.path.join(os.getcwd(), "baseline_data.csv")
+    wget.download(baseline_data_url, baseline_data_path)
+    print("[INFO] baseline_data donwloaded")
+    baseline_data = open(baseline_data_path, 'rb')
+    files = {'model_file': model_file, 'baseline_data': baseline_data}
+
+else:    
+    files = {'model_file': model_file}
+
+data = {'api_token': SERVICE_TOKEN, 'log_predictions': LOG_PREDICTIONS, 'model_name': MODEL_NAME, 'model_version': MODEL_VERSION}
 
 resultMetadata.put("task.feature_names", input_variables['task.feature_names'])
-resultMetadata.put("task.dataframe_sampled_id", dataframe_sampled_id)
+#resultMetadata.put("task.dataframe_sampled_id", dataframe_sampled_id)
 
 try:
     req = requests.post(API_DEPLOY_ENDPOINT, files=files, data=data, verify=False)
