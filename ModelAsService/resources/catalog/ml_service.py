@@ -11,6 +11,7 @@ import numbers
 import pandas as pd
 import argparse
 import shutil
+import dash_utils
 
 from cryptography.fernet import Fernet
 from datetime import datetime as dt
@@ -22,6 +23,8 @@ from joblib import load
 from flask import jsonify
 from tempfile import TemporaryFile
 from json import JSONEncoder
+from flask import render_template
+from os import environ, path
 
 from urllib.parse import quote
 from distutils.util import strtobool
@@ -42,6 +45,7 @@ class NpEncoder(json.JSONEncoder):
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
+
 # Install required Python libraries if they are not already installed
 try:
     import proactive
@@ -49,6 +53,7 @@ except ImportError:
     install('proactive')
     import proactive
 
+# DDD libraries
 try:
     from skmultiflow.drift_detection.hddm_w import HDDM_W
 except ImportError:
@@ -58,7 +63,6 @@ except ImportError:
 from skmultiflow.drift_detection import PageHinkley
 from skmultiflow.drift_detection.adwin import ADWIN
 
-
 # Environment variables
 INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not None else None
 
@@ -66,10 +70,10 @@ INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not 
 APP_BASE_DIR = ""
 UPLOAD_MODELS_FOLDER = INSTANCE_PATH
 MODEL_FILE_EXT = '.model'
-CURRENT_BASELINE_DATA = join(UPLOAD_MODELS_FOLDER, 'baseline_data' + '.csv') # baseline data path
+CURRENT_BASELINE_DATA = join(UPLOAD_MODELS_FOLDER, 'baseline_data' + '.csv')  # baseline data path
 TRACE_FILE = join(UPLOAD_MODELS_FOLDER, 'trace.txt')  # default trace file
 CONFIG_FILE = join(UPLOAD_MODELS_FOLDER, 'config.json')  # default config file
-TOKENS = { # user api tokens
+TOKENS = {  # user api tokens
     'user': hexlify(os.urandom(16)).decode(),  # api key
     'test': hexlify(os.urandom(16)).decode()
 }
@@ -83,10 +87,10 @@ assert USER_KEY is not None, "USER_KEY is required!"
 USER_KEY = str(USER_KEY).encode()
 os.environ['MODELS_PATH'] = join(INSTANCE_PATH, "models")
 
-#Required imports for Nvidia Rapids Usage
+# Required imports for Nvidia Rapids Usage
 if GPU_ENABLED:
     import cudf
-    from cudf import read_json, read_csv 
+    from cudf import read_json, read_csv
 
 # Decrypt user credentials
 USER_DATA_FILE = join(APP_BASE_DIR, 'user_data.enc')
@@ -97,11 +101,9 @@ decrypted_data = fernet.decrypt(encrypted_data)
 message = decrypted_data.decode()
 user_credentials = json.loads(message)
 
-
 # Get proactive server url
 proactive_rest = user_credentials['ciUrl']
 proactive_url = proactive_rest[:-5]
-
 
 # Check if there is already a configuration file
 if not isfile(CONFIG_FILE):
@@ -152,15 +154,15 @@ def log(message, token=""):
         datetime_str = dt.today().strftime('%Y-%m-%d %H:%M:%S')
         print(datetime_str, token, message)
     return message
-    
+
+
 def dumper(obj):
     try:
         return obj.toJSON()
     except:
         return obj.__dict__
 
-
-def perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, drift_notification, token="") -> str :
+def perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, drift_notification, token="") -> str:
     log("[INFO] Calling perform_drift_detection", token)
     log("[INFO] Selected data drift detection method: " + detector)
     baseline_data = dataframe.values.tolist()
@@ -181,21 +183,21 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
             for i in range(len(overall_dataframe[feature])):
                 hddm_w.add_element(float(overall_dataframe[feature][i]))
                 if hddm_w.detected_change() and i >= window:
-                    detected_drifts_indices.append(i-window)
+                    detected_drifts_indices.append(i - window)
         # Page Hinkley
         if detector == "Page Hinkley":
             ph = PageHinkley()
             for i in range(len(overall_dataframe[feature])):
                 ph.add_element(float(overall_dataframe[feature][i]))
                 if ph.detected_change() and i >= window:
-                    detected_drifts_indices.append(i-window)
+                    detected_drifts_indices.append(i - window)
         # ADWIN
         if detector == "ADWIN":
             adwin = ADWIN()
             for i in range(len(overall_dataframe[feature])):
                 adwin.add_element(float(overall_dataframe[feature][i]))
                 if adwin.detected_change() and i >= window:
-                    detected_drifts_indices.append(i-window)
+                    detected_drifts_indices.append(i - window)
         # Check for detected drifts
         if len(detected_drifts_indices) != 0:
             log("[INFO] Data drift detected in feature: " + feature)
@@ -208,7 +210,7 @@ def perform_drift_detection(predict_dataframe, dataframe, feature_names, detecto
                     log("[INFO] Web notification sent!")
                 else:
                     log("[ERROR] Error occurred while sending a web notification")
-    return json.dumps(drifts,cls=NpEncoder)
+    return json.dumps(drifts, cls=NpEncoder)
 
 
 def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables={}, token=""):
@@ -300,19 +302,19 @@ def predict_api(data: str) -> str:
         drift_notification = data["drift_notification"]
         save_predictions = data["save_predictions"]
         model_file_name = "model_" + str(model_version) + ".model"
-        baseline_data_file_name = "baseline_data_"  + str(model_version) + ".csv"
-        predictions_data_file_name = "predictions_data_"  + str(model_version) + ".csv"
+        baseline_data_file_name = "baseline_data_" + str(model_version) + ".csv"
+        predictions_data_file_name = "predictions_data_" + str(model_version) + ".csv"
         MODELS_PATH = os.environ['MODELS_PATH']
-        model_file_path = join(MODELS_PATH,str(model_name),str(model_version),model_file_name)
-        baseline_data_file_path = join(MODELS_PATH,str(model_name),str(model_version),baseline_data_file_name)
-        predictions_csv_file = join(MODELS_PATH,str(model_name),str(model_version),predictions_data_file_name)
+        model_file_path = join(MODELS_PATH, str(model_name), str(model_version), model_file_name)
+        baseline_data_file_path = join(MODELS_PATH, str(model_name), str(model_version), baseline_data_file_name)
+        predictions_csv_file = join(MODELS_PATH, str(model_name), str(model_version), predictions_data_file_name)
 
         if GPU_ENABLED:
             dataframe = cudf.DataFrame()
         else:
             dataframe = pd.DataFrame()
 
-        if exists(baseline_data_file_path) and drift_enabled: # and isfile(CURRENT_BASELINE_DATA):
+        if exists(baseline_data_file_path) and drift_enabled:  # and isfile(CURRENT_BASELINE_DATA):
             if GPU_ENABLED:
                 dataframe = read_csv(baseline_data_file_path)
             else:
@@ -344,7 +346,7 @@ def predict_api(data: str) -> str:
                 else:
                     predict_drifts['predictions'] = list(predictions)
                 predict_drifts['drifts'] = drifts_json
-                return json.dumps(predict_drifts,cls=NpEncoder)
+                return json.dumps(predict_drifts, cls=NpEncoder)
             except Exception as e:
                 return log(str(e), api_token)
         else:
@@ -390,23 +392,23 @@ def deploy_api() -> str:
                     model_versions.sort()
                     model_version = model_versions[-1] + 1
             log("[INFO] new version to be deployed : " + str(model_version), api_token)
-            deployment_status = "[INFO] The version " + str(model_version) + " of the model " + str(model_name) + " was successfully deployed."
+            deployment_status = "[INFO] The version " + str(model_version) + " of the model " + str(
+                model_name) + " was successfully deployed."
         else:
             version_path = model_download_path + "/" + str(model_version)
-            deployment_status = "[INFO] The version " + str(model_version) + " of the model " + str(model_name) + " was successfully deployed."
+            deployment_status = "[INFO] The version " + str(model_version) + " of the model " + str(
+                model_name) + " was successfully deployed."
             if os.path.isdir(version_path):
                 download_model = False
-                log("[WARN] This model version already exists. \
-                    The uploaded model version will be ignored. The existing version will be deployed.",
-                    api_token)
+                log("[WARN] This model version already exists. \The uploaded model version will be ignored. The existing version will be deployed.",api_token)
                 deployment_status = "[INFO] The model version " + str(model_version) + " of the model " + str(model_name) + " is already deployed. The uploaded model version will be ignored."
 
         # Model Downloading
         # if the specified model version doesn't exist in the directory,
         # the zip file uploaded by the user will be downloaded
         if download_model:
-            #datetime_str = dt.today().strftime('%Y%m%d%H%M%S')
-            model_file_name = "model_" + str(model_version) 
+            # datetime_str = dt.today().strftime('%Y%m%d%H%M%S')
+            model_file_name = "model_" + str(model_version)
             version_path = model_download_path + "/" + str(model_version)
             os.makedirs(version_path)
             model_file_path = version_path + "/" + model_file_name + ".model"
@@ -414,7 +416,7 @@ def deploy_api() -> str:
             model_file.save(model_file_path)
         if "baseline_data" in connexion.request.files:
             baseline_data = connexion.request.files['baseline_data']
-            baseline_data_file_name = "baseline_data_" + str(model_version)  
+            baseline_data_file_name = "baseline_data_" + str(model_version)
             baseline_data_file_path = version_path + "/" + baseline_data_file_name + ".csv"
             baseline_data.save(baseline_data_file_path)
         # Check if debug is enabled
@@ -426,7 +428,7 @@ def deploy_api() -> str:
         if "trace_enabled" in connexion.request.form:
             trace_enabled = connexion.request.form['trace_enabled']
             log("[INFO] Updating TRACE_ENABLED to " + trace_enabled)
-            set_config('TRACE_ENABLED', bool(strtobool(trace_enabled)))  
+            set_config('TRACE_ENABLED', bool(strtobool(trace_enabled)))
         return log(deployment_status, api_token)
     else:
         return log("[ERROR] Invalid token", api_token)
@@ -468,7 +470,8 @@ def delete_deployed_model_api() -> str:
             model_version_path = model_download_path + "/" + str(model_version)
             if os.path.exists(model_version_path):
                 shutil.rmtree(model_version_path)
-                clean_status = "[INFO] The model version folder " + str(model_version_path) + " was successfully deleted."
+                clean_status = "[INFO] The model version folder " + str(
+                    model_version_path) + " was successfully deleted."
             else:
                 clean_status = "[ERROR] The model version folder " + str(model_version_path) + " doesn't exist."
         return log(clean_status, api_token)
@@ -487,7 +490,7 @@ def update_api() -> str:
         # Update the trace parameter
         trace_enabled = connexion.request.form['trace_enabled']
         log("[INFO] Updating TRACE_ENABLED to " + trace_enabled)
-        set_config('TRACE_ENABLED', bool(strtobool(trace_enabled)))  
+        set_config('TRACE_ENABLED', bool(strtobool(trace_enabled)))
         return log("[INFO] Service parameters updated", api_token)
     else:
         return log("[ERROR] Invalid token", api_token)
@@ -511,7 +514,7 @@ def trace_preview_api(key) -> str:
             with open(CONFIG_FILE) as f:
                 config = json.load(f)
             dataframe_config = pd.DataFrame.from_records([config])
-            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center', index=False)
+            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center',index=False)
             trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
             css_style = """
             div {
@@ -536,11 +539,29 @@ def trace_preview_api(key) -> str:
                   {1}
                   </div>
                 </body></html>""".format(config_result, trace_result)
+            if (os.path.isdir(os.environ['MODELS_PATH'])):
+                directory_contents = os.listdir(os.environ['MODELS_PATH'])
+                if (len(directory_contents) > 0):
+                    result = "<p><a href='maas_analytics?key=" + quote(key) + "' target='_blank'>Click here for MaaS_ML data analytics</a></p>" + result
             return result
         else:
             return log("[WARN] Trace file is empty", key)
     else:
         return log("[ERROR] Invalid key", key)
+
+
+def maas_analytics_api(key) -> str:
+    if USER_KEY == key.encode():
+        return render_template(
+            'index.jinja2',
+            title='Plotly Dash Flask Tutorial',
+            description='Embed Plotly Dash into your Flask applications.',
+            template='home-template',
+            body="This is a homepage served with Flask."
+        )
+    else:
+        return log("Invalid key", key)
+
 
 def test_workflow_submission_api() -> str:
     api_token = connexion.request.form["api_token"]
@@ -562,6 +583,8 @@ def test_web_notification_api() -> str:
     else:
         return log("[ERROR] Invalid token", api_token)
 
+
+
 # ----- Main entry point ----- #
 
 if __name__ == '__main__':
@@ -571,6 +594,7 @@ if __name__ == '__main__':
     app = connexion.FlaskApp(__name__, port=args.port, specification_dir=APP_BASE_DIR)
     CORS(app.app)
     app.add_api('ml_service-api.yaml', arguments={'title': 'Machine Learning Model Service'})
+    dash_utils.init_dashboard(app.app)
     if HTTPS_ENABLED:
         context = (
             join(APP_BASE_DIR, 'certificate_mas.pem'),
