@@ -548,7 +548,6 @@ def trace_preview_api(key) -> str:
                   {1}
                   </div>
                 </body></html>""".format(config_result, trace_result)
-            count = 0
             if (os.path.isdir(os.environ['MODELS_PATH'])):
                 directory_contents = os.listdir(os.environ['MODELS_PATH'])
                 if (len(directory_contents) > 0):
