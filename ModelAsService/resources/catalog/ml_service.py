@@ -78,13 +78,10 @@ TOKENS = {  # user api tokens
     'test': hexlify(os.urandom(16)).decode()
 }
 
-DEBUG_ENABLED = True if (
-        os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
-TRACE_ENABLED = True if (
-        os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
+DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
+TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
 GPU_ENABLED = True if (os.getenv('GPU_ENABLED') is not None and os.getenv('GPU_ENABLED').lower() == "true") else False
-HTTPS_ENABLED = True if (
-        os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
+HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
 USER_KEY = os.getenv('USER_KEY')
 assert USER_KEY is not None, "USER_KEY is required!"
 USER_KEY = str(USER_KEY).encode()
@@ -332,8 +329,7 @@ def predict_api(data: str) -> str:
                 if GPU_ENABLED:
                     predict_dataframe = cudf.DataFrame.from_pandas(predict_dataframe)
                 if drift_enabled and dataframe.empty == False:
-                    drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector,
-                                                          drift_notification, api_token)
+                    drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, drift_notification, api_token)
                 else:
                     drifts_json = "Drift detection is not enabled."
                 log("[INFO] model_file_path:\n" + str(model_file_path))
@@ -404,11 +400,8 @@ def deploy_api() -> str:
                 model_name) + " was successfully deployed."
             if os.path.isdir(version_path):
                 download_model = False
-                log("[WARN] This model version already exists. \
-                    The uploaded model version will be ignored. The existing version will be deployed.",
-                    api_token)
-                deployment_status = "[INFO] The model version " + str(model_version) + " of the model " + str(
-                    model_name) + " is already deployed. The uploaded model version will be ignored."
+                log("[WARN] This model version already exists. \The uploaded model version will be ignored. The existing version will be deployed.",api_token)
+                deployment_status = "[INFO] The model version " + str(model_version) + " of the model " + str(model_name) + " is already deployed. The uploaded model version will be ignored."
 
         # Model Downloading
         # if the specified model version doesn't exist in the directory,
@@ -521,10 +514,8 @@ def trace_preview_api(key) -> str:
             with open(CONFIG_FILE) as f:
                 config = json.load(f)
             dataframe_config = pd.DataFrame.from_records([config])
-            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center',
-                                                     index=False)
-            trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped',
-                                                   justify='center', index=False)
+            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center',index=False)
+            trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
             css_style = """
             div {
             weight: 100%;
@@ -551,8 +542,7 @@ def trace_preview_api(key) -> str:
             if (os.path.isdir(os.environ['MODELS_PATH'])):
                 directory_contents = os.listdir(os.environ['MODELS_PATH'])
                 if (len(directory_contents) > 0):
-                    result = "<p><a href='maas_analytics?key=" + quote(
-                        key) + "' target='_blank'>Click here for MaaS_ML data analytics</a></p>" + result
+                    result = "<p><a href='maas_analytics?key=" + quote(key) + "' target='_blank'>Click here for MaaS_ML data analytics</a></p>" + result
             return result
         else:
             return log("[WARN] Trace file is empty", key)
