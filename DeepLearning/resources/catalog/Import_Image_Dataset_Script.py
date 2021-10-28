@@ -1,9 +1,10 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 
 __file__ = variables.get("PA_TASK_NAME")
 
 import re
-import json
 import wget
+import json
 import uuid
 import shutil
 import zipfile
@@ -16,11 +17,11 @@ from sklearn.model_selection import train_test_split
 # DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/coco.zip'          #DETECTION DATASET
 # DATASET_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/datasets/oxford.zip'        #SEGMENTATION DATASET
 
-SPLIT_SETS = ['train', 'val', 'test']
-
+IMPORT_FROM = variables.get("IMPORT_FROM")
 DATA_PATH = variables.get("DATA_PATH")
 print("DATA_PATH: " + DATA_PATH)
 
+SPLIT_SETS = ['train', 'val', 'test']
 if variables.get("TRAIN_SPLIT") is not None:
     SPLIT_TRAIN = float(str(variables.get("TRAIN_SPLIT")))
 if variables.get("VAL_SPLIT") is not None:
@@ -45,44 +46,95 @@ if SPLIT_TRAIN == 0.0 and SPLIT_VAL > 0.0:
     raise AssertionError(
         "SPLIT_VAL cannot be defined when SPLIT_TRAIN equals zero")
 
-if DATA_PATH is not None and DATA_PATH.startswith("http"):
+DATASET_EXTENSION = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[1]
+ISDIRECTORY = os.path.isdir(os.path.join(DATA_PATH))
+
+if IMPORT_FROM.upper() != "PA:URI":
     # Get an unique ID
     ID = str(uuid.uuid4())
-
     # Define localspace
     LOCALSPACE = join('data', ID)
     os.makedirs(LOCALSPACE, exist_ok=True)
+    os.chmod(LOCALSPACE, mode=0o770)
     print("LOCALSPACE:  " + LOCALSPACE)
-
+    
     DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
     DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
     os.makedirs(DATASET_PATH, exist_ok=True)
-
+    
     print("Dataset information: ")
     print("DATASET_NAME: " + DATASET_NAME)
     print("DATASET_PATH: " + DATASET_PATH)
-
-    print("Downloading...")
-    filename = wget.download(DATA_PATH, DATASET_PATH)
-    print("FILENAME: " + filename)
-    print("OK")
-
+    
+    
+if IMPORT_FROM.upper() == "PA:URL" and DATASET_EXTENSION == ".zip":
+    print("Downloading file...")
+    if DATA_PATH is not None and DATA_PATH.startswith("http"): 
+        print("Downloading...")
+        filename = wget.download(DATA_PATH, DATASET_PATH)
+        print("FILENAME: " + filename)
+        print("OK")
+    
+        print("Extracting...")
+        dataset_zip = zipfile.ZipFile(filename)
+        dataset_zip.extractall(DATASET_PATH)
+        dataset_zip.close()
+        remove(filename)
+        print("OK")      
+elif IMPORT_FROM.upper() == "PA:USER_FILE" and DATASET_EXTENSION == ".zip":
+    print("Importing file from the user space")
+    userspaceapi.connect()
+    out_file = gateway.jvm.java.io.File(os.path.join(LOCALSPACE, DATA_PATH))
+    userspaceapi.pullFile(DATA_PATH, out_file)
+    
     print("Extracting...")
+    filename = os.path.join(LOCALSPACE, DATA_PATH)
+    dataset_zip =  zipfile.ZipFile(filename)
+    dataset_zip.extractall(DATASET_PATH)
+    dataset_zip.close()
+    remove(filename)
+    print("OK")  
+elif IMPORT_FROM.upper() == "PA:GLOBAL_FILE" and DATASET_EXTENSION == ".zip":
+    print("Importing file from the global space")
+    globalspaceapi.connect()
+    out_file = gateway.jvm.java.io.File(os.path.join(LOCALSPACE, DATA_PATH))
+    globalspaceapi.pullFile(DATA_PATH, out_file)
+    
+    print("Extracting...")
+    filename = os.path.join(LOCALSPACE, DATA_PATH)
     dataset_zip = zipfile.ZipFile(filename)
     dataset_zip.extractall(DATASET_PATH)
     dataset_zip.close()
     remove(filename)
-    print("OK")
+    print("OK")        
+elif IMPORT_FROM.upper() == "PA:URI" and ISDIRECTORY:
+    print("Accessing folder...")
+    DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
+    DATASET_PATH = os.path.join(DATA_PATH)
+
+    print("Dataset information: ")
+    print("DATASET_NAME: " + DATASET_NAME)
+    print("DATASET_PATH: " + DATASET_PATH)
+elif IMPORT_FROM.upper() == "PA:URI"  and DATASET_EXTENSION == ".zip":
+    print("Accessing file...")
+    DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
+    DATASET_PATH = join(os.path.dirname(DATA_PATH), DATASET_NAME)
+    os.makedirs(DATASET_PATH, exist_ok=True)
+    
+    print("Dataset information: ")
+    print("DATASET_NAME: " + DATASET_NAME)
+    print("DATASET_PATH: " + DATASET_PATH)
+        
+    print("Extracting...")
+    filename = os.path.join(DATA_PATH)
+    dataset_zip = zipfile.ZipFile(filename)
+    dataset_zip.extractall(DATASET_PATH)
+    dataset_zip.close()
+    remove(filename)
+    print("OK")        
 else:
-    # load global dataset
-    DATASET_PATH = variables.get('DATA_PATH')
-    DATASET_NAME = DATASET_PATH
-    globalspaceapi.connect()
-    java_file = gateway.jvm.java.io.File(DATASET_PATH)
-    globalspaceapi.pullFile(DATASET_PATH, java_file)
-
-
-# remove train, test and val folder if exists
+    print("Please check the address path in the 'DATA_PATH' field!")
+    
 remove_folder = [shutil.rmtree(join(DATASET_PATH, SPLIT_NAME)) for SPLIT_NAME in SPLIT_SETS if exists(join(DATASET_PATH, SPLIT_NAME))]
     
 # load classification dataset
