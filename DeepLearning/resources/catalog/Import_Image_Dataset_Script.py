@@ -1,5 +1,3 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
-
 __file__ = variables.get("PA_TASK_NAME")
 
 import re
@@ -57,61 +55,55 @@ if IMPORT_FROM.upper() != "PA:URI":
     os.makedirs(LOCALSPACE, exist_ok=True)
     os.chmod(LOCALSPACE, mode=0o770)
     print("LOCALSPACE:  " + LOCALSPACE)
-    
     DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
     DATASET_PATH = join(LOCALSPACE, DATASET_NAME)
     os.makedirs(DATASET_PATH, exist_ok=True)
-    
     print("Dataset information: ")
     print("DATASET_NAME: " + DATASET_NAME)
     print("DATASET_PATH: " + DATASET_PATH)
-    
-    
+
+
 if IMPORT_FROM.upper() == "PA:URL" and DATASET_EXTENSION == ".zip":
     print("Downloading file...")
-    if DATA_PATH is not None and DATA_PATH.startswith("http"): 
+    if DATA_PATH is not None and DATA_PATH.startswith("http"):
         print("Downloading...")
         filename = wget.download(DATA_PATH, DATASET_PATH)
         print("FILENAME: " + filename)
         print("OK")
-    
         print("Extracting...")
         dataset_zip = zipfile.ZipFile(filename)
         dataset_zip.extractall(DATASET_PATH)
         dataset_zip.close()
         remove(filename)
-        print("OK")      
+        print("OK")
 elif IMPORT_FROM.upper() == "PA:USER_FILE" and DATASET_EXTENSION == ".zip":
     print("Importing file from the user space")
     userspaceapi.connect()
     out_file = gateway.jvm.java.io.File(os.path.join(LOCALSPACE, DATA_PATH))
     userspaceapi.pullFile(DATA_PATH, out_file)
-    
     print("Extracting...")
     filename = os.path.join(LOCALSPACE, DATA_PATH)
     dataset_zip =  zipfile.ZipFile(filename)
     dataset_zip.extractall(DATASET_PATH)
     dataset_zip.close()
     remove(filename)
-    print("OK")  
+    print("OK")
 elif IMPORT_FROM.upper() == "PA:GLOBAL_FILE" and DATASET_EXTENSION == ".zip":
     print("Importing file from the global space")
     globalspaceapi.connect()
     out_file = gateway.jvm.java.io.File(os.path.join(LOCALSPACE, DATA_PATH))
     globalspaceapi.pullFile(DATA_PATH, out_file)
-    
     print("Extracting...")
     filename = os.path.join(LOCALSPACE, DATA_PATH)
     dataset_zip = zipfile.ZipFile(filename)
     dataset_zip.extractall(DATASET_PATH)
     dataset_zip.close()
     remove(filename)
-    print("OK")        
+    print("OK")
 elif IMPORT_FROM.upper() == "PA:URI" and ISDIRECTORY:
     print("Accessing folder...")
     DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
     DATASET_PATH = os.path.join(DATA_PATH)
-
     print("Dataset information: ")
     print("DATASET_NAME: " + DATASET_NAME)
     print("DATASET_PATH: " + DATASET_PATH)
@@ -120,34 +112,29 @@ elif IMPORT_FROM.upper() == "PA:URI"  and DATASET_EXTENSION == ".zip":
     DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
     DATASET_PATH = join(os.path.dirname(DATA_PATH), DATASET_NAME)
     os.makedirs(DATASET_PATH, exist_ok=True)
-    
     print("Dataset information: ")
     print("DATASET_NAME: " + DATASET_NAME)
     print("DATASET_PATH: " + DATASET_PATH)
-        
     print("Extracting...")
     filename = os.path.join(DATA_PATH)
     dataset_zip = zipfile.ZipFile(filename)
     dataset_zip.extractall(DATASET_PATH)
     dataset_zip.close()
     remove(filename)
-    print("OK")        
+    print("OK")
 else:
     print("Please check the address path in the 'DATA_PATH' field!")
-    
+
 remove_folder = [shutil.rmtree(join(DATASET_PATH, SPLIT_NAME)) for SPLIT_NAME in SPLIT_SETS if exists(join(DATASET_PATH, SPLIT_NAME))]
-    
+
 # load classification dataset
 class LoadClassDatset():
-
     def __init__(self):
         self.folder_name = []
         self.images_list = []
         self.label_list = []
         self.k = 0
-
         print('Dataset type:', DATASET_TYPE)
-
         # create dataset list
         for root in listdir(DATASET_PATH):
             if (not root.startswith('.')):
@@ -161,7 +148,6 @@ class LoadClassDatset():
                 self.images_list = self.images_list + files
                 self.label_list = self.label_list + files_label
                 self.k += 1
-
         print("Splitting the dataset into train and test")
         self.img_train, self.img_test, self.lab_train, self.lab_test = train_test_split(self.images_list,
                                                                                         self.label_list,
@@ -183,24 +169,19 @@ class LoadClassDatset():
             print("Splitting the train into train and val")
             images_train, images_val, labels_train, labels_val = train_test_split(self.img_train, self.lab_train,
                                                                                   test_size=SPLIT_VAL, random_state=1)
-
         images_split = {SPLIT_SETS[0]: images_train, SPLIT_SETS[1]: images_val, SPLIT_SETS[2]: self.img_test}
         labels_split = {SPLIT_SETS[0]: labels_train, SPLIT_SETS[1]: labels_val, SPLIT_SETS[2]: self.lab_test}
-
         # move images to train, val and test folders
         for SPLIT_NAME in SPLIT_SETS:
             SPLIT_PATH = join(DATASET_PATH, SPLIT_NAME)
             print("SPLIT_PATH:" + SPLIT_PATH)
             self.move_images(SPLIT_PATH, images_split[SPLIT_NAME], labels_split[SPLIT_NAME])
-
         dataset_labels = json.dumps(self.folder_name)
         print("DATASET_LABELS: " + dataset_labels)
         return dataset_labels
 
-    
 # load detection/segmentation dataset
 class LoadSegObjDatset():
-
     def __init__(self):
         self.folder_name = ['images', 'classes']
         self.folder_number = len(next(os.walk(DATASET_PATH))[1])
@@ -208,7 +189,6 @@ class LoadSegObjDatset():
         self.label_dir = join(DATASET_PATH, 'classes')
         self.images_list = []
         self.images_list_gt = []
-
         print('Dataset type:', DATASET_TYPE)
 
         # create image and class lists
@@ -279,18 +259,17 @@ class LoadSegObjDatset():
 if __name__ == '__main__':
     if DATASET_TYPE == 'classification':
         classdataset = LoadClassDatset()
-        DATASET_LABELS =  classdataset.move_split_images()
+        DATASET_LABELS = classdataset.move_split_images()
     elif DATASET_TYPE == 'detection' or DATASET_TYPE == 'segmentation':
         segobjdataset = LoadSegObjDatset()
-        DATASET_LABELS =   segobjdataset.move_split_images()
+        DATASET_LABELS = segobjdataset.move_split_images()
     else:
         print('Please, check your dataset type variable!')
-        
 
-if 'variables' in locals():
-    variables.put("DATASET_NAME", DATASET_NAME)
-    variables.put("DATASET_PATH", DATASET_PATH)
-    variables.put("DATASET_LABELS", DATASET_LABELS)
-    variables.put("DATASET_TYPE", DATASET_TYPE)
+
+variables.put("DATASET_NAME", DATASET_NAME)
+variables.put("DATASET_PATH", DATASET_PATH)
+variables.put("DATASET_LABELS", DATASET_LABELS)
+variables.put("DATASET_TYPE", DATASET_TYPE)
 
 print("END " + __file__)
