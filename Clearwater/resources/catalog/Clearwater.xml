@@ -1,53 +1,79 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Clearwater" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
+  xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Clearwater" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
-    <variable name="NODE_SOURCE_NAME" value="" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/nodesources)"/>
-    <variable name="dashboard_port" value="9000" />
-    <variable name="INSTANCE_NAME" value="Clearwater" />
+    <variable name="NODE_SOURCE_NAME" value="" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/nodesources)"    />
+    <variable name="SERVICE_PORT" value="-1"    advanced="true" hidden="false"/>
+    <variable name="INSTANCE_NAME" value="clearwater-$PA_JOB_ID"    advanced="false" hidden="false"/>
+    <variable name="HTTP_ENABLED" value="True" model="PA:Boolean"   advanced="false" hidden="true"/>
+    <variable name="ENDPOINT_ID" value="clearwater-endpoint-$PA_JOB_ID"    advanced="false" hidden="true"/>
+    <variable name="PROXYFIED" value="True" model="PA:Boolean"   advanced="true" hidden="false"/>
   </variables>
   <description>
     <![CDATA[ A workflow that creates a Clearwater instance on Docker ]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="service-automation"/>
-    <info name="group" value="public-objects"/>
-    <info name="pca.service.id" value="Clearwater"/>
-    <info name="pca.states" value="(VOID,RUNNING)"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png"/>
+    <info name="pca.states" value="(VOID,RUNNING)"/>
+    <info name="pca.service.id" value="Clearwater"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
-    <task name="clean_first" >
+    <task name="Start_Clearwater" 
+    
+    
+    
+    
+    fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png"/>
+      </genericInformation>
       <selection>
         <script type="static">
           <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw" language="groovy"></file>
         </script>
       </selection>
-      <scriptExecutable>
+      <pre>
         <script>
-          <code language="bash">
-            <![CDATA[
-docker ps -a | awk '{ print $1,$2 }' | grep martinacti | awk '{print $1 }' | xargs -I {} docker rm -fv {}
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Pre_Start_Service/raw" language="groovy"></file>
         </script>
-      </scriptExecutable>
-    </task>
-    <task name="ssshtask" >
-      <depends>
-        <task ref="clean_first"/>
-      </depends>
-      <selection>
-        <script type="static">
-          <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw" language="groovy"></file>
-        </script>
-      </selection>
+      </pre>
       <scriptExecutable>
         <script>
           <code language="bash">
             <![CDATA[
 name_Containers=$variables_INSTANCE_NAME
+service_port=$variables_SERVICE_PORT
+
+# Manually find a free random port to preserve it in case if docker (re)start (Pause/Resume)
+GET_RANDOM_PORT(){
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+if [ "$service_port" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number"
+    CLEARWATER_HOST_PORT=$(GET_RANDOM_PORT)
+fi
+echo "The service will be initialized on port $CLEARWATER_HOST_PORT"
+
+#########   Cleaning script   #########
+# To check why this was included in the old version of the PSA service.
+docker ps -a | awk '{ print $1,$2 }' | grep martinacti | awk '{print $1 }' | xargs -I {} docker rm -fv {}
+#######   End Cleaning script   #######
+
 echo -e "version: '2'
 services:
   "${name_Containers}etcd":
@@ -103,9 +129,14 @@ services:
       - "${name_Containers}homer"
     ports:
       - 22
-      - "$variables_dashboard_port:80""> "docker-compose.yml"
+      - "$CLEARWATER_HOST_PORT:80""> "docker-compose.yml"
 
 docker-compose up -d
+
+containerID=$(docker ps -s --filter "name=$name_Containers" --filter status=running --format {{.ID}} | head -n 1)
+echo "$containerID" > $name_Containers"_containerID"
+
+echo "$CLEARWATER_HOST_PORT" > "${name_Containers}_port"
 ]]>
           </code>
         </script>
@@ -113,24 +144,38 @@ docker-compose up -d
       <controlFlow block="none"></controlFlow>
       <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-import org.objectweb.proactive.core.util.ProActiveInet
-
-// Get the current IP address and store it
-def clearwater_UI_IP_address = ProActiveInet.getInstance().getInetAddress().getHostAddress()
-variables.put("clearwater_UI_IP_address", clearwater_UI_IP_address)
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Post_Start_Service/raw" language="groovy"></file>
         </script>
       </post>
       <outputFiles>
         <files  includes="docker-compose.yml" accessMode="transferToOutputSpace"/>
       </outputFiles>
+      <metadata>
+        <positionTop>
+            646.109375
+        </positionTop>
+        <positionLeft>
+            751.5
+        </positionLeft>
+      </metadata>
     </task>
-    <task name="end_deployment" >
+    <task name="Loop_Over_Instance_Status_D" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png"/>
+        <info name="Documentation" value="PSA/PSAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
       <depends>
-        <task ref="ssshtask"/>
+        <task ref="Start_Clearwater"/>
       </depends>
       <scriptExecutable>
         <script>
@@ -140,67 +185,112 @@ import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 
-// Retrieve variables
-def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
-def clearwater_UI_IP_address = variables.get("clearwater_UI_IP_address")
-def dashboard_port = variables.get("dashboard_port")
-
-// Define other variables
-def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+def instanceId = variables.get("PCA_INSTANCE_ID") as long
+def instanceName = variables.get("INSTANCE_NAME")
+def channel = "Service_Instance_" + instanceId
+def credentialsKey = variables.get("CREDENTIALS_KEY")
 
 // Get schedulerapi access and acquire session id
 schedulerapi.connect()
 def sessionId = schedulerapi.getSession()
 
-// Connect to APIs
-def api_client = new ApiClient()
-api_client.setBasePath(pca_url)
-api_client.setDebugging(true)
-def service_instance_rest_api = new ServiceInstanceRestApi(api_client)
+// Connect to Cloud Automation API
+def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
 
-//Update endpoints
-def endpointsMap = [:]
-endpointsMap.put("clearwater_endpoint", "http://" + clearwater_UI_IP_address + ":"  + dashboard_port)
-service_instance_rest_api.createNewInstanceEndpointsUsingPUT(sessionId, service_instance_id, endpointsMap)
+// If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
+def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId).getInstanceStatus()
+if (currentStatus.equals("FINISHED")){
+    variables.put("IS_FINISHED",true)
+    if(credentialsKey){
+        schedulerapi.removeThirdPartyCredential(credentialsKey)
+    }
+    synchronizationapi.deleteChannel(channel)
 
-// Update the related service infos
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(sessionId, service_instance_id)
-service_instance_data.setInstanceStatus("RUNNING")
-service_instance_rest_api.updateServiceInstanceUsingPUT(sessionId, service_instance_id, service_instance_data)
+    // detach service to the current and parent job
+    schedulerapi.detachService(variables.get("PA_JOB_ID"), instanceId as int)
+    if (genericInformation.containsKey("PARENT_JOB_ID") && !schedulerapi.isJobFinished(genericInformation.get("PARENT_JOB_ID"))) {
+        try {
+            schedulerapi.detachService(genericInformation.get("PARENT_JOB_ID"), instanceId as int)
+        } catch (Exception e) {
+            // for the rare case where parent job just terminated
+            printn "WARN: could not detach service from job " + genericInformation.get("PARENT_JOB_ID") + " : " + e.getMessage()
+        }
+    }
+
+    // Remove token in the current node
+    token = instanceName
+    nodeUrl = variables.get("PA_NODE_URL")
+    println("Current nodeUrl: " + nodeUrl)
+    println("Removing token:  " + token)
+    rmapi.connect()
+    rmapi.removeNodeToken(nodeUrl, token)
+} else {
+    // Check if container has been stopped abnormally
+    def containersNames = ["docker", "ps", "-s", "--filter", "name=${instanceName}", "--filter", "status=running", "--format", "{{.Names}}"].execute().getText().trim()
+    if ((containersNames.isEmpty()) && (!synchronizationapi.get(channel, "FINISH_LAUNCHED")) && (!synchronizationapi.get(channel, "PAUSE_LAUNCHED"))){
+        currentStatus = 'ERROR'
+        println("[ERROR] An internal error occured in docker container: " + instanceName)
+        // Update docker container is not running
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+        serviceInstanceData.setInstanceStatus(currentStatus)
+        serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+        // Tell the CRON loop to stop
+        variables.put("IS_FINISHED",true)
+        // Exit with error
+        System.exit(1)
+    } else {
+        // Fetch all logs or only new logs since last fetch time mark
+        def containersNameByName = containersNames.split('\n')
+        def lastTime=variables.get('LAST_TIME_MARKER')
+        println("Logs by container for last time $lastTime:")
+        for (String eachContainer : containersNameByName) {
+            println("Container $eachContainer logs:")
+            def fetchLogsCmd = lastTime ? ["docker", "logs", "--since", lastTime, eachContainer] : ["docker", "logs",  eachContainer]
+        	fetchLogsCmd.execute().waitForProcessOutput(System.out, System.err)
+        }
+    }
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
+      <controlFlow >
+        <loop target="Loop_Over_Instance_Status_D">
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw" language="groovy"></file>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            775.109375
+        </positionTop>
+        <positionLeft>
+            749.5
+        </positionLeft>
+      </metadata>
     </task>
   </taskFlow>
   <metadata>
     <visualization>
-      <![CDATA[ <html><head><link rel="stylesheet" href="/studio/styles/studio-standalone.css"><style>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1139px;
-            height:566px;
+            width:2504px;
+            height:3408px;
             }
-        </style></head><body><div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-205.9875030517578px;left:-490.75px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_385" style="top: 211px; left: 495.75px;"><a class="task-name"><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">clean_first</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_388" style="top: 339px; left: 495.75px;"><a class="task-name"><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">ssshtask</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_391" style="top: 467px; left: 495.75px;"><a class="task-name"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">end_deployment</span></a></div><svg style="position:absolute;left:530.9817132113825px;top:250.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path></svg><svg style="position:absolute;left:535.5px;top:378.5px" width="25.5" height="89" pointer-events="none" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4.5 88 C 14.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,66.78168750000002 L12.19383263091469,46.25114034666338 L5.739082405354392,52.834163932040326 L-1.7536909370449987,47.46216731630898 L6.950109375,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,66.78168750000002 L12.19383263091469,46.25114034666338 L5.739082405354392,52.834163932040326 L-1.7536909370449987,47.46216731630898 L6.950109375,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 536px; top: 241px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 536px; top: 369px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 536px; top: 329px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 540.5px; top: 497px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 540.5px; top: 457px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1"
-      xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div></body></html>
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-641.109375px;left:-744.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_44" style="top: 646.125px; left: 751.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png" width="20px">&nbsp;<span class="name">Start_Clearwater</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_47" style="top: 775.125px; left: 749.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/clearwater.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:796px;top:685.5px" width="51.5" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 30.5 89 C 40.5 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.604289125,66.74071675 L29.023784092614534,45.61012272516 L25.00665076530679,53.90847435850462 L16.19154170111915,51.2077610848532 L30.604289125,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.604289125,66.74071675 L29.023784092614534,45.61012272516 L25.00665076530679,53.90847435850462 L16.19154170111915,51.2077610848532 L30.604289125,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:904.0266769263776px;top:724.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_58" style="position: absolute; transform: translate(-50%, -50%); left: 916px; top: 794.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 796.5px; top: 676px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 827px; top: 805px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 827px; top: 765px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 914px; top: 765px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 914px; top: 805px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
  ]]>
     </visualization>
   </metadata>
