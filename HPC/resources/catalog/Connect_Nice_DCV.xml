@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Connect_Nice_DCV" projectName="AWS Nice DCV" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="Max_concurrent_clients" value="2" model="PA:INTEGER[1,1000]" description="Number of user that can access the same session simultaneously." group="" advanced="true" hidden="false"/>
+    <variable name="Session_name" value="virtual" model="" description="The prefix of the session ID. " group="" advanced="false" hidden="false"/>
+    <variable name="Script_DIR" value="" model="" description="The location of a shell script file to be excuted inside the session. If this field is empty the &lt;--init&gt; arguement will be overlooked." group="" advanced="false" hidden="false"/>
+    <variable name="Password" value="" model="PA:HIDDEN" description="The password to be used to access the session." group="" advanced="false" hidden="false"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that creates a virtual Nice DCV session and report back the endpoint and the username that can be used to connect to the session. When a stop signal is transmitted the workflow will end the session and delete the associated Linux user. ]]>
+  </description>
+  <genericInformation>
+    <info name="NODE_ACCESS_TOKEN" value="DCV"/>
+    <info name="bucketName" value="hpc"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/DCV.png"/>
+    <info name="Documentation" value="https://docs.aws.amazon.com/dcv/"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Start_Session" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A Task to create a new Linux user and then attach a Nice DCV virtual session to it. ]]>
+      </description>
+      <genericInformation>
+        <info name="NODE_ACCESS_TOKEN" value="DCV"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo " Starting a DCV session: "
+User="user_$variables_PA_JOB_ID"
+Pass=$variables_Password
+SDIR=$variables_Script_DIR
+echo " Session name: `echo $variables_Session_name`_$variables_PA_JOB_ID"
+echo " Session user: $User"
+echo " Startup script: $SDIR"
+echo " Max concurrent users: ${variables_Max_concurrent_clients}"
+
+sudo useradd $User
+echo $Pass | sudo passwd $User --stdin
+sudo usermod -aG wheel $User
+
+if [ -z "$SDIR" ]
+then
+      echo "No Init file is passed"
+      sudo dcv create-session --type virtual --name $User --owner $User `echo $variables_Session_name`_$variables_PA_JOB_ID
+else
+      echo "Init file $SDIR is passed"
+      sudo chmod 777 $SDIR 
+      sudo dcv create-session --type virtual --name $User --owner $User --init $SDIR `echo $variables_Session_name`_$variables_PA_JOB_ID
+fi
+
+
+echo "Done"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            252.046875
+        </positionTop>
+        <positionLeft>
+            631.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="wait_for_signals" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job. ]]>
+      </description>
+      <variables>
+        <variable name="SIGNALS" value="stop, kill" inherited="false"     />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="TASK.DOCUMENTATION" value="user/ProActiveUserGuide.html#_task_signal_api"/>
+      </genericInformation>
+      <depends>
+        <task ref="Report_endpoint"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import com.google.common.base.Splitter;
+
+if (variables.get("PA_TASK_ITERATION")==0){
+    
+    // Read the variable SIGNALS
+       signals = variables.get("SIGNALS")
+
+       // Split the value of the variable SIGNALS and transform it into a list
+       Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+    
+    // Send a ready notification for each signal in the set
+    println("Ready for signals "+ signalsSet)
+    signalsSet.each { 
+        signal -> signalapi.readyForSignal(signal)
+    }
+    
+    // Add the signals set as a variable to be used by next tasks
+    variables.put("SIGNALS_SET", signalsSet)
+}
+
+//Read the variable SIGNALS_SET
+Set signalsSet =  variables.get("SIGNALS_SET")
+
+// Check whether one signal among those specified as input is received
+println("Checking whether one signal in the set "+ signalsSet +" is received")
+receivedSignal = signalapi.checkForSignals(signalsSet)
+
+// If a signal is received, remove ready signals and break the loop, else sleep 10 seconds then restart
+if (receivedSignal != null){
+    
+    // remove ready signals
+       signalapi.removeManySignals(new HashSet<>(signalsSet.collect { signal -> "ready_"+signal }))
+    
+    // print the received signal
+    println("Received signal: "+ receivedSignal)
+    result = receivedSignal
+    
+} else {
+    result = null    
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="wait_for_signals">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+if (result!=null){
+    loop = false
+} else {
+    loop = " * * * * * "
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            234.046875
+        </positionTop>
+        <positionLeft>
+            885.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Report_endpoint" 
+    
+    
+    
+    preciousResult="true" 
+    fork="true">
+      <description>
+        <![CDATA[ A Task to report all the details of the Nice DCV session including the endpoint, the public IP, and the username. ]]>
+      </description>
+      <depends>
+        <task ref="Start_Session"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonSlurper
+def jobId = variables.get("PA_JOB_ID")
+def SessionName = variables.get("Session_name")
+def Pass = variables.get("Password")
+def Ip = InetAddress.getLocalHost().getHostAddress()
+def sout = new StringBuilder(), serr = new StringBuilder()
+def proc = 'dig +short myip.opendns.com @resolver1.opendns.com'.execute()
+def Sessionid = SessionName +"_"+ jobId
+proc.consumeProcessOutput(sout, serr)
+proc.waitForOrKill(1000)
+println "Public IP > $sout\n err> $serr"
+PIP = sout.replaceAll("\n\r","").replaceAll("\n","")
+def JsonObject = "dcv list-endpoints -j".execute().text
+def SJson = new  JsonSlurper().parseText(JsonObject)
+def port = SJson.endpoints[0].port
+def InstascneID = "wget -q -O - http://169.254.169.254/latest/meta-data/instance-id".execute().text
+def HiddenPass= ""
+for(int i = 0;i<Pass.length();i++) {
+    if(i==0 || i == Pass.length()-1) {
+        HiddenPass+=Pass[i]  }
+    else {
+        HiddenPass+="*"
+    }
+      }
+resultMap.put("endpoint","https://" + PIP + ":" + port+"#"+Sessionid)
+resultMap.put("Public IP",PIP)
+resultMap.put("Session Name",Sessionid)
+resultMap.put("Session User","user_" + variables.get("PA_JOB_ID"))
+resultMap.put("Session Password",HiddenPass)
+resultMap.put("AWS Instance ID",InstascneID)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            390.046875
+        </positionTop>
+        <positionLeft>
+            624.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="End_Session" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A task to end the session and delete the associated Linux user once a stop signal is received.  ]]>
+      </description>
+      <depends>
+        <task ref="wait_for_signals"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo " Ending a DCV session: "
+echo " For the user: $variables_User"
+echo " Session name: `echo $variables_Session_name`_$variables_PA_JOB_ID"
+
+User="user_$variables_PA_JOB_ID"
+
+dcv close-session `echo $variables_Session_name`_$variables_PA_JOB_ID
+sleep 20
+sudo userdel -r $User
+
+echo "Done"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            400.046875
+        </positionTop>
+        <positionLeft>
+            897.25
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2834px;
+            height:3224px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-229.046875px;left:-619.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_25" style="top: 252.047px; left: 631.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a bash engine."><img src="images/LinuxBash.png" width="20px">&nbsp;<span class="name">Start_Session</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_28" style="top: 234.047px; left: 885.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">wait_for_signals</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_31" style="top: 390.047px; left: 624.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Report_endpoint</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_34" style="top: 400.047px; left: 897.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a bash engine."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">End_Session</span></a></div><svg style="position:absolute;left:668px;top:183.5px" width="281" height="297" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 260 0 C 270 -50 -10 246 0 196 " transform="translate(10.5,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M214.51843749999998,22.857312500000006 L203.74017821922402,41.10091759538526 L203.81512815041194,31.881677794413875 L194.71581292481014,30.397608245797237 L214.51843749999998,22.857312500000006" class="" stroke="#666" fill="#666" transform="translate(10.5,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M214.51843749999998,22.857312500000006 L203.74017821922402,41.10091759538526 L203.81512815041194,31.881677794413875 L194.71581292481014,30.397608245797237 L214.51843749999998,22.857312500000006" class="" stroke="#666" fill="#666" transform="translate(10.5,50.5)"></path></svg><svg style="position:absolute;left:972.0266769263776px;top:183.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_45" style="position: absolute; transform: translate(-50%, -50%); left: 984px; top: 253.5px;">loop</div><svg style="position:absolute;left:668px;top:291.5px" width="23.5" height="99" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 98 C -10 48 12.5 50 2.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.626085,74.41826400000001 L5.625874502093563,54.90147214334981 L-1.7398866511481574,60.44634027824672 L-8.346049219659726,54.01527379449796 L-2.626085,74.41826400000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.626085,74.41826400000001 L5.625874502093563,54.90147214334981 L-1.7398866511481574,60.44634027824672 L-8.346049219659726,54.01527379449796 L-2.626085,74.41826400000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:928px;top:273.5px" width="29.5" height="127" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 8.5 126 C 18.5 76 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.376267375000001,96.601158 L15.056666693654854,75.93490864947837 L8.784328339080714,82.69196211720661 L1.1474708108614715,77.52684768539767 L10.376267375000001,96.601158" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.376267375000001,96.601158 L15.056666693654854,75.93490864947837 L8.784328339080714,82.69196211720661 L1.1474708108614715,77.52684768539767 L10.376267375000001,96.601158" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 671px; top: 282px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 928.5px; top: 264px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 928.5px; top: 224px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 982px; top: 224px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 982px; top: 264px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 668.5px; top: 420px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 668.5px; top: 380px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 937px; top: 430px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 937px; top: 390px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
