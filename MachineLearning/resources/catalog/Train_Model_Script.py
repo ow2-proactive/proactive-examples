@@ -1,6 +1,3 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
-
-# -*- coding: utf-8 -*-
 """Proactive Train Model for Machine Learning
 
 This module contains the Python script for the Train Model task.
