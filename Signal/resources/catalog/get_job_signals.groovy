@@ -1,1 +1,1 @@
-println("Job signals "+ signalapi.getJobSignals())
+println("Job signals "+ signalapi.getJobSignals().keySet())
