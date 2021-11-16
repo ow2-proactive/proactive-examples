@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Proactive Encode Data for Machine Learning
 
 This module contains the Python script for the Encode Data task.
