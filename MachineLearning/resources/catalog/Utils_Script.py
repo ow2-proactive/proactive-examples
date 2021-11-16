@@ -1,5 +1,3 @@
-
-# -*- coding: utf-8 -*-
 """Proactive Python Utils for Machine Learning
 
 Provide a collection of common utility Python functions and classes
@@ -52,8 +50,9 @@ def assert_not_empty(s, msg=None):
     :param msg: Default error message.
     :return: None.
     """
-    if not s.strip():
-        raiser(msg)
+    if type(s) == str:
+        if not s.strip():
+            raiser(msg)
 
 
 def assert_not_none(expr, msg=None):
@@ -1011,11 +1010,11 @@ def encode_columns(dataframe, columns, sep=","):
     :return: Pandas dataframe and the encode map dictionary.
     """
     from sklearn.preprocessing import LabelEncoder
-    if isinstance(columns, str):
+    assert_not_none_not_empty(columns, "The columns to be encoded should be defined!")
+    if type(columns) == str:
         columns2encode = [x.strip() for x in columns.split(sep)]
     else:
         columns2encode = columns
-    assert_not_none_not_empty(columns2encode, "The columns to be encoded should be defined!")
     encode_map = {}
     dataframe_aux = dataframe.copy()
     for col in columns2encode:
@@ -1039,15 +1038,16 @@ def apply_encoder(dataframe, columns, encode_map, sep=","):
     :param sep: Column separator. Default is comma ','.
     :return: Pandas dataframe.
     """
-    if isinstance(columns, str):
+    assert_not_none_not_empty(columns, "The columns to be encoded should be defined!")
+    if type(columns) == str:
         columns2encode = [x.strip() for x in columns.split(sep)]
     else:
         columns2encode = columns
-    assert_not_none_not_empty(columns2encode, "The columns to be encoded should be defined!")
     dataframe_aux = dataframe.copy()
     for col in columns2encode:
         col_mapper = encode_map[col]
-        dataframe_aux[col] = dataframe[col].map(col_mapper)
+        inv_col_mapper = {v: k for k, v in col_mapper.items()}
+        dataframe_aux[col] = dataframe_aux[col].map(inv_col_mapper)
     return dataframe_aux
 
 

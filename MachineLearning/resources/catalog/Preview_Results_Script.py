@@ -1,11 +1,10 @@
-
-# -*- coding: utf-8 -*-
 """Proactive Preview Results for Machine Learning
 
 This module contains the Python script for the Preview Results task.
 """
 import ssl
 import urllib.request
+import json
 
 global variables, resultMetadata
 
@@ -37,9 +36,24 @@ assert_not_none_not_empty(OUTPUT_TYPE, "OUTPUT_TYPE should be defined!")
 
 input_variables = {
     'task.dataframe_id': None,
-    'task.label_column': None
+    'task.label_column': None,
+    'task.encode_map_json': None
 }
 get_input_variables(input_variables)
+
+is_labeled_data = False
+LABEL_COLUMN = variables.get("LABEL_COLUMN")
+if is_not_none_not_empty(LABEL_COLUMN):
+    is_labeled_data = True
+else:
+    LABEL_COLUMN = input_variables['task.label_column']
+    if is_not_none_not_empty(LABEL_COLUMN):
+        is_labeled_data = True
+
+encode_map_json = input_variables['task.encode_map_json']
+encode_map = None
+if encode_map_json is not None:
+    encode_map = json.loads(encode_map_json)
 
 dataframe_id = input_variables['task.dataframe_id']
 print("dataframe id (in): ", dataframe_id)
@@ -49,7 +63,13 @@ dataframe = get_and_decompress_dataframe(dataframe_id)
 # -------------------------------------------------------------
 # Preview results
 #
-preview_dataframe_in_task_result(dataframe, output_type=OUTPUT_TYPE)
+if encode_map is not None and is_labeled_data:
+    # apply_encoder(dataframe, columns, encode_map, sep=",")
+    encode_map['predictions'] = encode_map[LABEL_COLUMN]
+    dataframe_aux = apply_encoder(dataframe, [LABEL_COLUMN, 'predictions'], encode_map)
+    preview_dataframe_in_task_result(dataframe_aux)
+else:
+    preview_dataframe_in_task_result(dataframe, output_type=OUTPUT_TYPE)
 
 # -------------------------------------------------------------
 print("END " + __file__)

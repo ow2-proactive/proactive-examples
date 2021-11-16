@@ -1,5 +1,3 @@
-
-# -*- coding: utf-8 -*-
 """Proactive Split Data for Machine Learning
 
 This module contains the Python script for the Split Data task.
@@ -44,7 +42,8 @@ test_size = 1 - TRAIN_SIZE
 input_variables = {
     'task.dataframe_id': None,
     'task.label_column': None,
-    'task.feature_names': None
+    'task.feature_names': None,
+    'task.encode_map_json': None
 }
 get_input_variables(input_variables)
 
@@ -70,6 +69,7 @@ resultMetadata.put("task.dataframe_id_train", dataframe_id1)
 resultMetadata.put("task.dataframe_id_test", dataframe_id2)
 resultMetadata.put("task.label_column", input_variables['task.label_column'])
 resultMetadata.put("task.feature_names", input_variables['task.feature_names'])
+resultMetadata.put("task.encode_map_json", input_variables['task.encode_map_json'])
 
 # -------------------------------------------------------------
 # Preview results

@@ -1,5 +1,3 @@
-
-# -*- coding: utf-8 -*-
 """Proactive Predict Model for Machine Learning
 
 This module contains the Python script for the Predict Model task.
@@ -44,7 +42,7 @@ else:
     exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
 global is_nvidia_rapids_enabled, is_not_none_not_empty
-global raiser, get_input_variables, dict_to_obj
+global raiser, get_input_variables, dict_to_obj, apply_encoder
 global get_and_decompress_json_dataframe, compress_and_transfer_dataframe
 
 # -------------------------------------------------------------
@@ -70,7 +68,8 @@ input_variables = {
     'task.dataframe_id_test': None,
     'task.algorithm_json': None,
     'task.label_column': None,
-    'task.model_id': None
+    'task.model_id': None,
+    'task.encode_map_json': None
 }
 get_input_variables(input_variables)
 
@@ -80,6 +79,11 @@ if input_variables['task.dataframe_id'] is not None:
 if input_variables['task.dataframe_id_test'] is not None:
     dataframe_id = input_variables['task.dataframe_id_test']
 print("dataframe id (in): ", dataframe_id)
+
+encode_map_json = input_variables['task.encode_map_json']
+encode_map = None
+if encode_map_json is not None:
+    encode_map = json.loads(encode_map_json)
 
 dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
 dataframe = read_json(dataframe_json, orient='split')
@@ -217,11 +221,18 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
+resultMetadata.put("task.encode_map_json", input_variables['task.encode_map_json'])
 
 # -------------------------------------------------------------
 # Preview results
 #
-preview_dataframe_in_task_result(dataframe)
+if encode_map is not None and is_labeled_data:
+    # apply_encoder(dataframe, columns, encode_map, sep=",")
+    encode_map['predictions'] = encode_map[LABEL_COLUMN]
+    dataframe_aux = apply_encoder(dataframe, [LABEL_COLUMN, 'predictions'], encode_map)
+    preview_dataframe_in_task_result(dataframe_aux)
+else:
+    preview_dataframe_in_task_result(dataframe)
 
 # -------------------------------------------------------------
 print("END " + __file__)

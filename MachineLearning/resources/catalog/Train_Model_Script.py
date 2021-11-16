@@ -1,5 +1,3 @@
-
-# -*- coding: utf-8 -*-
 """Proactive Train Model for Machine Learning
 
 This module contains the Python script for the Train Model task.
@@ -31,7 +29,7 @@ else:
 global check_task_is_enabled, is_nvidia_rapids_enabled
 global raiser, get_input_variables, dict_to_obj, is_not_none_not_empty
 global get_and_decompress_json_dataframe, preview_dataframe_in_task_result
-global compress_and_transfer_dataframe, compress_and_transfer_data
+global compress_and_transfer_dataframe, compress_and_transfer_data, apply_encoder
 
 # -------------------------------------------------------------
 # Check if the Python task is enabled or not
@@ -90,7 +88,8 @@ input_variables = {
     'task.dataframe_id_train': None,
     'task.algorithm_json': None,
     'task.label_column': None,
-    'task.feature_names': None
+    'task.feature_names': None,
+    'task.encode_map_json': None
 }
 get_input_variables(input_variables)
 
@@ -100,6 +99,11 @@ if input_variables['task.dataframe_id'] is not None:
 if input_variables['task.dataframe_id_train'] is not None:
     dataframe_id = input_variables['task.dataframe_id_train']
 print("dataframe id (in): ", dataframe_id)
+
+encode_map_json = input_variables['task.encode_map_json']
+encode_map = None
+if encode_map_json is not None:
+    encode_map = json.loads(encode_map_json)
 
 dataframe_json = get_and_decompress_json_dataframe(dataframe_id)
 
@@ -423,6 +427,7 @@ resultMetadata.put("task.algorithm_json", algorithm_json)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.feature_names", input_variables['task.feature_names'])
+resultMetadata.put("task.encode_map_json", input_variables['task.encode_map_json'])
 
 # -----------------------------------------------------------------
 # Model Explainer
@@ -447,7 +452,12 @@ print('result_map: ', result_map)
 # -------------------------------------------------------------
 # Preview results
 #
-preview_dataframe_in_task_result(dataframe)
+if encode_map is not None and is_labeled_data:
+    # apply_encoder(dataframe, columns, encode_map, sep=",")
+    dataframe_aux = apply_encoder(dataframe, LABEL_COLUMN, encode_map)
+    preview_dataframe_in_task_result(dataframe_aux)
+else:
+    preview_dataframe_in_task_result(dataframe)
 
 # -------------------------------------------------------------
 print("END " + __file__)
