@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 
 # -*- coding: utf-8 -*-
 """Proactive Encode Data for Machine Learning
@@ -57,8 +58,7 @@ print("dataframe id (in): ", dataframe_id)
 dataframe = get_and_decompress_dataframe(dataframe_id)
 
 # Encode the desired columns of a Pandas dataframe
-columns = [x.strip() for x in COLUMNS_NAME.split(',')]
-dataframe, encode_map = encode_columns(dataframe, columns)
+dataframe, encode_map = encode_columns(dataframe, COLUMNS_NAME)
 print("Encode map: ", encode_map)
 
 # -------------------------------------------------------------
