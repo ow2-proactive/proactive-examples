@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Proactive Predict Model for Machine Learning
 
 This module contains the Python script for the Predict Model task.
