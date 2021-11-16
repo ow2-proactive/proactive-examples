@@ -1,6 +1,3 @@
-# Copyright Activeeon 2007-2021. All rights reserved.
-
-# -*- coding: utf-8 -*-
 """Proactive Python Utils for Machine Learning
 
 Provide a collection of common utility Python functions and classes
