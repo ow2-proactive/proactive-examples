@@ -17,6 +17,13 @@ from sklearn.model_selection import train_test_split
 
 IMPORT_FROM = variables.get("IMPORT_FROM")
 DATA_PATH = variables.get("DATA_PATH")
+if IMPORT_FROM is None and DATA_PATH.startswith("http"):
+    IMPORT_FROM = 'PA:URL'
+elif IMPORT_FROM is None and not DATA_PATH.startswith("http"):
+    IMPORT_FROM = 'PA:GLOBAL_FOLDER'
+else:
+    print("IMPORT_FROM not defined!")
+print("IMPORT_FROM: " + IMPORT_FROM)
 print("DATA_PATH: " + DATA_PATH)
 
 SPLIT_SETS = ['train', 'val', 'test']
@@ -100,6 +107,15 @@ elif IMPORT_FROM.upper() == "PA:GLOBAL_FILE" and DATASET_EXTENSION == ".zip":
     dataset_zip.close()
     remove(filename)
     print("OK")
+elif IMPORT_FROM.upper() == "PA:GLOBAL_FOLDER":
+    print("Importing folder from the global space")
+    DATASET_PATH = os.path.join(DATA_PATH)
+    DATASET_NAME = DATASET_PATH
+    globalspaceapi.connect()
+    # out_file = gateway.jvm.java.io.File(os.path.join(LOCALSPACE, DATA_PATH))
+    out_file = gateway.jvm.java.io.File(DATASET_PATH)
+    globalspaceapi.pullFile(DATA_PATH, out_file)
+    print("OK")
 elif IMPORT_FROM.upper() == "PA:URI" and ISDIRECTORY:
     print("Accessing folder...")
     DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
@@ -107,7 +123,7 @@ elif IMPORT_FROM.upper() == "PA:URI" and ISDIRECTORY:
     print("Dataset information: ")
     print("DATASET_NAME: " + DATASET_NAME)
     print("DATASET_PATH: " + DATASET_PATH)
-elif IMPORT_FROM.upper() == "PA:URI"  and DATASET_EXTENSION == ".zip":
+elif IMPORT_FROM.upper() == "PA:URI" and DATASET_EXTENSION == ".zip":
     print("Accessing file...")
     DATASET_NAME = splitext(DATA_PATH[DATA_PATH.rfind("/") + 1:])[0]
     DATASET_PATH = join(os.path.dirname(DATA_PATH), DATASET_NAME)
@@ -137,7 +153,7 @@ class LoadClassDatset():
         print('Dataset type:', DATASET_TYPE)
         # create dataset list
         for root in listdir(DATASET_PATH):
-            if (not root.startswith('.')):
+            if not root.startswith('.'):
                 self.folder_name.append(root)
                 label_dir = join(DATASET_PATH, root)
                 print(label_dir)
