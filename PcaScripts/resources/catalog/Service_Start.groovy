@@ -53,7 +53,7 @@ if (!startingState) {
 
 // Check existing service instances
 boolean instance_exists = false
-List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId)
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId, null)
 for (ServiceInstanceData serviceInstanceData : service_instances) {
     if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == startingState)){
         if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {

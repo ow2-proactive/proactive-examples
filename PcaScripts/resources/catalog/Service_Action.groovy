@@ -40,8 +40,7 @@ def isActionExists = false
 def catalogRestApi = new CatalogRestApi(apiClient)
 def actionVariables = new HashMap()
 
-Map<String, List<CloudAutomationWorkflow>> listExecutableActionsByInstanceId = catalogRestApi.listExecutableActionsByInstanceIdUsingGET(sessionId)
-List<CloudAutomationWorkflow> listExecutableActions = listExecutableActionsByInstanceId.get(instanceId.toString())
+List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceIdUsingGET(sessionId, instanceId.toString()).get(instanceId.toString())
 for (CloudAutomationWorkflow actionIterator : listExecutableActions) {
     if (actionIterator.getName().equals(action)){
         bucketName = actionIterator.getBucket()
