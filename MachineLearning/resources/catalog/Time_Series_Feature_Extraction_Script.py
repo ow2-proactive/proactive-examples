@@ -16,14 +16,22 @@ __file__ = variables.get("PA_TASK_NAME")
 print("BEGIN " + __file__)
 
 # -------------------------------------------------------------
+# Get schedulerapi access and acquire session id
+schedulerapi.connect()
+sessionid = schedulerapi.getSession()
+
+# -------------------------------------------------------------
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
+req = urllib.request.Request(PA_PYTHON_UTILS_URL)
+req.add_header('sessionid', sessionid)
 if PA_PYTHON_UTILS_URL.startswith('https'):
-    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL, context=ssl._create_unverified_context()).read(), globals())
+    content = urllib.request.urlopen(req, context=ssl._create_unverified_context()).read()
 else:
-    exec(urllib.request.urlopen(PA_PYTHON_UTILS_URL).read(), globals())
+    content = urllib.request.urlopen(req).read()
+exec(content, globals())
 global check_task_is_enabled, preview_dataframe_in_task_result
 global get_and_decompress_dataframe, compress_and_transfer_dataframe
 global assert_not_none_not_empty, is_not_none_not_empty
