@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2021. All rights reserved.
 #!/usr/bin/env python3
 
 import numpy
@@ -277,7 +278,6 @@ def highlight_drift_detection(values):
 
 
 def get_token_api(user) -> str:
-    user = connexion.request.form["user"]
     addr = connexion.request.remote_addr
     token = TOKENS.get(user)
     if not token:
@@ -339,6 +339,7 @@ def predict_api(data: str) -> str:
                 if save_predictions:
                     log("[INFO] Saving predictions")
                     dataframe_predictions = predict_dataframe.assign(predictions=predictions)
+                    dataframe_predictions = dataframe_predictions.assign(api_token=api_token)
                     dataframe_predictions.to_csv(predictions_csv_file, mode='a', header=False, index=False)
                 log("[INFO] Precitions provided", api_token)
                 if GPU_ENABLED:
@@ -493,6 +494,21 @@ def update_api() -> str:
         set_config('TRACE_ENABLED', bool(strtobool(trace_enabled)))
         return log("[INFO] Service parameters updated", api_token)
     else:
+        return log("[ERROR] Invalid token", api_token)
+
+def get_predictions_api(api_token,model_name,model_version):
+    addr = connexion.request.remote_addr
+    predictions_file_path = os.environ['MODELS_PATH'] + "/" + model_name + "/" + str(model_version) + "/predictions_data_" + str(model_version) + ".csv"
+    if auth_token(api_token):
+        if os.path.exists(predictions_file_path):
+            predictions_df = pd.read_csv(predictions_file_path, delimiter=',')
+            predictions_df.loc[predictions_df[predictions_df.columns[-1]] == api_token]
+            predictions_df = predictions_df.iloc[:, :-1]
+            predictions_json = predictions_df.to_json(orient='split')
+            return predictions_json
+        else:
+            get_prediction_status = "[WARN] No predictions saved for the version " + str(model_version) + " of model " + model_name + " using token " + str(api_token)
+            return log(get_prediction_status, api_token)
         return log("[ERROR] Invalid token", api_token)
 
 
