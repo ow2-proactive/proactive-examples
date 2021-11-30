@@ -18,18 +18,6 @@ except ImportError:
         from urllib.parse import unquote
 
 try:
-    import pickle
-except ImportError:
-    install('pickle')
-    import pickle
-
-try:
-    import wget
-except ImportError:
-    install('wget')
-    import wget
-
-try:
     import requests
 except ImportError:
     install('requests')
