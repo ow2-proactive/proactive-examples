@@ -511,62 +511,65 @@ def get_predictions_api(api_token,model_name,model_version):
         return log("[ERROR] Invalid token", api_token)
 
 
-def trace_preview_api(key) -> str:
-    if USER_KEY == key.encode():
-        if exists(TRACE_FILE) and isfile(TRACE_FILE):
-            header = ["Date Time", "Token", "Traceability information"]
-            result = ""
-            with open(TRACE_FILE) as f, TemporaryFile("w+") as t:
-                for line in f:
-                    ln = len(line.strip().split("|"))
-                    if ln < 3:
-                        line = "||" + line
-                    t.write(line)
-                t.seek(0)
-                trace_dataframe = pd.read_csv(t, sep='|', names=header, engine='python')
-                trace_dataframe.fillna('', inplace=True)
-            # Add config information
-            with open(CONFIG_FILE) as f:
-                config = json.load(f)
-            dataframe_config = pd.DataFrame.from_records([config])
-            config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center',index=False)
-            trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
-            css_style = """
-            div {
-            weight: 100%;
-            }
-            """
-            result = """
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <title>Audit & Traceability</title>
-                  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
-              </head>
-                <body>
-                  <p><a href='ui/#/default' target='_blank'>Click here to access Swagger UI</a></p>
-                  <h2 class="text-center my-4" style="color:#003050;">Audit & Traceability</h2>
-                  <div style="text-align:center;">{0}
-                  <br/>
-                  <br/>
-                  <br/>
-                  {1}
-                  </div>
-                </body></html>""".format(config_result, trace_result)
-            if (os.path.isdir(os.environ['MODELS_PATH'])):
-                directory_contents = os.listdir(os.environ['MODELS_PATH'])
-                if (len(directory_contents) > 0):
-                    result = "<p><a href='maas_analytics?key=" + quote(key) + "' target='_blank'>Click here for MaaS_ML data analytics</a></p>" + result
-            return result
-        else:
-            return log("[WARN] Trace file is empty", key)
-    else:
-        return log("[ERROR] Invalid key", key)
+# def trace_preview_api(key) -> str:
+#     if USER_KEY == key.encode():
+#         if exists(TRACE_FILE) and isfile(TRACE_FILE):
+#             header = ["Date Time", "Token", "Traceability information"]
+#             result = ""
+#             with open(TRACE_FILE) as f, TemporaryFile("w+") as t:
+#                 for line in f:
+#                     ln = len(line.strip().split("|"))
+#                     if ln < 3:
+#                         line = "||" + line
+#                     t.write(line)
+#                 t.seek(0)
+#                 trace_dataframe = pd.read_csv(t, sep='|', names=header, engine='python')
+#                 trace_dataframe.fillna('', inplace=True)
+#             # Add config information
+#             with open(CONFIG_FILE) as f:
+#                 config = json.load(f)
+#             dataframe_config = pd.DataFrame.from_records([config])
+#             config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center',index=False)
+#             trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
+#             css_style = """
+#             div {
+#             weight: 100%;
+#             }
+#             """
+#             result = """
+#             <!DOCTYPE html>
+#             <html>
+#               <head>
+#                 <meta charset="UTF-8">
+#                   <title>Audit & Traceability</title>
+#                   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+#               </head>
+#                 <body>
+#                   <p><a href='ui/#/default' target='_blank'>Click here to access Swagger UI</a></p>
+#                   <h2 class="text-center my-4" style="color:#003050;">Audit & Traceability</h2>
+#                   <div style="text-align:center;">{0}
+#                   <br/>
+#                   <br/>
+#                   <br/>
+#                   {1}
+#                   </div>
+#                 </body></html>""".format(config_result, trace_result)
+#             if (os.path.isdir(os.environ['MODELS_PATH'])):
+#                 directory_contents = os.listdir(os.environ['MODELS_PATH'])
+#                 if (len(directory_contents) > 0):
+#                     result = "<p><a href='maas_analytics?key=" + quote(key) + "' target='_blank'>Click here for MaaS_ML data analytics</a></p>" + result
+#             return result
+#         else:
+#             return log("[WARN] Trace file is empty", key)
+#     else:
+#         return log("[ERROR] Invalid key", key)
 
 
-def maas_analytics_api(key) -> str:
+def dashapp_api(key) -> str:
     if USER_KEY == key.encode():
+
+        if not exists(TRACE_FILE):
+            log("[WARN] Trace file is empty", key)
         return render_template(
             'index.jinja2',
             title='Plotly Dash Flask Tutorial',
