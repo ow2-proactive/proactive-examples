@@ -6,13 +6,7 @@ if (args.length < 3) {
     println "[Retrieve_variables_from_service_instance_id] ERROR: Number of arguments must be >= 3"
     System.exit(1)
 }
-
-try {
-    service_instance_id = args[0] as long
-} catch (java.lang.NumberFormatException e) {
-    println "[Retrieve_variables_from_service_instance_id] WARN: NumberFormatException: Invalid service_instance_id: " + args[0]
-    return
-}
+service_instance_id = args[0] as long
 
 // Retrieve variables
 def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
