@@ -43,10 +43,10 @@ if 'variables' in locals():
     if variables.get("CONDA_FILE_URL") is not None:
         CONDA_FILE_URL = variables.get("CONDA_FILE_URL")
 
-#Set the interactive authentification
+#Set the interactive authentication
 interactive_auth = InteractiveLoginAuthentication()
 
-#Set the interactive authentification
+#Set the interactive authentication
 ws = Workspace.get(name=AZURE_WORKSPACE_NAME, auth=interactive_auth, subscription_id=AZURE_SUBSCRIPTION_ID,resource_group=AZURE_RESOURCE_GROUP)
 service = Webservice(workspace=ws, name=SERVICE_NAME)
 

@@ -15,7 +15,7 @@ PASSWORD=credentials.get("TABLEAU_SERVER_PASSWORD")
 SERVER_ENDPOINT = variables.get("SERVER_ENDPOINT")
 SITE_ID = variables.get("SITE_ID")
 PROJECT_NAME = variables.get("PROJECT_NAME")
-OUTPUT_FILE_NAME = variables.get("OUTPUT_FILE_NAME")
+INPUT_FILE_NAME = variables.get("INPUT_FILE_NAME")
 
 tableau_auth = TSC.TableauAuth(USERNAME, PASSWORD, site_id=SITE_ID)
 #tableau_auth = TSC.TableauAuth('lolyne.pacheco@gmail.com', 'proactive123', site_id='carolinetableautest')
@@ -52,12 +52,11 @@ with server.auth.sign_in(tableau_auth):
     dataframe_json = bz2.decompress(dataframe_json).decode()
 
     dataframe = pd.read_json(dataframe_json, orient='split')
-    output_file = OUTPUT_FILE_NAME
-    pantab.frame_to_hyper(dataframe, output_file)
+    pantab.frame_to_hyper(dataframe, INPUT_FILE_NAME)
     
     # Create new datasource_item
     new_datasource = TSC.DatasourceItem(project_id)
-    new_datasource = server.datasources.publish(new_datasource, output_file, 'CreateNew')
+    new_datasource = server.datasources.publish(new_datasource, INPUT_FILE_NAME, 'CreateNew')
     print(new_datasource.__dict__)
 
 print("END " + __file__)
