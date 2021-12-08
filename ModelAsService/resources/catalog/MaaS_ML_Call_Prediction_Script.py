@@ -4,6 +4,7 @@ import requests
 import urllib.request
 import ssl
 import pandas as pd
+import numpy as np
 
 global variables
 
@@ -24,6 +25,7 @@ if PA_PYTHON_UTILS_URL.startswith('https'):
 else:
     content = urllib.request.urlopen(req).read()
 exec(content, globals())
+
 global get_input_variables, get_and_decompress_dataframe, preview_dataframe_in_task_result
 global raiser_ex
 
@@ -65,6 +67,9 @@ assert DRIFT_NOTIFICATION is not None
 
 API_PREDICT_ENDPOINT = API_ENDPOINT + API_PREDICT
 print("API_PREDICT_ENDPOINT: ", API_PREDICT_ENDPOINT)
+
+GET_PREDICTIONS_ENDPOINT = API_ENDPOINT + "/api/get_predictions"
+print("GET_PREDICTIONS_ENDPOINT: ", GET_PREDICTIONS_ENDPOINT)
 
 INPUT_DATA = variables.get("INPUT_DATA")
 DATA_DRIFT_DETECTOR = variables.get("DATA_DRIFT_DETECTOR")
@@ -123,10 +128,13 @@ print("predictions:\n", predictions)
 drifts = predict_and_drifts["drifts"]
 print("drifts:\n", drifts)
 
-df_dataframe = pd.read_json(dataframe_json, orient='records')
+PARAMS = {'api_token': SERVICE_TOKEN, 'model_name': MODEL_NAME, 'model_version': MODEL_VERSION}
+req_get_predictions = requests.get(GET_PREDICTIONS_ENDPOINT, params=PARAMS, verify=False)
+dataframe_json = req_get_predictions.text
+dataframe = pd.read_json(dataframe_json, orient='split')
 if dataframe_columns_name is not None:
-    df_dataframe.columns = list(dataframe_columns_name)
-dataframe = df_dataframe.assign(predictions=predictions)
+    dataframe_columns_name= np.append(dataframe_columns_name,["predictions"])
+    dataframe.columns = list(dataframe_columns_name)
 
 # -------------------------------------------------------------
 # Preview results

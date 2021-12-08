@@ -64,14 +64,14 @@ if (proxyfied.toLowerCase()=="true"){
         containerUrl = "http://"+containerUrl
     }
     containerUrl = URLDecoder.decode(containerUrl, "UTF-8");
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/api/trace_preview?key="+userKey
+    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/api/dashapp?key="+userKey
     endpoint.setProxyfied(true);
     endpoint.setProxyfiedUrl(proxyfiedURL)
 }else{
     endpoint.setProxyfied(false)
     ENDPOINT_PATH = "/api/ui"
     if (traceEnabled.toLowerCase()=="true"){
-        ENDPOINT_PATH = "/api/trace_preview?key="+userKey
+        ENDPOINT_PATH = "/api/dashapp?key="+userKey
     }
     if (httpsEnabled.toLowerCase()=="true"){
         containerUrl = "https://"+containerUrl+ENDPOINT_PATH

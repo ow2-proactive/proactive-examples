@@ -189,11 +189,11 @@ def get_token_user(token):
 
 
 def get_token_api(user) -> str:
-    user = connexion.request.form["user"]
     addr = connexion.request.remote_addr
     token = TOKENS.get(user)
     if not token:
-        return log('[ERROR] Invalid user: {u} ({a})'.format(u=user, a=addr))
+        log('[ERROR] Invalid user: {u} ({a})'.format(u=user, a=addr))
+        return "Invalid user"
     else:
         log('[INFO] {u} token is {t} ({a})'.format(u=user, t=token, a=addr))
         return token
