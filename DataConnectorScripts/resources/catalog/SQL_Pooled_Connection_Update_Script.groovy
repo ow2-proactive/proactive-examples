@@ -51,7 +51,6 @@ if (!database) {
 
 // This key is used for getting the password from 3rd party credentials.
 CREDENTIALS_KEY = RDBMS_NAME + "://" + username + "@" + host
-CREDENTIALS_KEY_MSG = RDBMS_NAME + "://<username>@<host>"
 password = credentials.get(CREDENTIALS_KEY).trim()
 
 //Construct the jdbc URL

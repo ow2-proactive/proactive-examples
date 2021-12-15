@@ -88,7 +88,7 @@ if 'variables' in locals():
     	MODEL_PATH = os.path.join(os.getcwd(),MODEL_PATH)
     	wget.download(MODEL_URL,MODEL_PATH)
 
-#Set the inetractive authentification
+#Set the inetractive authentication
 interactive_auth = InteractiveLoginAuthentication()
 
 #Get the chosen workspace
