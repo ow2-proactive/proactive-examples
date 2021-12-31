@@ -25,7 +25,7 @@ Set signalsSet =  variables.get("SIGNALS_SET")
 println("Checking whether one signal in the set "+ signalsSet +" is received")
 receivedSignals = signalapi.checkForSignals(signalsSet)
 
-// If a signal is received, remove ready signals and break the loop, else sleep 10 seconds then restart
+// If a signal is received, remove ready signals and break the loop
 if (receivedSignals != null && !receivedSignals.isEmpty()){
 
     // remove ready signals
