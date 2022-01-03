@@ -112,7 +112,7 @@ flask_port = get_open_port() # 8001
 bokeh_url = "http://"+external_ip+":"+str(bokeh_port)
 flask_url = "http://"+external_ip+":"+str(flask_port)
 
-schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "AutoFeat", bokeh_url, "/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png")
+schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "AutoFeat", flask_url, "/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png")
 
 # -------------------------------------------------------------
 # AutoFeat
