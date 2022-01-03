@@ -111,8 +111,8 @@ bokeh_port = get_open_port() # 5007
 flask_port = get_open_port() # 8001
 bokeh_url = "http://"+external_ip+":"+str(bokeh_port)
 flask_url = "http://"+external_ip+":"+str(flask_port)
-print("bokeh_url: ", bokeh_url)
-print("flask_url: ", flask_url)
+
+schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "AutoFeat", flask_url, "/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png")
 
 # -------------------------------------------------------------
 # AutoFeat
@@ -1105,7 +1105,6 @@ def bokeh_page(doc):
             encoded_data = encode_categorical_data(dataset, dataframe)
 
             def send_new_dataframe(event):
-                print("Save the selected encoded dataframe", encoded_data)
                 encoded_data.to_csv(file_path_new, sep=FILE_DELIMITER, index=False, header=True)
 
             def delete_encoded_dataframe(event):
