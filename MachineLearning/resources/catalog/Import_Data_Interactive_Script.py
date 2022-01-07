@@ -267,7 +267,7 @@ def bokeh_page(doc):
             if variable_options == '':
                 n=8
             else:
-                variable_options_dict = ast.literal_eval(str(variable_options))
+                variable_options_dict = ast.literal_eval(variable_options)
                 n = variable_options_dict[list(variable_options_dict.keys())[0]]
             encoder = ce.HashingEncoder(cols=variable, n_components=n)
             # Fit and transform data
@@ -293,7 +293,7 @@ def bokeh_page(doc):
             if variable_options == '':
                 n=2
             else:
-                variable_options_dict = ast.literal_eval(str(variable_options))
+                variable_options_dict = ast.literal_eval(variable_options)
             n = variable_options_dict[list(variable_options_dict.keys())[0]]
             encoder = ce.BaseNEncoder(cols=variable, return_df=True, base=n)
             # Fit and transform data
@@ -303,7 +303,7 @@ def bokeh_page(doc):
             column_names = list(data_encoded)
             # Create object for target encoder
             variable_options = list(categorical_dataset["Options"][categorical_dataset.Name == variable])[0]
-            variable_options_dict = ast.literal_eval(str(variable_options))
+            variable_options_dict = ast.literal_eval(variable_options)
             target_column = variable_options_dict[list(variable_options_dict.keys())[0]]
             encoder = ce.TargetEncoder(cols=variable)
             # Fit and transform data
@@ -1195,7 +1195,7 @@ def bokeh_page(doc):
     for categorical_column in categorical_dataset['Name']:
         error_message.text += ' <div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                                 '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
-                                '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please'\
+                                '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please '\
                                  'specify the category type of the feature <strong>' + categorical_column + '</strong>.</span></div>'
 
     error_message.visible = True
