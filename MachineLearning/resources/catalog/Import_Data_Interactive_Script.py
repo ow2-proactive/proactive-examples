@@ -264,8 +264,11 @@ def bokeh_page(doc):
         for variable in hash_enc:
             # Create object for hash encoder
             variable_options = list(categorical_dataset["Options"][categorical_dataset.Name == variable])[0]
-            variable_options_dict = ast.literal_eval(str(variable_options))
-            n = variable_options_dict[list(variable_options_dict.keys())[0]]
+            if variable_options == '':
+                n=8
+            else:
+                variable_options_dict = ast.literal_eval(variable_options)
+                n = variable_options_dict[list(variable_options_dict.keys())[0]]
             encoder = ce.HashingEncoder(cols=variable, n_components=n)
             # Fit and transform data
             data_encoded = encoder.fit_transform(data_encoded)
@@ -287,7 +290,10 @@ def bokeh_page(doc):
         for variable in base_n_enc:
             # Create object for base_n encoder
             variable_options = list(categorical_dataset["Options"][categorical_dataset.Name == variable])[0]
-            variable_options_dict = ast.literal_eval(str(variable_options))
+            if variable_options == '':
+                n=2
+            else:
+                variable_options_dict = ast.literal_eval(variable_options)
             n = variable_options_dict[list(variable_options_dict.keys())[0]]
             encoder = ce.BaseNEncoder(cols=variable, return_df=True, base=n)
             # Fit and transform data
@@ -297,7 +303,7 @@ def bokeh_page(doc):
             column_names = list(data_encoded)
             # Create object for target encoder
             variable_options = list(categorical_dataset["Options"][categorical_dataset.Name == variable])[0]
-            variable_options_dict = ast.literal_eval(str(variable_options))
+            variable_options_dict = ast.literal_eval(variable_options)
             target_column = variable_options_dict[list(variable_options_dict.keys())[0]]
             encoder = ce.TargetEncoder(cols=variable)
             # Fit and transform data
@@ -827,29 +833,26 @@ def bokeh_page(doc):
                 f.close()
                 if cat_type is None:
                     text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                           '1.25rem;margin-bottom:1rem;border:1px solid ' \
-                           'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border-color' \
-                           ':#f5c6cb;"><strong>Error!</strong> The category type of ' + \
-                           data["Name"][int(text_row.value)] + ' is missing.</span></div>'
+                           '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                            '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The category type of ' + \
+                            data["Name"][int(text_row.value)] + ' is missing.</span></div>'
                     error_message.text += text
                     error_message.visible = True
                     button.disabled = True
 
                     if target.value == '' and coding == 'Target':
                         text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                               '1.25rem;margin-bottom:1rem;border:1px solid ' \
-                               'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border-color' \
-                               ':#f5c6cb;"><strong>Error!</strong> The Target column for encoding ' + \
+                                '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                                '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The Target column for encoding ' + \
                                data["Name"][int(text_row.value)] + ' is missing.</span></div>'
                         error_message.text += text
                         error_message.visible = True
                         button.disabled = True
 
                 elif target.value == '' and coding == 'Target':
-                    text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                           '1.25rem;margin-bottom:1rem;border:1px solid ' \
-                           'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border-color' \
-                           ':#f5c6cb;"><strong>Error!</strong> The Target column for encoding ' + \
+                    text =  '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
+                            '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                            '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The Target column for encoding ' + \
                            data["Name"][int(text_row.value)] + ' is missing.</span></div>'
                     error_message.text += text
                     error_message.visible = True
@@ -1094,13 +1097,12 @@ def bokeh_page(doc):
 
         with open('label_column.txt') as f:
             LABEL_COLUMN = f.read()
-        if LABEL_COLUMN == '':
+        if LABEL_COLUMN == '' or LABEL_COLUMN not in list(data['Name']):
             error_message.text += '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                                       '1.25rem;margin-bottom:1rem;border:1px solid ' \
                                       'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border' \
                                       '-color:#f5c6cb;"><strong>Error!</strong> Please select the label column' \
                                     	'</span></div> '
-
         if error_message.text == '':
             encoded_data = encode_categorical_data(dataset, dataframe)
 
@@ -1191,7 +1193,10 @@ def bokeh_page(doc):
     data = pd.DataFrame.from_dict(dataframe)
     categorical_dataset = data[(data.Type == "categorical") & (data.Category == 'NA')]
     for categorical_column in categorical_dataset['Name']:
-        error_message.text += ' <div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem 1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border-color:#f5c6cb;"><strong>Error!</strong> Please specify the category type of the feature <strong>' + categorical_column + '</strong>.</span></div>'
+        error_message.text += ' <div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
+                                '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                                '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please '\
+                                 'specify the category type of the feature <strong>' + categorical_column + '</strong>.</span></div>'
 
     error_message.visible = True
     button.on_click(display_encoded_dataframe)
@@ -1371,7 +1376,6 @@ resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.feature_names", feature_names)
-resultMap.put("URL", flask_url)
 
 # -------------------------------------------------------------
 # Preview results
