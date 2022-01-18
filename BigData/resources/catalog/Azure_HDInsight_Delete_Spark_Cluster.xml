@@ -1,0 +1,1101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Azure_HDInsight_Delete_Spark_Cluster" projectName="08. Azure HDInsight Spark Workflows" priority="normal" onTaskError="cancelJob"  maxNumberOfExecution="1"  >
+  <variables>
+    <variable name="SUBSCRIPTION_ID" value="change-it-and-put-your-azure-subscription-id" model="PA:NOT_EMPTY_STRING" description="The subscription id of your Microsoft Azure account." group="Subscription Parameters" advanced="false" hidden="false"/>
+    <variable name="TENANT_ID" value="change-it-and-put-your-azure-tenant-id" model="PA:NOT_EMPTY_STRING" description="The tenant id of your Microsoft Azure account." group="Subscription Parameters" advanced="true" hidden="false"/>
+    <variable name="APP_ID" value="change-it-and-put-your-azure-client-application-id" model="PA:NOT_EMPTY_STRING" description="ID of a HDInsights client application." group="Subscription Parameters" advanced="true" hidden="false"/>
+    <variable name="PASSWORD" value="ENC(L/ks1WBUEKZZ2K0wm+3i1A==)" model="PA:HIDDEN" description="Secret key needed to access a HDInsights client application." group="Subscription Parameters" advanced="true" hidden="false"/>
+    <variable name="AUTHENTICATION_ENDPOINT" value="https://login.microsoftonline.com" model="PA:URL" description="Hidden variable that contains the authentication endpoint of Azure REST API."  advanced="false" hidden="true"/>
+    <variable name="MANAGEMENT_ENDPOINT" value="https://management.azure.com" model="PA:URL" description="Hidden variable that contains the REST endpoint for managing Azure HDInsight clusters."  advanced="false" hidden="true"/>
+    <variable name="RESOURCE_GROUP_NAME" value="RG-of-${CLUSTER_NAME}" model="PA:NOT_EMPTY_STRING" description="Hidden variable that contains the name of the Resource Group where the Spark cluster is deployed. If the value of this variable is changed, it must be also changed in the workflows &#39;Azure_HDInsight_Create_Spark_Cluster&#39; and &#39;Azure_HDInsight_Scale_Spark_Cluster&#39;." group="Deployment Parameters" advanced="true" hidden="true"/>
+    <variable name="DEPLOYMENT_NAME" value="Deployment-of-${CLUSTER_NAME}" model="PA:NOT_EMPTY_STRING" description="Hidden variable that contains the name of the Deployment of the Spark cluster. If the value of this variable is changed, it must be also changed in the workflow &#39;Azure_HDInsight_Create_Spark_Cluster&#39;." group="Deployment Parameters" advanced="true" hidden="true"/>
+    <variable name="CLUSTER_NAME" value="activeeon-spark-cluster-${PA_JOB_ID}" model="PA:NOT_EMPTY_STRING" description="Name of the Spark cluster to be deleted." group="Spark Cluster Parameters" advanced="false" hidden="false"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that uses Azure REST API to delete a HDInsight Spark Cluster. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="big-data"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+    <info name="Documentation" value="user/ProActiveUserGuide.html#_branch"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="hdinsight_delete_spark_cluster" maxNumberOfExecution="2" fork="true">
+      <description>
+        <![CDATA[ A task performing a DELETE request to Azure HDInsight REST API in order to undeploy the Spark cluster, which name is given as input.
+This task requires the Azure authentication token provided the task "azure_authenticate_new". ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}" inherited="false" model="PA:URL"   advanced="false" hidden="false"/>
+        <variable name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.HDInsight/clusters/${CLUSTER_NAME}?api-version=2018-06-01-preview" inherited="false"    advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="CONTENT_TYPE" value="application/json;charset = UTF-8" inherited="false"     />
+        <variable name="REQUEST_BODY" value="{}" inherited="false" model="PA:JSON"    />
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="RESPONSE_PATH" value="" inherited="false"     />
+        <variable name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}" inherited="false"     />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("AZURE_PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("AZURE_PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.delete(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"></controlFlow>
+      <metadata>
+        <positionTop>
+            435.0425796508789
+        </positionTop>
+        <positionLeft>
+            432.897705078125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="azure_authenticate" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A task performing a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${AUTHENTICATION_ENDPOINT}" inherited="false" model="PA:URL"   advanced="false" hidden="false"/>
+        <variable name="PATH" value="/${TENANT_ID}/oauth2/token" inherited="false"     />
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="CONTENT_TYPE" value="application/x-www-form-urlencoded" inherited="false"     />
+        <variable name="REQUEST_BODY" value="&amp;grant_type=client_credentials&amp;client_id=${APP_ID}&amp;client_secret=%PASSWORD%&amp;resource=https%3A%2F%2Fmanagement.azure.com%2F" inherited="false"     />
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="RESPONSE_FORMAT" value="json" inherited="false" model="PA:LIST(string,json,xml,html,contentView)"    />
+        <variable name="RESPONSE_PATH" value="access_token" inherited="false"     />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY").replace("%PASSWORD%",variables.get("PASSWORD")))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+
+variables.put("ACCESS_TOKEN",result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            179.0198745727539
+        </positionTop>
+        <positionLeft>
+            607.4147338867188
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="hdinsight_delete_spark_deployment" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A task performing a DELETE request to Azure HDInsight REST API in order to remove the deployment, which name is given as input.
+This task requires the Azure authentication token provided the task "azure_authenticate_new". ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}" inherited="false" model="PA:URL"    />
+        <variable name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Resources/deployments/${DEPLOYMENT_NAME}?api-version=2020-10-01" inherited="false"     />
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="CONTENT_TYPE" value="application/json;charset = UTF-8" inherited="false"     />
+        <variable name="REQUEST_BODY" value="{}" inherited="false" model="PA:JSON"    />
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="RESPONSE_PATH" value="" inherited="false"     />
+        <variable name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}" inherited="false"     />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="hdinsight_delete_spark_cluster"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("AZURE_PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("AZURE_PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.delete(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            563.0539321899414
+        </positionTop>
+        <positionLeft>
+            432.897705078125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="hdinsight_delete_spark_resource_group" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A task performing a DELETE request to Azure HDInsight REST API in order to remove the resource group, which name is given as input.
+This task requires the Azure authentication token provided the task "azure_authenticate_new". ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}" inherited="false" model="PA:URL"    />
+        <variable name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}?api-version=2020-10-01" inherited="false"     />
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="CONTENT_TYPE" value="application/json;charset = UTF-8" inherited="false"     />
+        <variable name="REQUEST_BODY" value="{}" inherited="false" model="PA:JSON"    />
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="RESPONSE_PATH" value="" inherited="false"     />
+        <variable name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}" inherited="false"     />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="hdinsight_delete_spark_deployment"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("AZURE_PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("AZURE_PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.delete(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"></controlFlow>
+      <metadata>
+        <positionTop>
+            689.0624771118164
+        </positionTop>
+        <positionLeft>
+            432.897705078125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="hdinsight_get_spark_cluster_info" maxNumberOfExecution="1"
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A task that performs iteratively a GET request to Azure HDInsight REST API, in order to get information about the cluster deployment status. If the deployment status is "Succeeded". The cluster Web UI, SSH host and SSH port are extracted and provided as job results, then the loop stops. 
+This task requires the Azure authentication token provided the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}" inherited="false" model="PA:URL"    />
+        <variable name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.HDInsight/clusters/${CLUSTER_NAME}?api-version=2018-06-01-preview" inherited="false"     />
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="RESPONSE_FORMAT" value="json" inherited="false" model="PA:LIST(string,json,xml,html,contentView)"    />
+        <variable name="RESPONSE_PATH" value="." inherited="false"     />
+        <variable name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}" inherited="false"     />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="azure_authenticate"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <if target="hdinsight_delete_spark_cluster"
+        else="Else"
+        continuation="Continuation">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def clusterState = variables.get("CLUSTER_STATE")
+println clusterState
+
+if ((clusterState!="Deleting") && (clusterState!="DeletePending")) {
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+  
+def clusterState = variables.get("CLUSTER_STATE")
+
+slurper = new JsonSlurper()
+
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+clusterState=jsonData.properties.clusterState
+
+variables.put("CLUSTER_STATE",clusterState)
+
+println variables.get("CLUSTER_STATE")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            307.0312271118164
+        </positionTop>
+        <positionLeft>
+            607.4147338867188
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Else" 
+    
+    
+    
+    
+    fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def clusterState = variables.get("CLUSTER_STATE")
+
+println("Spark cluster '"+variables.get("CLUSTER_NAME")+ "' is being deleted. No deletion requests will be sent.")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            432.0312271118164
+        </positionTop>
+        <positionLeft>
+            667.4147338867188
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Continuation" 
+    
+    
+    
+    
+    fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Waiting for the Spark cluster and its underlying Resource Group to be deleted ...")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            431.03690338134766
+        </positionTop>
+        <positionLeft>
+            840.4260864257812
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="check_delete_operation" maxNumberOfExecution="1"
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A task that performs iteratively a GET request to Azure HDInsight REST API, in order to get information about the cluster deployment status. If the deployment status is "Succeeded". The cluster Web UI, SSH host and SSH port are extracted and provided as job results, then the loop stops. 
+This task requires the Azure authentication token provided the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}" inherited="false" model="PA:URL"    />
+        <variable name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}?api-version=2020-10-01" inherited="false"    advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"    />
+        <variable name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}" inherited="false"     />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/spark.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Continuation"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.head(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+if (response.statusCode==HttpStatus.SC_NOT_FOUND) {
+    variables.put("CLUSTER_STATE","NOT_FOUND")
+} else {
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_NO_CONTENT)
+  .extract();
+}
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+    
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+    
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="check_delete_operation">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+loop=variables.get("LOOP")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+  
+loop = "* * * * *"
+
+if (variables.get("CLUSTER_STATE")=="NOT_FOUND"){
+	loop = "false"    
+}
+
+variables.put("LOOP", loop)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            562.2300796508789
+        </positionTop>
+        <positionLeft>
+            819.7584838867188
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2485px;
+            height:2814px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-174.0198745727539px;left:-427.897705078125px"><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_547" style="top: 435.056px; left: 432.912px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a DELETE request to Azure HDInsight REST API in order to undeploy the Spark cluster, which name is given as input.
+This task requires the Azure authentication token provided the task &quot;azure_authenticate_new&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">hdinsight_delete_spark_cluster</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_550" style="top: 179.034px; left: 607.429px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png" width="20px">&nbsp;<span class="name">azure_authenticate</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_553" style="top: 563.068px; left: 432.912px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a DELETE request to Azure HDInsight REST API in order to remove the deployment, which name is given as input.
+This task requires the Azure authentication token provided the task &quot;azure_authenticate_new&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">hdinsight_delete_spark_deployment</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_556" style="top: 689.076px; left: 432.912px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a DELETE request to Azure HDInsight REST API in order to remove the resource group, which name is given as input.
+This task requires the Azure authentication token provided the task &quot;azure_authenticate_new&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">hdinsight_delete_spark_resource_group</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_559" style="top: 307.045px; left: 607.429px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs iteratively a GET request to Azure HDInsight REST API, in order to get information about the cluster deployment status. If the deployment status is &quot;Succeeded&quot;. The cluster Web UI, SSH host and SSH port are extracted and provided as job results, then the loop stops. 
+This task requires the Azure authentication token provided the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">hdinsight_get_spark_cluster_info</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_562" style="top: 432.045px; left: 667.429px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_565" style="top: 431.051px; left: 840.44px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_568" style="top: 562.244px; left: 819.772px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs iteratively a GET request to Azure HDInsight REST API, in order to get information about the cluster deployment status. If the deployment status is &quot;Succeeded&quot;. The cluster Web UI, SSH host and SSH port are extracted and provided as job results, then the loop stops. 
+This task requires the Azure authentication token provided the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/spark.png" width="20px">&nbsp;<span class="name">check_delete_operation</span></a></div><svg style="position:absolute;left:509px;top:474.5px" width="32" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 11 88 C 21 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M12.893024,66.303232 L16.31083689897854,45.39106915184926 L10.460052179499373,52.5162581434697 L2.523863042448242,47.824040972349884 L12.893024,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M12.893024,66.303232 L16.31083689897854,45.39106915184926 L10.460052179499373,52.5162581434697 L2.523863042448242,47.824040972349884 L12.893024,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:520px;top:602.5px" width="30.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9.5 86 C 19.5 36 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.544328125,64.94400000000002 L15.38276948225169,44.104941289325495 L9.389619497793696,51.11080692205006 L1.54957640430173,46.2596499165318 L11.544328125,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.544328125,64.94400000000002 L15.38276948225169,44.104941289325495 L9.389619497793696,51.11080692205006 L1.54957640430173,46.2596499165318 L11.544328125,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:656.5px;top:218.5px" width="51.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 30.5 88 C 40.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.604289125,65.8307285 L28.92065780914319,44.70810116360394 L24.944079219862537,53.025962831320875 L16.11589214046406,50.368311068741406 L30.604289125,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.604289125,65.8307285 L28.92065780914319,44.70810116360394 L24.944079219862537,53.025962831320875 L16.11589214046406,50.368311068741406 L30.604289125,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:422.5px;top:346.5px" width="195" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 184 50 174 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.380099,59.788559500000005 L46.569714461918245,59.774538942402465 L38.59105293027294,55.1549112340862 L41.93606619600444,46.56358501212953 L25.380099,59.788559500000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.380099,59.788559500000005 L46.569714461918245,59.774538942402465 L38.59105293027294,55.1549112340862 L41.93606619600444,46.56358501212953 L25.380099,59.788559500000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_585" style="position: absolute; transform: translate(-50%, -50%); left: 519.5px; top: 390.5px;">if</div><svg style="position:absolute;left:596.5px;top:346.5px" width="81" height="86" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 60 85 C 70 35 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M56.64000000000001,61.760000000000005 L48.28101869470992,42.28880508192139 L47.17743459364604,51.442061449568854 L37.96308014427877,51.75137048827535 L56.64000000000001,61.760000000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M56.64000000000001,61.760000000000005 L48.28101869470992,42.28880508192139 L47.17743459364604,51.442061449568854 L37.96308014427877,51.75137048827535 L56.64000000000001,61.760000000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_589" style="position: absolute; transform: translate(-50%, -50%); left: 636.5px; top: 389px;">else</div><svg style="position:absolute;left:596.5px;top:346.5px" width="254" height="85" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 233 84 C 243 34 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M195.33113774999998,55.6980795 L177.5263012232885,44.20948531894018 L181.7203661303495,52.4198336401358 L174.24805536342433,57.820256938590674 L195.33113774999998,55.6980795" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M195.33113774999998,55.6980795 L177.5263012232885,44.20948531894018 L181.7203661303495,52.4198336401358 L174.24805536342433,57.820256938590674 L195.33113774999998,55.6980795" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_593" style="position: absolute; transform: translate(-50%, -50%); left: 723px; top: 388.5px;">continuation</div><svg style="position:absolute;left:879.5px;top:470.5px" width="21.5" height="92" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0.5 91 C 10.5 41 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.291152,69.046624 L9.55088453229162,48.80271754338521 L2.776279564127849,55.0560948329249 L-4.439644634783479,49.317589979257356 L3.291152,69.046624" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.291152,69.046624 L9.55088453229162,48.80271754338521 L2.776279564127849,55.0560948329249 L-4.439644634783479,49.317589979257356 L3.291152,69.046624" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:941.0266769263776px;top:511.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_602" style="position: absolute; transform: translate(-50%, -50%); left: 953px; top: 581.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 509.5px; top: 465px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 423px; top: 425px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 657px; top: 209px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 520.5px; top: 593px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 520.5px; top: 553px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 530px; top: 719px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 530px; top: 679px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 687.5px; top: 337px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 687.5px; top: 297px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 597px; top: 337px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 707px; top: 462px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 657px; top: 422px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 880px; top: 461px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 830px; top: 421px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 880.5px; top: 592px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 880.5px; top: 552px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 951px; top: 552px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 951px; top: 592px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
