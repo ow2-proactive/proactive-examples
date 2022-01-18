@@ -3,13 +3,18 @@
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="SSH_Remote_Script_Execution" projectName="2. Advanced Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
-    <variable name="SSH_HOST" value="example.host.com" model="PA:NOT_EMPTY_STRING" description="host name or ip address of the remote ssh session"   />
-    <variable name="SSH_PORT" value="22" model="PA:INTEGER" description="ssh port to use"  advanced="true" />
-    <variable name="SSH_USR" value="fake-usr" model="PA:NOT_EMPTY_STRING" description="ssh username"   />
-    <variable name="SSH_PWD" value="" model="PA:HIDDEN" description="ssh password"   />
+    <variable name="SSH_HOST" value="remote_host" model="PA:NOT_EMPTY_STRING" description="Hostname or IP address of the remote host machine" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_PORT" value="22" model="PA:INTEGER" description="The listening port of the SSH server. Default value is 22" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_USER" value="my_user" model="PA:NOT_EMPTY_STRING" description="SSH server user name" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_PASSWORD" value="my_pwd" model="PA:HIDDEN" description="SSH server password" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_PRIVATE_KEY" value="${SSH_USER}@${SSH_HOST}" model="PA:CREDENTIAL" description="SSH private key" group="SSH Connection" advanced="false" hidden="true"/>
+    <variable name="CREDENTIAL_TYPE" value="SSH_PASSWORD" model="PA:LIST(SSH_PASSWORD,SSH_PRIVATE_KEY)" description="Authentication type (password or private key)" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_CREDENTIAL_HANDLER" value="" model="PA:SPEL(variables[&#39;CREDENTIAL_TYPE&#39;] == &#39;SSH_PASSWORD&#39; ? showVar(&#39;SSH_PASSWORD&#39;) &amp;&amp; hideVar(&#39;SSH_PRIVATE_KEY&#39;) : showVar(&#39;SSH_PRIVATE_KEY&#39;) &amp;&amp; hideVar(&#39;SSH_PASSWORD&#39;))" description="SSH credential handler that shows and displays dynamically variables depending on the authentication type" group="SSH Connection" advanced="false" hidden="true"/>
+    <variable name="SSH_COMMAND" value="my_command" model="" description="The command to be executed on the remote machine" group="" advanced="false" hidden="false"/>
   </variables>
   <description>
-    <![CDATA[ A workflow example that executes a script in a remote machine using SSH (via the sshpass utility) ]]>
+    <![CDATA[ A workflow example that executes a script on a remote machine using SSH protocol. The script is provided as the task pre-script and stored in a file where the name is given by the PRE_SCRIPT_AS_FILE Generic Information. Besides, the user can provide another SSH command via the SSH_COMMAND variable.
+This command will be appended at the end of the script.]]>
   </description>
   <genericInformation>
     <info name="bucketName" value="basic-examples"/>
@@ -22,8 +27,7 @@
 
 
 
-          fork="true"
-    >
+          fork="true">
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
         <info name="PRE_SCRIPT_AS_FILE" value="scripts/script.sh"/>
@@ -35,60 +39,98 @@
 echo "Script: $0"
 echo "Running on $(hostname)"
 echo "Date on the current system: `date`"
-echo "Exited"
-exit 0
 ]]>
           </code>
         </script>
       </pre>
       <scriptExecutable>
         <script>
-          <code language="bash">
+          <code language="groovy">
             <![CDATA[
-# Get the SSH user and password to log into the remote machine
-sshUser=$variables_SSH_USR
-sshPassword=$variables_SSH_PWD
-sshHost=$variables_SSH_HOST
-sshPort=$variables_SSH_PORT
+/**
+ * This program will demonstrate remote script execution.
+ * You will be asked username, hostname, passwd or SSH private key and script.
+ * If everything works fine, given script will be executed
+ * on the remote side and outputs will be printed out.
+ *
+ */
+import com.jcraft.jsch.*
+import java.io.*
+import org.apache.commons.io.FilenameUtils
 
-# Prepare the script to execute in the remote machine
-chmod a+x scripts/script.sh
+//Get the SSH connection info to log into the remote machine
+sshUser = variables.get("SSH_USER")
+sshHost = variables.get("SSH_HOST")
+sshPort = variables.get("SSH_PORT") as int
+sshCredential = variables.get("CREDENTIAL_TYPE")
+//Get the local script to be copied then executed on the remote machine
+sshCommand = variables.get("SSH_COMMAND")
+sshLocalFile = genericInformation.get("PRE_SCRIPT_AS_FILE")
+sshRemoteFile = FilenameUtils.getName(sshLocalFile)
 
-# Printing the script
-echo "============== The script to be executed =========================="
-cat scripts/script.sh
-echo "============================================================"
-echo "Executing the script remotely in the machine "$sshHost
-
-if ! command -v sshpass &> /dev/null
-then
-    echo "sshpass could not be found, using a sshpass docker container"
-
-    # copy the script to the remote machine
-    docker run --rm -i -v $(pwd)/scripts:/scripts ictu/sshpass -p $sshPassword scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -P $sshPort /scripts/script.sh $sshUser@$sshHost:/tmp/script.sh
-
-    # execute the script in the remote machine
-    docker run --rm -i -v $(pwd)/scripts:/scripts ictu/sshpass -p $sshPassword ssh  -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $sshUser@$sshHost -p $sshPort  "/tmp/script.sh"
-
-else
-    echo "sshpass found"
-
-    # copy the script to the remote machine
-    sshpass -p $sshPassword scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -P $sshPort scripts/script.sh $sshUser@$sshHost:/tmp/script.sh
-
-    # execute the script in the remote machine
-    sshpass -p $sshPassword ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $sshUser@$sshHost -p $sshPort "/tmp/script.sh"
-fi
+try{
+    JSch jsch=new JSch()
+    Session session=jsch.getSession(sshUser, sshHost, sshPort)
+    // authenticate using private key
+    if(sshCredential.equals("SSH_PRIVATE_KEY")){
+        sshPrivateKey = credentials.get(variables.get("SSH_PRIVATE_KEY"))
+        new File("key.pem") << sshPrivateKey
+        jsch.addIdentity("key.pem")
+    }
+    // authenticate using password
+    if(sshCredential.equals("SSH_PASSWORD")){
+        session.setPassword(variables.get("SSH_PASSWORD"))
+    }
+    session.setConfig("StrictHostKeyChecking", "no")
+    session.connect()
+    println ("The authentication to the remote machine " + sshHost + " succeeded")
+    Channel sftp = session.openChannel("sftp")
+    sftp.connect()
+    ChannelSftp channelSftp = (ChannelSftp) sftp;
+    // transfer the script from local to remote server
+    File _sshLocalFile = new File(sshLocalFile)
+    if(!sshCommand.isEmpty()){
+        _sshLocalFile.append("\n" + sshCommand)
+    }
+    channelSftp.put(sshLocalFile, sshRemoteFile);
+    channelSftp.disconnect()
+    // Execute the script on the remote machine
+    channel = session.openChannel("exec")
+    ((ChannelExec)channel).setCommand("chmod +x " + sshRemoteFile + " && ./" + sshRemoteFile)
+    channel.setInputStream(null)
+    ((ChannelExec)channel).setErrStream(System.err)
+    inputStream = channel.getInputStream()
+    channel.connect()
+    byte[] tmp = new byte[1024]
+    while(true){
+         while(inputStream.available() > 0){
+             int i=inputStream.read(tmp, 0, 1024)
+             if(i<0)break;
+             print(new String(tmp, 0, i))
+         }
+         if(channel.isClosed()){
+             if(inputStream.available() > 0) continue
+            println("exit-status: " + channel.getExitStatus())
+             break;
+         }
+         try{Thread.sleep(1000);}catch(Exception ee){}
+    }
+    channel.disconnect()
+    session.disconnect()
+}
+catch(Exception e){
+      throw new RuntimeException(e)
+}
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <metadata>
         <positionTop>
-          448.78125
+          150.6875
         </positionTop>
         <positionLeft>
-          583.5
+          336.171875
         </positionLeft>
       </metadata>
     </task>
@@ -102,13 +144,13 @@ fi
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2832px;
-            height:3312px;
+            width:2146px;
+            height:2788px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-443.78125px;left:-578.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_554" style="top: 448.797px; left: 583.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">remote_script_execution_with_ssh</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 668px; top: 479px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-145.6875px;left:-331.171875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_52" style="top: 150.688px; left: 336.172px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title=""><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">remote_script_execution_with_ssh</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 420px; top: 181px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
