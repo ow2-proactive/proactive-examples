@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """Proactive Import Data for Machine Learning
 
@@ -97,13 +96,13 @@ file_path_new = os.path.join('.', ID + '.new.csv')
 # Configure network settings
 #
 def get_open_port():
-	import socket
-	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-	s.bind(("",0))
-	s.listen(1)
-	port = s.getsockname()[1]
-	s.close()
-	return port
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("",0))
+    s.listen(1)
+    port = s.getsockname()[1]
+    s.close()
+    return port
 hostname = socket.gethostname()
 # local_ip = socket.gethostbyname(hostname)
 external_ip = urllib.request.urlopen('https://api.ipify.org').read().decode('utf8')
@@ -518,6 +517,7 @@ def bokeh_page(doc):
             text_type.disabled = True
             category_type.visible = False
             div_category.visible = False
+            label_column.visible = False
             coding_method.visible = False
             tooltip.text = ''
             tooltip.visible = False
@@ -532,7 +532,7 @@ def bokeh_page(doc):
             text_type.value = 'numerical'
             category_type.visible = False
             div_category.visible = False
-            label_column.active = None
+            label_column.visible = False
             coding_method.visible = False
             target.visible = False
             base.visible = False
@@ -563,7 +563,7 @@ def bokeh_page(doc):
                     LABEL_COLUMN = f.read()
                 f.close()
                 if LABEL_COLUMN == selected_column:
-                	label_column.active = 0
+                    label_column.active = 0
                 else:
                     label_column.active = None
                 coding_method.visible = True
@@ -834,16 +834,16 @@ def bokeh_page(doc):
                 if cat_type is None:
                     text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                            '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
-                            '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The category type of ' + \
-                            data["Name"][int(text_row.value)] + ' is missing.</span></div>'
+                           '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The category type of ' + \
+                           data["Name"][int(text_row.value)] + ' is missing.</span></div>'
                     error_message.text += text
                     error_message.visible = True
                     button.disabled = True
 
                     if target.value == '' and coding == 'Target':
                         text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                                '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
-                                '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The Target column for encoding ' + \
+                               '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                               '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The Target column for encoding ' + \
                                data["Name"][int(text_row.value)] + ' is missing.</span></div>'
                         error_message.text += text
                         error_message.visible = True
@@ -853,7 +853,7 @@ def bokeh_page(doc):
                     text =  '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                             '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
                             '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The Target column for encoding ' + \
-                           data["Name"][int(text_row.value)] + ' is missing.</span></div>'
+                            data["Name"][int(text_row.value)] + ' is missing.</span></div>'
                     error_message.text += text
                     error_message.visible = True
                     button.disabled = True
@@ -1016,11 +1016,14 @@ def bokeh_page(doc):
             edit_btn.visible = False
             delete_btn.visible = False
             restore_btn.visible = False
+            label_column.visible = True
             column_name.value = 'Select a column'
             error_message.text = ''
         except OSError:
             error_message.text = file_reading_exception
 
+    def send_old_dataframe(attr, old, new):
+        original_dataframe.to_csv(file_path_new, sep=FILE_DELIMITER, index=False, header=True)
     text_row.on_change('value', select_row)
     text_type.on_change('value', update_layout)
     column_name.on_change('value', select_row)
@@ -1040,7 +1043,16 @@ def bokeh_page(doc):
     delete_btn = Button(label="Delete Column", button_type="danger", width=97, visible=False)
     delete_btn.on_click(delete_column)
 
+    quit_btn = Button(label="Cancel", button_type="danger", width=45, visible=True)
+    quit = TextInput(value="", title="", width=0, disabled=True, visible=False)
+    source_code = """ if (confirm("Do you really want to leave? The changes you made will not be saved.") == true) {
+                      quit.value = "OK abandon!";}"""
+    quit_btn.js_on_click(CustomJS(args=dict(quit=quit), code=source_code))
+    quit.on_change('value', send_old_dataframe)
+    quit.js_on_change('value',CustomJS(args=dict(urls=['/shutdown']), code="urls.forEach(url => window.open(url))"))
+
     tab_id = NumericInput(value=0, title="", disabled=True, visible=False)
+
 
     def display_encoded_dataframe(event):
         # Check whether there is a missing attribute in the dataframe, category type ...
@@ -1099,10 +1111,10 @@ def bokeh_page(doc):
             LABEL_COLUMN = f.read()
         if LABEL_COLUMN == '' or LABEL_COLUMN not in list(data['Name']):
             error_message.text += '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                                      '1.25rem;margin-bottom:1rem;border:1px solid ' \
-                                      'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border' \
-                                      '-color:#f5c6cb;"><strong>Error!</strong> Please select the label column' \
-                                    	'</span></div> '
+                                  '1.25rem;margin-bottom:1rem;border:1px solid ' \
+                                  'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border' \
+                                  '-color:#f5c6cb;"><strong>Error!</strong> Please select the label column' \
+                                  '</span></div> '
         if error_message.text == '':
             encoded_data = encode_categorical_data(dataset, dataframe)
 
@@ -1167,8 +1179,7 @@ def bokeh_page(doc):
                                            width_policy='max', height_policy='max')
             confirm_btn = Button(label="Proceed", button_type="success", width=90)
             confirm_btn.on_click(send_new_dataframe)
-            confirm_btn.js_on_click(
-                CustomJS(args=dict(urls=['/shutdown']), code="urls.forEach(url => window.open(url))"))
+            confirm_btn.js_on_click(CustomJS(args=dict(urls=['/shutdown']), code="urls.forEach(url => window.open(url))"))
             cancel_btn = Button(label="Cancel", button_type="danger", width=90)
             cancel_btn.on_click(delete_encoded_dataframe)
             export_btn = Button(label="Download CSV", button_type="primary", width=90)
@@ -1186,7 +1197,7 @@ def bokeh_page(doc):
             tab_id.value = encoded_tab_id
             tab_index = structure.tabs.index(tab4)
 
-    button = Button(label="Preview Encoded Data", button_type="primary", width=100)
+    button = Button(label="Preview Encoded Data", button_type="primary", width=140)
     button.disabled = True
 
     error_message.text = ''
@@ -1194,9 +1205,9 @@ def bokeh_page(doc):
     categorical_dataset = data[(data.Type == "categorical") & (data.Category == 'NA')]
     for categorical_column in categorical_dataset['Name']:
         error_message.text += ' <div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                                '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
-                                '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please '\
-                                 'specify the category type of the feature <strong>' + categorical_column + '</strong>.</span></div>'
+                              '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                              '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please ' \
+                              'specify the category type of the feature <strong>' + categorical_column + '</strong>.</span></div>'
 
     error_message.visible = True
     button.on_click(display_encoded_dataframe)
@@ -1205,7 +1216,7 @@ def bokeh_page(doc):
     layout = column(
         row(text_row, column_name, text_type, column(div_category, category_type), column(div_label, label_column), coding_method, base, n_components,
             target, tooltip, column(div, edit_btn), column(div, restore_btn), column(div, delete_btn),
-            column(div, button), tab_id), data_table)
+            column(div, button), column(div, quit_btn), quit, tab_id), data_table)
     layout1 = grid([[div], [layout], [error_message], ], sizing_mode='stretch_width')
 
     # Define TAB0's Layout
@@ -1364,7 +1375,7 @@ while not os.path.isfile(file_path_new):
 dataframe = pd.read_csv(file_path_new, sep=FILE_DELIMITER)
 # label_column -> column name
 with open('label_column.txt') as f:
-	LABEL_COLUMN = f.read()
+    LABEL_COLUMN = f.read()
 
 # -------------------------------------------------------------
 # Transfer data to the next tasks
