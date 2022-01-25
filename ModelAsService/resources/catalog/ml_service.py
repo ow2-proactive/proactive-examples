@@ -11,7 +11,6 @@ import numbers
 import pandas as pd
 import argparse
 import shutil
-import dash_utils
 
 from cryptography.fernet import Fernet
 from datetime import datetime as dt
@@ -56,12 +55,13 @@ except ImportError:
 # DDD libraries
 try:
     from skmultiflow.drift_detection.hddm_w import HDDM_W
+    from skmultiflow.drift_detection import PageHinkley
+    from skmultiflow.drift_detection.adwin import ADWIN
 except ImportError:
     install('scikit-multiflow')
     from skmultiflow.drift_detection.hddm_w import HDDM_W
-
-from skmultiflow.drift_detection import PageHinkley
-from skmultiflow.drift_detection.adwin import ADWIN
+    from skmultiflow.drift_detection import PageHinkley
+    from skmultiflow.drift_detection.adwin import ADWIN
 
 # Environment variables
 INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not None else None
@@ -78,14 +78,22 @@ TOKENS = {  # user api tokens
     'test': hexlify(os.urandom(16)).decode()
 }
 
-DEBUG_ENABLED = True if (os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
-TRACE_ENABLED = True if (os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
+ENGINE = True if (os.getenv('ENGINE') is not None and os.getenv('ENGINE').lower() == "docker") else False
+DEBUG_ENABLED = True if (
+            os.getenv('DEBUG_ENABLED') is not None and os.getenv('DEBUG_ENABLED').lower() == "true") else False
+TRACE_ENABLED = True if (
+            os.getenv('TRACE_ENABLED') is not None and os.getenv('TRACE_ENABLED').lower() == "true") else False
 GPU_ENABLED = True if (os.getenv('GPU_ENABLED') is not None and os.getenv('GPU_ENABLED').lower() == "true") else False
-HTTPS_ENABLED = True if (os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
+HTTPS_ENABLED = True if (
+            os.getenv('HTTPS_ENABLED') is not None and os.getenv('HTTPS_ENABLED').lower() == "true") else False
 USER_KEY = os.getenv('USER_KEY')
 assert USER_KEY is not None, "USER_KEY is required!"
 USER_KEY = str(USER_KEY).encode()
 os.environ['MODELS_PATH'] = join(INSTANCE_PATH, "models")
+
+# Import Dash utils in case ENGINE = docker
+if ENGINE:
+    import dash_utils
 
 # Required imports for Nvidia Rapids Usage
 if GPU_ENABLED:
@@ -161,6 +169,7 @@ def dumper(obj):
         return obj.toJSON()
     except:
         return obj.__dict__
+
 
 def perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, drift_notification, token="") -> str:
     log("[INFO] Calling perform_drift_detection", token)
@@ -328,7 +337,8 @@ def predict_api(data: str) -> str:
                 if GPU_ENABLED:
                     predict_dataframe = cudf.DataFrame.from_pandas(predict_dataframe)
                 if drift_enabled and dataframe.empty == False:
-                    drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector, drift_notification, api_token)
+                    drifts_json = perform_drift_detection(predict_dataframe, dataframe, feature_names, detector,
+                                                          drift_notification, api_token)
                 else:
                     drifts_json = "Drift detection is not enabled."
                 log("[INFO] model_file_path:\n" + str(model_file_path))
@@ -400,8 +410,10 @@ def deploy_api() -> str:
                 model_name) + " was successfully deployed."
             if os.path.isdir(version_path):
                 download_model = False
-                log("[WARN] This model version already exists. \The uploaded model version will be ignored. The existing version will be deployed.",api_token)
-                deployment_status = "[INFO] The model version " + str(model_version) + " of the model " + str(model_name) + " is already deployed. The uploaded model version will be ignored."
+                log("[WARN] This model version already exists. \The uploaded model version will be ignored. The existing version will be deployed.",
+                    api_token)
+                deployment_status = "[INFO] The model version " + str(model_version) + " of the model " + str(
+                    model_name) + " is already deployed. The uploaded model version will be ignored."
 
         # Model Downloading
         # if the specified model version doesn't exist in the directory,
@@ -495,9 +507,11 @@ def update_api() -> str:
     else:
         return log("[ERROR] Invalid token", api_token)
 
-def get_predictions_api(api_token,model_name,model_version):
+
+def get_predictions_api(api_token, model_name, model_version):
     addr = connexion.request.remote_addr
-    predictions_file_path = os.environ['MODELS_PATH'] + "/" + model_name + "/" + str(model_version) + "/predictions_data_" + str(model_version) + ".csv"
+    predictions_file_path = os.environ['MODELS_PATH'] + "/" + model_name + "/" + str(
+        model_version) + "/predictions_data_" + str(model_version) + ".csv"
     if auth_token(api_token):
         if os.path.exists(predictions_file_path):
             predictions_df = pd.read_csv(predictions_file_path, delimiter=',')
@@ -506,79 +520,29 @@ def get_predictions_api(api_token,model_name,model_version):
             predictions_json = predictions_df.to_json(orient='split')
             return predictions_json
         else:
-            get_prediction_status = "[WARN] No predictions saved for the version " + str(model_version) + " of model " + model_name + " using token " + str(api_token)
+            get_prediction_status = "[WARN] No predictions saved for the version " + str(
+                model_version) + " of model " + model_name + " using token " + str(api_token)
             return log(get_prediction_status, api_token)
         return log("[ERROR] Invalid token", api_token)
 
 
-# def trace_preview_api(key) -> str:
-#     if USER_KEY == key.encode():
-#         if exists(TRACE_FILE) and isfile(TRACE_FILE):
-#             header = ["Date Time", "Token", "Traceability information"]
-#             result = ""
-#             with open(TRACE_FILE) as f, TemporaryFile("w+") as t:
-#                 for line in f:
-#                     ln = len(line.strip().split("|"))
-#                     if ln < 3:
-#                         line = "||" + line
-#                     t.write(line)
-#                 t.seek(0)
-#                 trace_dataframe = pd.read_csv(t, sep='|', names=header, engine='python')
-#                 trace_dataframe.fillna('', inplace=True)
-#             # Add config information
-#             with open(CONFIG_FILE) as f:
-#                 config = json.load(f)
-#             dataframe_config = pd.DataFrame.from_records([config])
-#             config_result = dataframe_config.to_html(escape=False, classes='table table-bordered', justify='center',index=False)
-#             trace_result = trace_dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center', index=False)
-#             css_style = """
-#             div {
-#             weight: 100%;
-#             }
-#             """
-#             result = """
-#             <!DOCTYPE html>
-#             <html>
-#               <head>
-#                 <meta charset="UTF-8">
-#                   <title>Audit & Traceability</title>
-#                   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
-#               </head>
-#                 <body>
-#                   <p><a href='ui/#/default' target='_blank'>Click here to access Swagger UI</a></p>
-#                   <h2 class="text-center my-4" style="color:#003050;">Audit & Traceability</h2>
-#                   <div style="text-align:center;">{0}
-#                   <br/>
-#                   <br/>
-#                   <br/>
-#                   {1}
-#                   </div>
-#                 </body></html>""".format(config_result, trace_result)
-#             if (os.path.isdir(os.environ['MODELS_PATH'])):
-#                 directory_contents = os.listdir(os.environ['MODELS_PATH'])
-#                 if (len(directory_contents) > 0):
-#                     result = "<p><a href='maas_analytics?key=" + quote(key) + "' target='_blank'>Click here for MaaS_ML data analytics</a></p>" + result
-#             return result
-#         else:
-#             return log("[WARN] Trace file is empty", key)
-#     else:
-#         return log("[ERROR] Invalid key", key)
-
-
 def dashapp_api(key) -> str:
-    if USER_KEY == key.encode():
+    if ENGINE:
+        if USER_KEY == key.encode():
 
-        if not exists(TRACE_FILE):
-            log("[WARN] Trace file is empty", key)
-        return render_template(
-            'index.jinja2',
-            title='Plotly Dash Flask Tutorial',
-            description='Embed Plotly Dash into your Flask applications.',
-            template='home-template',
-            body="This is a homepage served with Flask."
-        )
+            if not exists(TRACE_FILE):
+                log("[WARN] Trace file is empty", key)
+            return render_template(
+                'index.jinja2',
+                title='Plotly Dash Flask Tutorial',
+                description='Embed Plotly Dash into your Flask applications.',
+                template='home-template',
+                body="This is a homepage served with Flask."
+            )
+        else:
+            return log("Invalid key", key)
     else:
-        return log("Invalid key", key)
+        return log("Dash dashboard is not available for Singularity", log)
 
 
 def test_workflow_submission_api() -> str:
@@ -602,9 +566,7 @@ def test_web_notification_api() -> str:
         return log("[ERROR] Invalid token", api_token)
 
 
-
 # ----- Main entry point ----- #
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=9090, help="set the port that will be used to deploy the service")
@@ -612,7 +574,8 @@ if __name__ == '__main__':
     app = connexion.FlaskApp(__name__, port=args.port, specification_dir=APP_BASE_DIR)
     CORS(app.app)
     app.add_api('ml_service-api.yaml', arguments={'title': 'Machine Learning Model Service'})
-    dash_utils.init_dashboard(app.app)
+    if ENGINE:
+        dash_utils.init_dashboard(app.app)
     if HTTPS_ENABLED:
         context = (
             join(APP_BASE_DIR, 'certificate_mas.pem'),
