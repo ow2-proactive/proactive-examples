@@ -6,6 +6,12 @@ if (args.length < 3) {
     println "[Retrieve_variables_from_service_instance_id] ERROR: Number of arguments must be >= 3"
     System.exit(1)
 }
+
+if (args[0] == "") {
+    println "[Retrieve_variables_from_service_instance_id] the service instance id is empty"
+    return
+}
+
 service_instance_id = args[0] as long
 
 // Retrieve variables
