@@ -1,0 +1,290 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Expect_Remote_Command_Execution" projectName="2. Advanced Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="SSH_HOST" value="ssh.server.net" model="PA:NOT_EMPTY_STRING" description="Hostname or IP address of the remote SSH server machine" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_PORT" value="22" model="PA:INTEGER" description="The listening port of the SSH server. Default value is 22" group="SSH Connection" advanced="true" hidden="false"/>
+    <variable name="SSH_USER" value="my-ssh-login" model="PA:NOT_EMPTY_STRING" description="SSH user name" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_CREDENTIAL_TYPE" value="SSH_PASSWORD" model="PA:LIST(SSH_PASSWORD,SSH_PRIVATE_KEY)" description="SSH authentication type (password or private key)" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_PASSWORD" value="ENC(nZHfe4xn2g2fbw7cY4b2rg==)" model="PA:HIDDEN" description="SSH server password" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_PRIVATE_KEY" value="${SSH_USER}@${SSH_HOST}" model="PA:CREDENTIAL" description="SSH private key" group="SSH Connection" advanced="false" hidden="true"/>
+    <variable name="SSH_CREDENTIAL_HANDLER" value="" model="PA:SPEL(variables[&#39;SSH_CREDENTIAL_TYPE&#39;] == &#39;SSH_PASSWORD&#39; ? showVar(&#39;SSH_PASSWORD&#39;) &amp;&amp; hideVar(&#39;SSH_PRIVATE_KEY&#39;) : showVar(&#39;SSH_PRIVATE_KEY&#39;) &amp;&amp; hideVar(&#39;SSH_PASSWORD&#39;))" description="SSH credential handler that shows and displays dynamically variables depending on the authentication type" group="SSH Connection" advanced="false" hidden="true"/>
+    <variable name="SSH_COMMAND" value="echo &#39;hello world&#39;"  description="The command to be executed on the SSH server machine" group="SSH Command" advanced="false" hidden="false"/>
+    <variable name="SSH_PROMPT_REGEXP" value="${SSH_USER}@[A-Za-z0-9_.-]+:.+$" model="PA:NOT_EMPTY_STRING" description="Regular expresion describing the set of CLI prompts in the SSH server system. The CLI prompts must be separated by a double pipe character ||" group="SSH Command" advanced="true" hidden="false"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow example that executes one or more shell commands on a remote machine using SSH protocol. It is based on the Expect4j tool to perform an interactive SSH authentication (using a password or a private key). The executed commands are provided in the task pre-script. Besides, the user can provide another SSH command in the SSH_COMMAND variable. This command will be appended at the end of the script. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="basic-examples"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="remote_command_execution_with_ssh" maxNumberOfExecution="1"
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ This task  executes one or more shell commands on a remote machine using SSH protocol. It is based on the Expect4j tool to perform an interactive SSH authentication (using a password or a private key). The executed commands are provided in the task pre-script. Besides, the user can provide another SSH command in the SSH_COMMAND variable. This command will be appended at the end of the script. ]]>
+      </description>
+      <variables>
+        <variable name="DEBUG" value="false" inherited="false" model="PA:BOOLEAN"   advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="PRE_SCRIPT_AS_FILE" value="script.sh"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="expect4j-1.9.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="com.springsource.tcl.lang*-1.4.1.jar" accessMode="transferFromGlobalSpace"/>
+        <files  includes="org.apache.servicemix.bundles.oro-2.0.8_6.jar" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <additionalClasspath>
+          <pathElement path="expect4j-1.9.jar"/>
+          <pathElement path="com.springsource.tcl.lang-1.4.1.jar"/>
+          <pathElement path="com.springsource.tcl.lang.jacl-1.4.1.jar"/>
+          <pathElement path="org.apache.servicemix.bundles.oro-2.0.8_6.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Running on $(hostname)"
+echo "Date on the current system: `date`"
+for i in {1..5}; do echo "Hi, $i"; done
+sleep 10
+echo 'finished'
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/**
+ * This program will demonstrate remote script execution.
+ * You will be asked username, hostname, passwd or SSH private key and script.
+ * If everything works fine, given script will be executed
+ * on the remote side and outputs will be printed out.
+ *
+ */
+import com.jcraft.jsch.*;
+import java.io.*;
+import org.apache.commons.io.FilenameUtils;
+import expect4j.Closure;
+import expect4j.Expect4j;
+import expect4j.ExpectState;
+import expect4j.matches.Match;
+import expect4j.matches.RegExpMatch;
+import org.apache.oro.text.regex.MalformedPatternException;
+import java.util.Hashtable;
+import org.slf4j.LoggerFactory;
+import org.apache.log4j.Logger;
+import org.apache.log4j.Level;
+import org.apache.commons.lang3.mutable.MutableInt;
+import org.codehaus.groovy.runtime.StackTraceUtils;
+
+//Get the SSH connection info to log into the remote machine
+sshUser = variables.get("SSH_USER")
+sshHost = variables.get("SSH_HOST")
+sshPort = variables.get("SSH_PORT") as int
+sshCredential = variables.get("SSH_CREDENTIAL_TYPE")
+
+//Get the local script to be copied then executed on the remote machine
+sshCommand = variables.get("SSH_COMMAND")
+sshLocalFile = genericInformation.get("PRE_SCRIPT_AS_FILE")
+
+COMMAND_EXECUTION_SUCCESS_OPCODE = -2
+ENTER_CHARACTER = "\n"
+LINUX_REGEXP = variables.get("SSH_PROMPT_REGEXP").split("\\|\\|")
+
+buffer = new StringBuilder()
+
+if ("true".equals(variables.get("DEBUG"))) {
+	log4jLogger = Logger.getLogger(Expect4j.class)
+	log4jLogger.setLevel(Level.DEBUG)
+}
+
+class MyClosure implements Closure {
+
+    StringBuilder buffer;
+    
+    MutableInt lastReturnCode;    
+
+    MyClosure(StringBuilder buffer, MutableInt lastReturnCode) {
+        this.buffer = buffer;
+        this.lastReturnCode = lastReturnCode;
+    }
+
+    void run(ExpectState expectState) {
+        def current = expectState.getBuffer();
+        if (current.contains("CHECK_ERROR:")) {
+            current.eachLine { line, count ->
+                // skip line 0 and 2
+                if (count == 1) {
+                    def returnCode = Integer.parseInt(line.trim().replace("CHECK_ERROR:",""))
+                    lastReturnCode.setValue(returnCode)
+                } 
+            }
+        } else {
+            print("" + current)                  
+        }
+        buffer.append(current);  
+    }
+} 
+
+def SSH() {
+    JSch jsch=new JSch()
+    Session session=jsch.getSession(sshUser, sshHost, sshPort)
+    
+    // authenticate using private key
+    if(sshCredential.equals("SSH_PRIVATE_KEY")){
+        sshPrivateKey = credentials.get(variables.get("SSH_PRIVATE_KEY"))
+        new File("key.pem") << sshPrivateKey
+        jsch.addIdentity("key.pem")
+    }
+    // authenticate using password
+    if(sshCredential.equals("SSH_PASSWORD")){
+        session.setPassword(variables.get("SSH_PASSWORD"))
+    }
+    session.setConfig("StrictHostKeyChecking", "no")
+    session.connect(60000)
+    println ("The authentication to the remote machine " + sshHost + " succeeded")
+
+    channel = session.openChannel("shell");
+    Expect4j expect = new Expect4j(channel.getInputStream(), channel.getOutputStream());
+    expect.setDefaultTimeout(Expect4j.TIMEOUT_FOREVER)
+    channel.connect();
+    return expect;
+}
+
+def isSuccess(List<Match> objPattern, String strCommandPattern, Expect4j expect) {
+    try {
+        boolean isFailed = checkResult(expect.expect(objPattern));
+
+        if (!isFailed) {
+            expect.send(strCommandPattern);
+            expect.send(ENTER_CHARACTER);
+            return true;
+        }
+        println "Command failure : " + strCommandPattern
+        return false;
+    } catch (MalformedPatternException ex) {
+        ex.printStackTrace();
+        println "Pattern failure : " + strCommandPattern
+        return false;
+    } catch (Exception ex) {
+        ex.printStackTrace();
+        println "Generic exception : " + strCommandPattern
+        return false;
+    }
+}
+
+def closeConnection(Expect4j expect) {
+    if (expect!=null) {
+        expect.close();
+    }
+}
+
+def checkResult(int intRetVal) {
+    if (intRetVal == COMMAND_EXECUTION_SUCCESS_OPCODE) {
+        return true;
+    }
+    return false;
+}
+
+def execute(List<String> cmdsToExecute) {
+    this.lstCmds = cmdsToExecute;
+    MutableInt returnCodeHandler = new MutableInt();
+
+    closure = new MyClosure(buffer, returnCodeHandler);
+    List<Match> lstPattern =  new ArrayList<Match>();
+    
+    LINUX_REGEXP.each { regexElement ->        
+        try {
+            Match mat = new RegExpMatch(regexElement, closure);
+            lstPattern.add(mat);
+        } catch (MalformedPatternException e) {
+            e.printStackTrace();
+            throw e
+        }
+    }
+
+    try {
+        expect = SSH();
+        boolean success = true;
+        lstCmds.each { strCmd ->
+            success = isSuccess(lstPattern, strCmd, expect);
+            if (!success) {
+                throw new RuntimeException("Command did not succeed")
+            }
+            if (returnCodeHandler.intValue() != 0) {
+                throw new RuntimeException("Last command returned a non-zero value: " + returnCodeHandler.intValue())
+            }
+        }
+
+        checkResult(expect.expect(lstPattern));
+    } finally {
+        closeConnection();
+    }
+    return buffer.toString();
+}
+
+try {   
+    cmdsToExecute = new ArrayList<String>();
+    new File(sshLocalFile).eachLine { line ->
+        if (!line.trim().isEmpty() && !line.startsWith("#")) {
+            cmdsToExecute.add(line)
+            cmdsToExecute.add("echo \"CHECK_ERROR:\$?\"")
+        }
+    }
+    cmdsToExecute.add(sshCommand)
+    cmdsToExecute.add("echo \"CHECK_ERROR:\$?\"")
+
+    execute(cmdsToExecute);
+} catch (Exception e) {
+    throw StackTraceUtils.deepSanitize(e)
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            301.671875
+        </positionTop>
+        <positionLeft>
+            574.75
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2736px;
+            height:3240px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-296.671875px;left:-569.75px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_40" style="top: 301.687px; left: 574.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task  executes one or more shell commands on a remote machine using SSH protocol. It is based on the Expect4j tool to perform an interactive SSH authentication (using a password or a private key). The executed commands are provided in the task pre-script. Besides, the user can provide another SSH command in the SSH_COMMAND variable. This command will be appended at the end of the script."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">remote_command_execution_with_ssh</span></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 669px; top: 332px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
