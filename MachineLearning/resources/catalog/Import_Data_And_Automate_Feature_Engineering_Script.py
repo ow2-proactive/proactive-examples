@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Proactive Import Data for Machine Learning
 
-This module contains the Python script for the Import Data Interactive task.
+This module contains the Python script for the Import Data and Automate Feature Engineering task.
 """
 import os
 import ssl
@@ -91,6 +91,9 @@ ID = str(uuid.uuid4())
 file_path = os.path.join('.', ID + '.csv')
 dataframe.to_csv(file_path, sep=FILE_DELIMITER, index=False, header=True)
 file_path_new = os.path.join('.', ID + '.new.csv')
+file_path_params = os.path.join('.', ID + '.params.csv')
+open(file_path_new, 'a').close()
+open(file_path_params, 'a').close()
 
 # -------------------------------------------------------------
 # Configure network settings
@@ -202,7 +205,6 @@ class DataTypeIdentifier(object):
         labeled_predictions = self.label_predictions(predictions, mappings)
         # Summarize everything in a dataframe
         final_predictions = pd.DataFrame(labeled_predictions, columns=["Data type prediction"], index=data.columns)
-        print(final_predictions)
         return final_predictions
 
     def load_variables(self, path):
@@ -213,6 +215,15 @@ class DataTypeIdentifier(object):
         return loaded_variable
 
 def bokeh_page(doc):
+    def auto_mode(variable, cardinality, category):
+        if cardinality < 15 and category == "Nominal":
+            return "OneHot"
+        elif cardinality > 15 and category == "Nominal":
+            return "Hash"
+        elif cardinality < 15 and category == "Ordinal":
+            return "Ordinal"
+        elif cardinality > 15 and category == "Ordinal":
+            return "Binary"
     def encode_categorical_data(dataset, data):
         data = pd.DataFrame.from_dict(data)
         categorical_dataset = data[data.Type == "categorical"]
@@ -229,16 +240,15 @@ def bokeh_page(doc):
             coding_method = categorical_dataset["Coding"][index]
 
             if coding_method == 'Auto':
-                if cardinality < 15 and category == "Nominal":
+                auto_coding_method = auto_mode(variable, cardinality, category)
+                if auto_coding_method == "OneHot":
                     one_hot_enc.append(variable)
-                elif cardinality > 15 and category == "Nominal":
+                elif auto_coding_method == "Hash":
                     hash_enc.append(variable)
-                elif cardinality < 15 and category == "Ordinal":
+                elif auto_coding_method == "Ordinal":
                     ordinal_enc.append(variable)
-                elif cardinality > 15 and category == "Ordinal":
+                elif auto_coding_method == "Binary":
                     binary_enc.append(variable)
-                else:
-                    one_hot_enc.append(variable)
             elif coding_method == 'Label':
                 ordinal_enc.append(variable)
             elif coding_method == 'OneHot':
@@ -363,14 +373,19 @@ def bokeh_page(doc):
             data.loc[data.Name == list(data['Name'])[i], "Zeros"] = "-"
             data.loc[data.Name == list(data['Name'])[i], "Missing"] = (dataset.isna().sum())[list(data['Name'])[i]]
 
-    data['Cardinality'] = '*'
+    data['Cardinality'] = '-'
     dataset = dataset.replace(' ', np.nan)
     variables = list(data.loc[data.Type == "categorical"]["Name"])
     for variable in variables:
         data.loc[data.Name == variable, "Cardinality"] = dataset[variable].unique().size
-    data['Coding'] = '*'
+    data['Coding'] = '-'
     data['Options'] = ""
     data.loc[data.Type == "categorical", "Coding"] = "Auto"
+    data.loc[data.Type == "categorical", "Max"] = '-'
+    data.loc[data.Type == "categorical", "Min"] = '-'
+    data.loc[data.Type == "categorical", "Mean"] = '-'
+    data.loc[data.Type == "categorical", "Zeros"] = '-'
+    data.loc[data.Type == "numerical", "Cardinality"] = '-'
 
     # Label_column.txt to save the label column
     f= open("label_column.txt","w+")
@@ -445,10 +460,33 @@ def bokeh_page(doc):
                TableColumn(field="Coding", title="Encoding Method"),
                TableColumn(field="Options", title="Encoding Options")]
 
-    data_table = DataTable(source=source, columns=columns, editable=False, reorderable=False, width_policy='max',
+    data_table = DataTable(source=source, columns=columns, editable=True, reorderable=False, width_policy='max',
                            height_policy='fixed')
 
     text_row = TextInput(value="", title="", width=0, disabled=True, visible=False)
+
+
+    source_code = """
+    var grid = document.getElementsByClassName('grid-canvas')[8].children;
+    var row, column = '';
+
+    for (var i = 0,max = grid.length; i < max; i++){
+        if (grid[i].outerHTML.includes('active')){
+            row = i;
+            for (var j = 0, jmax = grid[i].children.length; j < jmax; j++)
+                if(grid[i].children[j].outerHTML.includes('active')) 
+                    { column = j }
+        }
+    }
+    
+    text_row.value = String(row);
+
+    """
+
+    callback = CustomJS(args = dict(source = source, text_row = text_row, new_data = list(data['Name']), old_data = list(original_data['Name'])), code = source_code)
+    source.selected.js_on_change('indices', callback)
+    ##source.selected.on_change('indices', py_callback)
+
     column_name = Select(
         value='Select a column',
         title='Column Name',
@@ -514,7 +552,7 @@ def bokeh_page(doc):
         selected_column = column_name.value
 
         if selected_column == 'Select a column':
-            text_type.disabled = True
+            text_type.visible = False
             category_type.visible = False
             div_category.visible = False
             label_column.visible = False
@@ -528,7 +566,7 @@ def bokeh_page(doc):
             n_components.visible = False
 
         elif selected_column == 'All':
-            text_type.disabled = False
+            text_type.visible = True
             text_type.value = 'numerical'
             category_type.visible = False
             div_category.visible = False
@@ -544,6 +582,7 @@ def bokeh_page(doc):
             button.visible = True
 
         else:
+            text_type.visible = True
             if len(data['Name']) == 1:
                 delete_btn.disabled = True
             text_row.value = str(pd.DataFrame(data)["Name"].tolist().index(selected_column))
@@ -566,6 +605,7 @@ def bokeh_page(doc):
                     label_column.active = 0
                 else:
                     label_column.active = None
+                label_confirm = LABEL_COLUMN
                 coding_method.visible = True
                 coding_method.value = old_coding_method
                 columns_names = ['Select a column', 'All']
@@ -607,8 +647,10 @@ def bokeh_page(doc):
             elif old_type == 'numerical':
                 text_type.value = 'numerical'
                 category_type.visible = False
+                category_type.active = None
                 div_category.visible = False
                 coding_method.visible = False
+                label_column.active = None
                 label_column.visible = False
                 n_components.visible = False
                 base.visible = False
@@ -763,6 +805,7 @@ def bokeh_page(doc):
     def update_dataframe(event):
         dataframe = pd.DataFrame.from_dict(source.data)
         data = dataframe.reset_index(drop=True)
+
         column_type = text_type.value
         selected_column = column_name.value
 
@@ -771,8 +814,8 @@ def bokeh_page(doc):
             if column_type == 'numerical':
                 data['Type'] = 'numerical'
                 data['Category'] = 'NA'
-                data['Cardinality'] = '*'
-                data['Coding'] = '*'
+                data['Cardinality'] = '-'
+                data['Coding'] = '-'
                 data['Options'] = ''
 
             elif column_type == 'categorical':
@@ -822,20 +865,41 @@ def bokeh_page(doc):
                         data['Cardinality'][i] = dataset[variable].unique().size
 
         elif selected_column != 'All':
+            if selected_column not in list(data['Name']):
+                df = pd.read_csv(file_path, sep=FILE_DELIMITER)
+                df.columns.values[int(text_row.value)] = list(data['Name'])[int(text_row.value)]
+                try:
+                    df.to_csv(file_path, sep=FILE_DELIMITER, index=False, header=True)
+                except OSError:
+                    error_message.text = file_reading_exception
             if column_type == 'categorical':
+                data['Min'][int(text_row.value)] = '-'
+                data['Max'][int(text_row.value)] = '-'
+                data['Mean'][int(text_row.value)] = '-'
+                data['Zeros'][int(text_row.value)] = '-'
                 data['Type'][int(text_row.value)] = 'categorical'
                 error_message.text = ''
                 cat_type = category_type.active
                 coding = coding_method.value
-                f= open("label_column.txt","w+")
-                if label_column.active != None :
+                if selected_column in list(data['Name']) and label_column.active != None:
+                    f= open("label_column.txt","w+")
                     f.write(selected_column)
-                f.close()
+                    f.close()
+                elif selected_column not in list(data['Name']) and label_column.active != None:
+                    label_confirm.value = list(data['Name'])[int(text_row.value)]
+                    with open('label_column.txt') as f:
+                        LABEL_COLUMN = f.read()
+                    f= open("label_column.txt","w+")
+                    if LABEL_COLUMN not in list(data['Name']):
+                        f.write('')
+                    if label_column.active != None :
+                        f.write(list(data['Name'])[int(text_row.value)])
+                    f.close()
                 if cat_type is None:
                     text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                            '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
                            '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The category type of ' + \
-                           data["Name"][int(text_row.value)] + ' is missing.</span></div>'
+                           data["Name"][int(text_row.value)] + ' is missing.'+str(category_type.active)+'</span></div>'
                     error_message.text += text
                     error_message.visible = True
                     button.disabled = True
@@ -859,6 +923,11 @@ def bokeh_page(doc):
                     button.disabled = True
 
                 else:
+                    i = column_name.options.index(selected_column)
+                    column_name.options = column_name.options[:i]+[list(data['Name'])[int(text_row.value)]]+column_name.options[i+1:]
+                    column_name.value = list(data['Name'])[int(text_row.value)]
+                    if label_confirm.value == column_name.value:
+                        label_column.active = 0
                     button.disabled = False
                     error_message.text = '<div style="width:100%;position:relative;padding:.75rem ' \
                                          '1.25rem;margin-bottom:1rem;border:1px solid ' \
@@ -869,6 +938,7 @@ def bokeh_page(doc):
                     data['Coding'][int(text_row.value)] = coding
                     data['Category'][int(text_row.value)] = labels[cat_type]
                     variable = data['Name'][int(text_row.value)]
+                    dataset = pd.read_csv(file_path, sep=FILE_DELIMITER)
                     data['Cardinality'][int(text_row.value)] = dataset[variable].unique().size
 
                     if coding == 'BaseN':
@@ -904,11 +974,21 @@ def bokeh_page(doc):
                         error_message.text += text
 
             elif column_type == 'numerical':
+                dataset = pd.read_csv(file_path, sep=FILE_DELIMITER)
                 data['Type'][int(text_row.value)] = 'numerical'
                 data['Category'][int(text_row.value)] = 'NA'
-                data['Coding'][int(text_row.value)] = '*'
-                data['Cardinality'][int(text_row.value)] = '*'
+                data['Coding'][int(text_row.value)] = '-'
+                data['Cardinality'][int(text_row.value)] = '-'
                 data['Options'][int(text_row.value)] = ''
+                data['Max'][int(text_row.value)] = dataset[list(data['Name'])[int(text_row.value)]].max()
+                data['Min'][int(text_row.value)] = dataset[list(data['Name'])[int(text_row.value)]].min()
+                data['Mean'][int(text_row.value)] = round(dataset.mean(axis=0)[list(data['Name'])[int(text_row.value)]], 3)
+                data['Zeros'][int(text_row.value)] = (dataset[list(data['Name'])[int(text_row.value)]] == 0).sum()
+                data['Missing'][int(text_row.value)] = (dataset.isna().sum())[list(data['Name'])[int(text_row.value)]]
+                i = column_name.options.index(selected_column)
+                column_name.options = column_name.options[:i]+[list(data['Name'])[int(text_row.value)]]+column_name.options[i+1:]
+                column_name.value = list(data['Name'])[int(text_row.value)]
+
 
         variable_options_dict_list = list()
 
@@ -933,7 +1013,7 @@ def bokeh_page(doc):
                 button.disabled = False
         else:
             button.disabled = False
-        if all(s == '*' for s in data['Coding']):
+        if all(s == '-' for s in data['Coding']):
             button.disabled = True
 
         dataframe = data
@@ -1000,10 +1080,11 @@ def bokeh_page(doc):
                     else:
                         button.disabled = False
 
-                    if all(s == '*' for s in data['Coding']):
+                    if all(s == '-' for s in data['Coding']):
                         button.disabled = True
                 except OSError:
                     error_message.text = file_reading_exception
+        source.data = dict(data)
 
     def restore_dataframe(event):
         df = original_dataframe
@@ -1017,14 +1098,27 @@ def bokeh_page(doc):
             delete_btn.visible = False
             restore_btn.visible = False
             label_column.visible = True
+            label_confirm.value = ''
             column_name.value = 'Select a column'
             error_message.text = ''
+            f= open("label_column.txt","w+")
+            f.write('')
+            f.close()
         except OSError:
             error_message.text = file_reading_exception
 
+    def select_column(attr, old, new):
+        dataframe = pd.DataFrame.from_dict(source.data)
+        data = dataframe.reset_index(drop=True)
+        if text_row.value != '':
+            name = list(data['Name'])[int(text_row.value)]
+            if name in column_name.options:
+                column_name.value = name
+
     def send_old_dataframe(attr, old, new):
         original_dataframe.to_csv(file_path_new, sep=FILE_DELIMITER, index=False, header=True)
-    text_row.on_change('value', select_row)
+
+    text_row.on_change('value', select_column)
     text_type.on_change('value', update_layout)
     column_name.on_change('value', select_row)
     coding_method.on_change('value', specify_more_encoding_values)
@@ -1043,13 +1137,14 @@ def bokeh_page(doc):
     delete_btn = Button(label="Delete Column", button_type="danger", width=97, visible=False)
     delete_btn.on_click(delete_column)
 
-    quit_btn = Button(label="Cancel", button_type="danger", width=45, visible=True)
+    quit_btn = Button(label="Cancel and Quit", button_type="danger", width=45, visible=True)
     quit = TextInput(value="", title="", width=0, disabled=True, visible=False)
-    source_code = """ if (confirm("Do you really want to leave? The changes you made will not be saved.") == true) {
-                      quit.value = "OK abandon!";}"""
-    quit_btn.js_on_click(CustomJS(args=dict(quit=quit), code=source_code))
+
+    quit_btn.js_on_click(CustomJS(args=dict(quit=quit), code=""" if (confirm("Do you really want to leave? The changes you made will not be saved.") == true) {
+                                                        quit.value = "OK abandon!";}"""))
     quit.on_change('value', send_old_dataframe)
-    quit.js_on_change('value',CustomJS(args=dict(urls=['/shutdown']), code="urls.forEach(url => window.open(url))"))
+    quit.js_on_change('value',CustomJS(args=dict(urls=['/shutdown']), code=""" urls.forEach(url => $.get(url));
+                                                                            setTimeout(() => {  window.close(); }, 2000);"""))
 
     tab_id = NumericInput(value=0, title="", disabled=True, visible=False)
 
@@ -1109,7 +1204,8 @@ def bokeh_page(doc):
 
         with open('label_column.txt') as f:
             LABEL_COLUMN = f.read()
-        if LABEL_COLUMN == '' or LABEL_COLUMN not in list(data['Name']):
+        label_confirm.value = LABEL_COLUMN
+        if LABEL_COLUMN == '':
             error_message.text += '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                                   '1.25rem;margin-bottom:1rem;border:1px solid ' \
                                   'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border' \
@@ -1118,11 +1214,6 @@ def bokeh_page(doc):
         if error_message.text == '':
             encoded_data = encode_categorical_data(dataset, dataframe)
 
-            def send_new_dataframe(event):
-                encoded_data.to_csv(file_path_new, sep=FILE_DELIMITER, index=False, header=True)
-
-            def delete_encoded_dataframe(event):
-                structure.tabs.pop(tab_index)
 
             def display_n_encoded_dataframe(attr, old, new):
                 dataframe_size = encoded_data.shape[0]
@@ -1137,12 +1228,28 @@ def bokeh_page(doc):
                                                reorderable=False, width_policy='max', height_policy='max')
                 n_rows_label_pre = Div(text="Show", margin=(30, 0, -10, 0))
                 n_rows_label_post = Div(text="entries of " + str(dataframe_size) + " rows", margin=(30, -10, 0, 0))
-                actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn))
+                actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm)
                 filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
-                layout4 = grid([[filter_datatable, None, None, actions], [encoded_data_table], ],
-                               sizing_mode='stretch_width')
+                coding_options = data
+                for i in range(len(coding_options)):
+                    if coding_options["Coding"][i] == "Auto":
+                        coding_options["Coding"][i] = auto_mode(list(coding_options["Name"])[i], list(coding_options["Cardinality"])[i], list(coding_options["Category"])[i])
+                coding_parameters = {"Column Name":coding_options["Name"], "Encoding Method":coding_options["Coding"], "Encoding Options":coding_options["Options"]}
+                coding_parameters_df = pd.DataFrame.from_dict(coding_parameters)
+                coding_parameters_columns = [TableColumn(field=Ci, title=Ci) for Ci in coding_parameters_df.columns]
+                source_coding_parameters = ColumnDataSource(coding_parameters)
+                coding_parameters_table = DataTable(source=source_coding_parameters, columns=coding_parameters_columns, editable=False)
+
+                layout4 = grid([[filter_datatable, None, None, actions], [encoded_data_table], [None], [coding_parameters_table]], sizing_mode='stretch_width')
                 tab4 = Panel(child=layout4, title=title, closable=True)
                 structure.tabs[tab_index] = tab4
+
+            def send_new_dataframe(attr, old, new):
+                encoded_data.to_csv(file_path_new, sep=FILE_DELIMITER, index=False, header=True)
+                coding_parameters_df.to_csv(file_path_params, sep=FILE_DELIMITER, index=False, header=True)
+
+            def delete_encoded_dataframe(event):
+                structure.tabs.pop(tab_index)
 
             def export_dataframe_to_csv(event):
                 encoded_data.to_csv('download.csv', sep=FILE_DELIMITER, encoding='utf-8', index=False, header=True)
@@ -1178,8 +1285,12 @@ def bokeh_page(doc):
             encoded_data_table = DataTable(source=encoded_source, columns=columns, editable=False, reorderable=False,
                                            width_policy='max', height_policy='max')
             confirm_btn = Button(label="Proceed", button_type="success", width=90)
-            confirm_btn.on_click(send_new_dataframe)
-            confirm_btn.js_on_click(CustomJS(args=dict(urls=['/shutdown']), code="urls.forEach(url => window.open(url))"))
+            confirm = TextInput(value="", title="", width=0, disabled=True, visible=False)
+            confirm_btn.js_on_click(CustomJS(args=dict(confirm_input=confirm), code= """ if (confirm("Do you really want to quit AutoFeat and continue the workflow execution? The changes you made will be saved and transferred to the next connected task, if any exists.") == true) {
+                                                                                confirm_input.value = "OK proceed!";}"""))
+            confirm.on_change('value',send_new_dataframe)
+            confirm.js_on_change('value',CustomJS(args=dict(urls=['/shutdown']), code=""" urls.forEach(url => $.get(url));
+                                                                            setTimeout(() => {  window.close(); }, 2000);"""))
             cancel_btn = Button(label="Cancel", button_type="danger", width=90)
             cancel_btn.on_click(delete_encoded_dataframe)
             export_btn = Button(label="Download CSV", button_type="primary", width=90)
@@ -1187,10 +1298,20 @@ def bokeh_page(doc):
             export_btn.js_on_click(
                 CustomJS(args=dict(urls=['/download']), code="urls.forEach(url => window.open(url))"))
             div = Div(text="""""", margin=2)
-            actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn))
+            actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm)
             filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
-            layout4 = grid([[filter_datatable, None, None, actions], [encoded_data_table], ],
-                           sizing_mode='stretch_width')
+            coding_options = data
+            for i in range(len(coding_options)):
+                if coding_options["Coding"][i] == "Auto":
+                    coding_options["Coding"][i] = auto_mode(list(coding_options["Name"])[i], list(coding_options["Cardinality"])[i], list(coding_options["Category"])[i])
+
+            coding_parameters = {"Column Name":coding_options["Name"], "Encoding Method":coding_options["Coding"], "Encoding Options":coding_options["Options"]}
+            coding_parameters_df = pd.DataFrame.from_dict(coding_parameters)
+            coding_parameters_columns = [TableColumn(field=Ci, title=Ci) for Ci in coding_parameters_df.columns]
+            source_coding_parameters = ColumnDataSource(coding_parameters)
+            coding_parameters_table = DataTable(source=source_coding_parameters, columns=coding_parameters_columns, editable=False)
+
+            layout4 = grid([[filter_datatable, None, None, actions], [encoded_data_table], [None], [coding_parameters_table]], sizing_mode='stretch_width')
             title = 'ENCODED_DATA_' + str(encoded_tab_id)
             tab4 = Panel(child=layout4, title=title, closable=True)
             structure.tabs.append(tab4)
@@ -1213,10 +1334,12 @@ def bokeh_page(doc):
     button.on_click(display_encoded_dataframe)
     div_label = Div(text="""""", margin=6)
 
+    label_confirm = TextInput(value="", title="", width=0, disabled=True, visible=False)
+
     layout = column(
         row(text_row, column_name, text_type, column(div_category, category_type), column(div_label, label_column), coding_method, base, n_components,
             target, tooltip, column(div, edit_btn), column(div, restore_btn), column(div, delete_btn),
-            column(div, button), column(div, quit_btn), quit, tab_id), data_table)
+            column(div, button), column(div, quit_btn), quit, tab_id, label_confirm), data_table)
     layout1 = grid([[div], [layout], [error_message], ], sizing_mode='stretch_width')
 
     # Define TAB0's Layout
@@ -1290,6 +1413,7 @@ def bokeh_page(doc):
                 TableColumn(field="Zeros", title="Zeros"), TableColumn(field="Min", title="Min"),
                 TableColumn(field="Max", title="Max"), TableColumn(field="Mean", title="Mean"),
                 TableColumn(field="Cardinality", title="Cardinality")]
+
     layout2 = grid([[div], [
         DataTable(source=source, columns=columns2, editable=False, reorderable=False, width_policy='max',
                   height_policy='max')], ])
@@ -1372,21 +1496,47 @@ print('Flask server stopped.')
 #
 while not os.path.isfile(file_path_new):
     time.sleep(1)
-dataframe = pd.read_csv(file_path_new, sep=FILE_DELIMITER)
+if not os.stat(file_path_new).st_size == 0:
+    dataframe = pd.read_csv(file_path_new, sep=FILE_DELIMITER)
+else:
+    dataframe = pd.read_csv(file_path, sep=FILE_DELIMITER)
+
 # label_column -> column name
 with open('label_column.txt') as f:
     LABEL_COLUMN = f.read()
 
 # -------------------------------------------------------------
-# Transfer data to the next tasks
+# Load the selected encoding parameters from bokeh
 #
+while not os.path.isfile(file_path_params):
+    time.sleep(1)
+encoding_parameters = ""
+encoding_params_str = ""
+
 dataframe_id = compress_and_transfer_dataframe(dataframe)
 print("dataframe id (out): ", dataframe_id)
 
+if not os.stat(file_path_params).st_size == 0:
+    print("encoding parameters:")
+    encoding_parameters_df = pd.read_csv(file_path_params, sep=FILE_DELIMITER)
+    encoding_parameters = encoding_parameters_df[encoding_parameters_df["Encoding Method"] != "-"]
+    for variable in encoding_parameters["Column Name"]:
+        index = int(encoding_parameters.index[encoding_parameters["Column Name"] == variable].values)
+        encoding_params_str += "the feature "+variable+" is encoded using the method "+encoding_parameters["Encoding Method"][index]
+        if str(encoding_parameters["Encoding Options"][index]) != "nan":
+            encoding_params_str += " ("+str(encoding_parameters["Encoding Options"][index])+").\n"
+        else:
+            encoding_params_str += ".\n"
+    print(encoding_params_str)
+
+# -------------------------------------------------------------
+# Transfer data to the next tasks
+#
 resultMetadata.put("task.name", __file__)
 resultMetadata.put("task.dataframe_id", dataframe_id)
 resultMetadata.put("task.label_column", LABEL_COLUMN)
 resultMetadata.put("task.feature_names", feature_names)
+resultMap.put("encoding parameters", encoding_parameters)
 
 # -------------------------------------------------------------
 # Preview results
