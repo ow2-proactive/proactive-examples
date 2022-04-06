@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2022. All rights reserved.
 # -*- coding: utf-8 -*-
 """Proactive Import Data for Machine Learning
 
@@ -695,7 +696,7 @@ def bokeh_page(doc):
 
         elif column_name.value != 'All' and column_name.value != 'Select a column':
             old_type = data['Type'][int(text_row.value)]
-            if column_type == 'numerical' and old_type != column_type:
+            if column_type == 'numerical':
                 category_type.visible = False
                 div_category.visible = False
                 coding_method.visible = False
@@ -1097,7 +1098,7 @@ def bokeh_page(doc):
             edit_btn.visible = False
             delete_btn.visible = False
             restore_btn.visible = False
-            label_column.visible = True
+            label_column.visible = False
             label_confirm.value = ''
             column_name.value = 'Select a column'
             error_message.text = ''
@@ -1490,6 +1491,9 @@ while not os.path.isfile('.stop_server'):
 os.remove('.stop_server')
 
 print('Flask server stopped.')
+
+# Remove External Endpoint Url
+schedulerapi.removeExternalEndpointUrl(variables.get("PA_JOB_ID"), "AutoFeat")
 
 # -------------------------------------------------------------
 # Load the new version of the dataframe from bokeh
