@@ -100,8 +100,8 @@ public class WorkflowsTest {
             if (Arrays.asList("false", "true").contains(map.getValue().getValue().toLowerCase())) {
                 assertThat("The wf variable: " + map.getValue().getName() + " MUST HAVE a boolean model: " +
                            BOOLEAN_MODEL,
-                           map.getValue().getModel(),
-                           is(BOOLEAN_MODEL));
+                           map.getValue().getModel().toLowerCase(),
+                           is(BOOLEAN_MODEL.toLowerCase()));
             }
         });
 
