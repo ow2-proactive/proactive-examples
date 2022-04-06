@@ -1,4 +1,4 @@
-# Copyright Activeeon 2007-2022. All rights reserved.
+
 # -*- coding: utf-8 -*-
 """Proactive Import Data for Machine Learning
 
