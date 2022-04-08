@@ -659,8 +659,20 @@ def bokeh_page(doc):
                 tooltip.text = ''
                 tooltip.visible = False
 
-            else:
-                text_type.value = 'Select'
+    def update_layout(attr, old, new):
+        dataframe = pd.DataFrame.from_dict(source.data)
+        data = dataframe.reset_index(drop=True)
+        column_type = text_type.value
+        if column_name.value == 'All':
+            if column_type == 'categorical':
+                category_type.visible = True
+                div_category.visible = True
+                category_type.active = None
+                category_type.labels = labels
+                coding_method.visible = True
+                label_column.visible = False
+                coding_method.value = 'Auto'
+            elif column_type == 'numerical':
                 category_type.visible = False
                 div_category.visible = False
                 coding_method.visible = False
@@ -670,29 +682,16 @@ def bokeh_page(doc):
                 target.visible = False
                 tooltip.text = ''
                 tooltip.visible = False
-
-    def update_layout(attr, old, new):
-        dataframe = pd.DataFrame.from_dict(source.data)
-        data = dataframe.reset_index(drop=True)
-        column_type = text_type.value
-        if column_name.value == 'All' and column_type == 'categorical':
-            category_type.visible = True
-            div_category.visible = True
-            category_type.active = None
-            category_type.labels = labels
-            coding_method.visible = True
-            label_column.visible = False
-            coding_method.value = 'Auto'
-        elif column_name.value == 'All' and column_type == 'numerical':
-            category_type.visible = False
-            div_category.visible = False
-            coding_method.visible = False
-            label_column.visible = False
-            n_components.visible = False
-            base.visible = False
-            target.visible = False
-            tooltip.text = ''
-            tooltip.visible = False
+            else:
+                category_type.visible = False
+                div_category.visible = False
+                coding_method.visible = False
+                label_column.visible = False
+                n_components.visible = False
+                base.visible = False
+                target.visible = False
+                tooltip.text = ''
+                tooltip.visible = False
 
         elif column_name.value != 'All' and column_name.value != 'Select a column':
             old_type = data['Type'][int(text_row.value)]
@@ -729,6 +728,16 @@ def bokeh_page(doc):
                     coding_method.visible = True
                     label_column.visible = True
                     coding_method.value = data['Coding'][int(text_row.value)]
+            else:
+                category_type.visible = False
+                div_category.visible = False
+                coding_method.visible = False
+                label_column.visible = False
+                n_components.visible = False
+                base.visible = False
+                target.visible = False
+                tooltip.text = ''
+                tooltip.visible = False
 
         source.data = dict(data)
 
