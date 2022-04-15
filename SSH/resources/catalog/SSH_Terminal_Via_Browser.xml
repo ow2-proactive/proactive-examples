@@ -4,12 +4,13 @@
         xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="SSH_Terminal_Via_Browser" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
     <variable name="USE_MANAGED_HOST_LIST" value="false" model="PA:Boolean" description="If true, change the SSH_TARGET_HOST variable model to the list of hosts managed in the resource manager" group="SSH Parameters" advanced="false" hidden="false"/>
-    <variable name="SSH_TARGET_HOST" value="my_target_host" model="" description="Depending on the USE_MANAGED_HOST_LIST value, the SSH target host can be either provided as string or as a value selected from the list of hosts managed by ProActive Resource Manager" group="SSH Parameters" advanced="false" hidden="false"/>
+    <variable name="SSH_TARGET_HOST" value="my_target_host"  description="Depending on the USE_MANAGED_HOST_LIST value, the SSH target host can be either provided as string or as a value selected from the list of hosts managed by ProActive Resource Manager" group="SSH Parameters" advanced="false" hidden="false"/>
     <variable name="SSH_PORT" value="22" model="PA:INTEGER" description="Port used by SSH in the TARGET_HOST" group="SSH Parameters" advanced="true" hidden="false"/>
     <variable name="SSH_USER" value="my_user" model="PA:NOT_EMPTY_STRING" description="SSH user name" group="SSH Parameters" advanced="false" hidden="false"/>
-    <variable name="USE_SSH_KEY" value="false" model="PA:Boolean" description="If true, show the SSH_KEY variable and hide to support private key authentication method instead of password authentication method" group="SSH Parameters" advanced="false" hidden="false"/>
-    <variable name="SSH_KEY" value="${SSH_USER}"  description="SSH private key" group="SSH Parameters" advanced="false" hidden="false"/>
-    <variable name="SSH_KEY_HANDLER" value="" model="PA:SPEL(variables[&#39;USE_SSH_KEY&#39;] == &#39;false&#39; ? hideVar(&#39;SSH_KEY&#39;) : showVar(&#39;SSH_KEY&#39;) &amp;&amp; (models[&#39;SSH_KEY&#39;] = &#39;PA:CREDENTIAL&#39;) instanceof T(String))"  group="SSH Parameters" advanced="false" hidden="true" description="Allows users to use either the SSH Password Authentication method or the Private Key Authentication method "/>
+    <variable name="SSH_PASSWORD" value="ENC(dP8Lz2T+xXBd+XWKjUzijg==)" model="PA:HIDDEN" description="SSH server password" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="SSH_PRIVATE_KEY" value="${SSH_USER}@${SSH_TARGET_HOST}" model="PA:CREDENTIAL" description="SSH private key" group="SSH Connection" advanced="false" hidden="true"/>
+    <variable name="AUTHENTICATION_METHOD" value="SSH_PASSWORD" model="PA:LIST(SSH_PASSWORD,SSH_PRIVATE_KEY)" description="Authentication method to use either password or private key" group="SSH Connection" advanced="false" hidden="false"/>
+    <variable name="AUTHENTICATION_METHOD_HANDLER" value="" model="PA:SPEL(variables[&#39;AUTHENTICATION_METHOD&#39;] == &#39;SSH_PASSWORD&#39; ? showVar(&#39;SSH_PASSWORD&#39;) &amp;&amp; hideVar(&#39;SSH_PRIVATE_KEY&#39;) : showVar(&#39;SSH_PRIVATE_KEY&#39;) &amp;&amp; hideVar(&#39;SSH_PASSWORD&#39;))" description="Allows users to use either the SSH Password Authentication method or the Private Key Authentication method" group="SSH Connection" advanced="false" hidden="true"/>
     <variable name="MANAGED_HOST_LIST_HANDLER" value="" model="PA:SPEL(variables[&#39;USE_MANAGED_HOST_LIST&#39;] == &#39;true&#39; ? (models[&#39;SSH_TARGET_HOST&#39;] = &#39;PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/hosts)&#39;)  instanceof T(String) : true)" description="Allows users to either freely provide the target host or as to select from the list of hosts managed by ProActive Resource Manager" group="SSH Parameters" advanced="false" hidden="true"/>
     <variable name="INSTANCE_NAME" value="shell-terminal-${PA_JOB_ID}" model="PA:NOT_EMPTY_STRING" description="Name of SSH service instance" group="Deployment Parameters" advanced="true" hidden="false"/>
     <variable name="PROXYFIED" value="True" model="PA:Boolean" description="Whether the service should be accessed via the ProActive server proxy (for restricted access control)" group="Deployment Parameters" advanced="true" hidden="false"/>
@@ -67,11 +68,10 @@ if ("true".equalsIgnoreCase(proxified)) {
 }
 
 
-println("use SSH key: " + variables.get("USE_SSH_KEY"))
-if (variables.get("USE_SSH_KEY").equals("true")){
-    sshKey= credentials.get(variables.get("SSH_KEY"))
+if (variables.get("AUTHENTICATION_METHOD").equals("SSH_PRIVATE_KEY")){
+    sshKey= credentials.get(variables.get("SSH_PRIVATE_KEY"))
     File file = new File("ssh-key.pem")
-  file.write sshKey + "\n"
+    file.write sshKey + "\n"
 }
 ]]>
           </code>
@@ -128,20 +128,20 @@ if [ -z "$INSTANCE_NAME" ]; then
 fi
 
 PORT_OPTION="--ssh-port=$variables_SSH_PORT"
-
 USER_OPTION="--ssh-user=$variables_SSH_USER"
-
 VOLUME_OPTION=""
-KEY_OPTIONS=""
+AUTHENTICATION_OPTIONS=""
 keyPath=/tmp/pa/keys/$variables_PA_USER
 
-if [ "$variables_USE_SSH_KEY" = "true" ]; then
-    key="ssh-key.pem"
-  mkdir -p $keyPath
-  cp $key $keyPath
-  chmod 600 $keyPath/$key
-  KEY_OPTIONS="--ssh-auth=publickey --ssh-key=/keys/$key"
-  VOLUME_OPTION="-v $keyPath:/keys"
+if [ "$variables_AUTHENTICATION_METHOD" = "SSH_PRIVATE_KEY" ]; then
+	key="ssh-key.pem"
+  	mkdir -p $keyPath
+  	cp $key $keyPath
+  	chmod 600 $keyPath/$key
+  	AUTHENTICATION_OPTIONS="--ssh-auth=publickey --ssh-key=/keys/$key"
+  	VOLUME_OPTION="-v $keyPath:/keys"
+else
+	AUTHENTICATION_OPTIONS="--ssh-auth=password --ssh-pass=$variables_SSH_PASSWORD"
 fi
 
 echo "Pulling "$variables_PA_JOB_NAME" image"
@@ -160,11 +160,11 @@ else
     echo "Running $INSTANCE_NAME container"
 
     if [ "$TARGET_HOST" = "service-node" ]; then
-    echo docker run -d --name $INSTANCE_NAME $VOLUME_OPTION --network="compose_pa-network" -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=proactive-node $PORT_OPTION $USER_OPTION $KEY_OPTIONS
-    docker run -d --name $INSTANCE_NAME $VOLUME_OPTION --network="compose_pa-network" -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=proactive-node $PORT_OPTION $USER_OPTION $KEY_OPTIONS
+    echo docker run -d --name $INSTANCE_NAME $VOLUME_OPTION --network="compose_pa-network" -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=proactive-node $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
+    docker run -d --name $INSTANCE_NAME $VOLUME_OPTION --network="compose_pa-network" -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=proactive-node $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
     else
-    echo docker run -d --name $INSTANCE_NAME $VOLUME_OPTION -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=$TARGET_HOST $PORT_OPTION $USER_OPTION $KEY_OPTIONS
-    docker run -d --name $INSTANCE_NAME $VOLUME_OPTION -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=$TARGET_HOST $PORT_OPTION $USER_OPTION $KEY_OPTIONS
+    echo docker run -d --name $INSTANCE_NAME $VOLUME_OPTION -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=$TARGET_HOST $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
+    docker run -d --name $INSTANCE_NAME $VOLUME_OPTION -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=$TARGET_HOST $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
     fi
 fi
 
