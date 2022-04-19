@@ -1,37 +1,279 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.13" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Custom_Sentiment_Analysis_In_Bing_News" onTaskError="continueJobExecution" priority="normal" projectName="3. Mixed Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Custom_Sentiment_Analysis_In_Bing_News" projectName="3. Mixed Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
-    <variable name="NATIVE_SCHEDULER" value=""/>
-    <variable name="NATIVE_SCHEDULER_PARAMS" value=""/>
-    <variable name="NODE_ACCESS_TOKEN" value=""/>
-    <variable model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
-    <variable model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="True"/>
-    <variable model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda,docker://activeeon/cuda2)" name="CONTAINER_IMAGE" value=""/>
-    <variable model="PA:LIST(CSV, HTML)" name="OUTPUT_FORMAT" value="HTML"/>
-    <variable model="PA:LIST(languages, sentiment, keyPhrases)" name="FUNCTION" value="sentiment"/>
-    <variable name="DOCUMENTS_JSON" value=""/>
-    <variable name="SEARCH_TERM" value="Donald Trump"/>
-    <variable model="PA:Integer" name="COUNT" value="20"/>
-    <variable name="FRESHNESS" value=""/>
-    <variable name="MARKET" value="en-US"/>
-    <variable name="CATEGORY" value=""/>
-    <variable name="SORT_BY" value=""/>
+    <variable name="NATIVE_SCHEDULER" value=""  description="Name of the Native Scheduler node source to use when the workflow tasks must be deployed inside a cluster such as SLURM, LSF, etc." group="Resource Management" advanced="true" hidden="false"/>
+    <variable name="NATIVE_SCHEDULER_PARAMS" value=""  description="Parameters given to the native scheduler (SLURM, LSF, etc) while requesting a ProActive node used to deploy the workflow tasks." group="Resource Management" advanced="true" hidden="false"/>
+    <variable name="NODE_SOURCE_NAME" value=""  description="If not empty, the workflow tasks will be run only on nodes belonging to the specified node source." group="Resource Management" advanced="true" hidden="false"/>
+    <variable name="NODE_ACCESS_TOKEN" value=""  description="If not empty, the workflow tasks will be run only on nodes that contains the specified token." group="Resource Management" advanced="true" hidden="false"/>
+    <variable name="CONTAINER_PLATFORM" value="docker" model="PA:LIST(no-container,docker,podman,singularity)" description="Container platform used for executing the workflow tasks." group="Container Parameters" advanced="true" hidden="false"/>
+    <variable name="CONTAINER_GPU_ENABLED" value="True" model="PA:Boolean" description="If True, it will activate the use of GPU for the workflow tasks on the selected container platform." group="Container Parameters" advanced="true" hidden="false"/>
+    <variable name="CONTAINER_IMAGE" value="" model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda,docker://activeeon/cuda2)" description="Name of the container image being used to run the workflow tasks." group="Container Parameters" advanced="true" hidden="false"/>
   </variables>
   <description>
     <![CDATA[ Search for news related to a given search term using Azure Bing News API then perform a sentiment analysis. ]]>
   </description>
   <genericInformation>
-<info name="bucketName" value="deep-learning-workflows"/>
-<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_bing_news_search.png"/>
-<info name="PYTHON_COMMAND" value="python3"/>
-<info name="NS" value="$NATIVE_SCHEDULER"/>
-<info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
-<info name="Documentation" value="PML/PMLUserGuide.html#_mixed_workflows"/>
-<info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
-<info name="group" value="public-objects"/>
-</genericInformation>
+    <info name="bucketName" value="deep-learning-workflows"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_bing_news_search.png"/>
+    <info name="NS" value="$NATIVE_SCHEDULER"/>
+    <info name="PYTHON_COMMAND" value="python3"/>
+    <info name="Documentation" value="PML/PMLUserGuide.html#_mixed_workflows"/>
+    <info name="NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
+    <info name="NS_BATCH" value="$NATIVE_SCHEDULER_PARAMS"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
   <taskFlow>
-    <task fork="true" name="BingNews">
+    <task name="NewsTextExtractor" fork="true">
+      <description>
+        <![CDATA[ This task extracts news snippets from Bing News then prepares them as an custom format input for Predict_Text_Model task. ]]>
+      </description>
+      <depends>
+        <task ref="BingNews"/>
+      </depends>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw" language="groovy"></file>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import json
+import pandas as pd
+import os
+from os.path import basename, splitext, exists, join
+from os import remove, listdir, makedirs
+import shutil
+
+# Create output directory
+GLOBALSPACE = 'text_data/'
+DATASET_PATH = os.path.join(GLOBALSPACE,"BING_NEWS_TEXT")
+if exists(DATASET_PATH):
+    shutil.rmtree(DATASET_PATH)
+makedirs(DATASET_PATH)
+
+train_path=os.path.join(DATASET_PATH,"train.csv")
+test_path=os.path.join(DATASET_PATH,"test.csv")
+val_path=os.path.join(DATASET_PATH,"val.csv")
+
+# Get Google News search results
+OUTPUT_DATA=variables.get("BING_NEWS_SEARCH_OUTPUT")["value"]
+text_json={'documents':[]}
+# Extract news snippets and add 'unlabeled' as a label
+for document in OUTPUT_DATA:
+    description=document["description"]
+    text_json['documents'].append({'text': description, 'label':'unlabeled'})
+
+# Create a dataframe to prepare data export
+dataframe=pd.read_json(json.dumps(text_json['documents']).encode('utf-8'),orient='records')
+# Export data as a csv to the file "text.csv"
+dataframe.to_csv(test_path,columns=["text","label"],index=False,header=False)
+
+# Create empty "train.csv" and "val.csv"
+# THIS IS A TEMPORARY WORKAROUD
+# TODO avoid creating empty csv files
+open(train_path, 'a').close()
+open(val_path, 'a').close()
+
+
+# CODE TO EXPORT
+DATASET_ITERATOR_UNL="""
+text_field = data.Field(lower=True)#, tokenize=TOKENIZER)
+print("text_field=",text_field)
+label_field = data.Field(sequential=False)
+print("label_field",label_field)
+#Dataset of columns stored in CSV, TSV, or JSON format
+train, val, test = data.TabularDataset.splits(path=DATASET_PATH, train='train.csv',
+                                                  validation='val.csv', test='test.csv', format='csv',
+                                                  fields=[('text', text_field), ('label', label_field)])
+train_iter, val_iter, test_iter = data.BucketIterator.splits((train, val, test),
+                                                                  repeat=False,
+                                                             batch_sizes=(BATCH_SIZE,len(val),len(test)), sort_key=lambda x: len(x.text), device=DEVICE)
+
+
+text_field.build_vocab(test)
+label_field.build_vocab(test)
+"""
+
+variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR_UNL)
+variables.put("DATASET_PATH",DATASET_PATH)
+variables.put("IS_LABELED_DATA","False")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="$DATASET_PATH/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            268.22052001953125
+        </positionTop>
+        <positionLeft>
+            379.765625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Import_Model" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ Import a trained model by a deep learning algorithm. ]]>
+      </description>
+      <variables>
+        <variable name="MODEL_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/models/basic_sentiment_analysis.zip" inherited="false"  description="Valid URL specified by the user referencing the model that needs to be deployed."  advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_import_model_2"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw" language="groovy"></file>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw" language="groovy"></file>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning/resources/Import_Model_Script/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <outputFiles>
+        <files  includes="$MODEL_FOLDER/**" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            267.092041015625
+        </positionTop>
+        <positionLeft>
+            675.9722900390625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Predict_Text_Classification_Model" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ Predict a model using a text classification network. ]]>
+      </description>
+      <variables>
+        <variable name="LOSS_FUNCTION" value="NLLLoss" inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" description="Function used to compute the loss."  advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_predict_text_classification_model"/>
+      </genericInformation>
+      <depends>
+        <task ref="NewsTextExtractor"/>
+        <task ref="Import_Model"/>
+        <task ref="RNN"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$MODEL_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw" language="groovy"></file>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw" language="groovy"></file>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning/resources/Predict_Text_Classification_Model_Script/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            396.1632080078125
+        </positionTop>
+        <positionLeft>
+            435.72052001953125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Preview_Results" 
+    
+    
+    
+    preciousResult="true" 
+    fork="true">
+      <description>
+        <![CDATA[ Preview the results of the predictions generated by the trained model. ]]>
+      </description>
+      <variables>
+        <variable name="OUTPUT_FILE" value="HTML" inherited="false"  description="Converts the prediction results into the specified file type."  advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_preview_results_2"/>
+      </genericInformation>
+      <depends>
+        <task ref="Predict_Text_Classification_Model"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$DATASET_PATH/**" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$OUTPUT_FOLDER/**" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <selection>
+        <script type="static">
+          <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw" language="groovy"></file>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw" language="groovy"></file>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning/resources/Preview_Results_Script/raw" language="cpython"></file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            503.45489501953125
+        </positionTop>
+        <positionLeft>
+            478.9757080078125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="BingNews" 
+    
+    
+    
+    
+    fork="true">
       <description>
         <![CDATA[ This task wraps the Bing News Search API of Microsoft which provides an experience similar to Bing.com/search by returning search results that Bing determines are relevant to a user's query. The results include Web pages and may also include images, videos, and more. The task requires this third-party credential : $BING_SEARCH_API_KEY which provides access to this API. Please refer to the User documentation to learn how to add third-party credentials.
 $COUNT (optional) is the number of news articles to return in the response.
@@ -42,21 +284,21 @@ $SORTED_BY (optional) is the order to return the trending topics in. For example
 The task's output $BING_NEWS_SEARCH_OUTPUT is the result of the API call in a JSON format. ]]>
       </description>
       <variables>
-        <variable inherited="true" name="SEARCH_TERM" value="activeeon"/>
-        <variable inherited="true" model="PA:Integer" name="COUNT" value="10"/>
-        <variable inherited="true" name="FRESHNESS" value=""/>
-        <variable inherited="true" name="MARKET" value=""/>
-        <variable inherited="true" name="CATEGORY" value=""/>
-        <variable inherited="true" name="SORT_BY" value=""/>
-        <variable inherited="true" model="PA:LIST(CSV, HTML)" name="OUTPUT_FORMAT" value="HTML"/>
+        <variable name="SEARCH_TERM" value="activeeon" inherited="true"  description="Used to specify the user&#39;s search terms."  advanced="false" hidden="false"/>
+        <variable name="COUNT" value="-1" inherited="true" model="PA:Integer" description="Used to page image results."  advanced="false" hidden="false"/>
+        <variable name="FRESHNESS" value="" inherited="true"  description="Control the freshness of the articles."  advanced="false" hidden="false"/>
+        <variable name="MARKET" value="" inherited="true"  description="Used to specify the market where the results come from, which is typically the market where the user is making the request from."  advanced="false" hidden="false"/>
+        <variable name="CATEGORY" value="" inherited="true"  description="Used to specify the news category to get news from. For a list of possible news categories that you may specify, see News categories by market. If not specified, the API returns up to 10 headline news articles."  advanced="false" hidden="false"/>
+        <variable name="SORT_BY" value="" inherited="true"  description="Sort the news articles."  advanced="false" hidden="false"/>
+        <variable name="OUTPUT_FORMAT" value="HTML" inherited="true" model="PA:LIST(CSV, HTML)" description="The format of the output file."  advanced="false" hidden="false"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_bing_news_search.png"/>
       </genericInformation>
-      <forkEnvironment>
+      <forkEnvironment >
         <envScript>
           <script>
-            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
+            <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw" language="groovy"></file>
           </script>
         </envScript>
       </forkEnvironment>
@@ -174,13 +416,13 @@ th {
 }"""
 html = ("""<table><tr><th>Title</th><th>Snippet</th><th>Url</th></tr>{0}</table>""").format("\n".join(table))
 html_container="""<!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="UTF-8">
-                  <meta name="description" content="Bing Video Search API Results">
-                    <style>{0}</style>
-                  </head>
-                  <body>{1}</body></html>""".format(css_style,html)
+                  <html>
+                    <head>
+                      <meta charset="UTF-8">
+                        <meta name="description" content="Bing Video Search API Results">
+                          <style>{0}</style>
+                        </head>
+                        <body>{1}</body></html>""".format(css_style,html)
 
 if OUTPUT_DATA != None and 'resultMetadata' in locals(): 
     dataframe=pd.read_html(html_container,header=0, encoding='utf-8')[0]
@@ -208,645 +450,55 @@ else:
       </scriptExecutable>
       <metadata>
         <positionTop>
-            184.515625
+            149.54861450195312
         </positionTop>
         <positionLeft>
-            368.546875
+            379.9913330078125
         </positionLeft>
       </metadata>
     </task>
-    <task fork="true" name="NewsTextExtractor">
-      <description>
-        <![CDATA[ This task extracts news snippets from Bing News then prepares them as an custom format input for Predict_Text_Model task. ]]>
-      </description>
-      <depends>
-        <task ref="BingNews"/>
-      </depends>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-import json
-import pandas as pd
-import os
-from os.path import basename, splitext, exists, join
-from os import remove, listdir, makedirs
-import shutil
-
-# Create output directory
-GLOBALSPACE = 'text_data/'
-DATASET_PATH = os.path.join(GLOBALSPACE,"BING_NEWS_TEXT")
-if exists(DATASET_PATH):
-    shutil.rmtree(DATASET_PATH)
-makedirs(DATASET_PATH)
-
-train_path=os.path.join(DATASET_PATH,"train.csv")
-test_path=os.path.join(DATASET_PATH,"test.csv")
-val_path=os.path.join(DATASET_PATH,"val.csv")
-
-# Get Google News search results
-OUTPUT_DATA=variables.get("BING_NEWS_SEARCH_OUTPUT")["value"]
-text_json={'documents':[]}
-# Extract news snippets and add 'unlabeled' as a label
-for document in OUTPUT_DATA:
-    description=document["description"]
-    text_json['documents'].append({'text': description, 'label':'unlabeled'})
-
-# Create a dataframe to prepare data export
-dataframe=pd.read_json(json.dumps(text_json['documents']).encode('utf-8'),orient='records')
-# Export data as a csv to the file "text.csv"
-dataframe.to_csv(test_path,columns=["text","label"],index=False,header=False)
-
-# Create empty "train.csv" and "val.csv"
-# THIS IS A TEMPORARY WORKAROUD
-# TODO avoid creating empty csv files
-open(train_path, 'a').close()
-open(val_path, 'a').close()
-
-
-# CODE TO EXPORT
-DATASET_ITERATOR_UNL="""
-text_field = data.Field(lower=True)#, tokenize=TOKENIZER)
-print("text_field=",text_field)
-label_field = data.Field(sequential=False)
-print("label_field",label_field)
-#Dataset of columns stored in CSV, TSV, or JSON format
-train, val, test = data.TabularDataset.splits(path=DATASET_PATH, train='train.csv',
-                                                  validation='val.csv', test='test.csv', format='csv',
-                                                  fields=[('text', text_field), ('label', label_field)])
-train_iter, val_iter, test_iter = data.BucketIterator.splits((train, val, test),
-                                                                  repeat=False,
-                                                             batch_sizes=(BATCH_SIZE,len(val),len(test)), sort_key=lambda x: len(x.text), device=DEVICE)
-
-
-text_field.build_vocab(test)
-label_field.build_vocab(test)
-"""
-
-variables.put("DATASET_ITERATOR_UNL",DATASET_ITERATOR_UNL)
-variables.put("DATASET_PATH",DATASET_PATH)
-variables.put("IS_LABELED_DATA","False")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-      <outputFiles>
-        <files accessMode="transferToGlobalSpace" includes="$DATASET_PATH/**"/>
-      </outputFiles>
-      <metadata>
-        <positionTop>
-            312.515625
-        </positionTop>
-        <positionLeft>
-            368.546875
-        </positionLeft>
-      </metadata>
-    </task>
-    <task fork="true" name="RNN">
-      <description>
-        <![CDATA[ Simple RNN Model ]]>
-      </description>
-      <variables>
-        <variable inherited="false" name="EMBEDDING_DIM" value="50"/>
-        <variable inherited="false" name="HIDDEN_DIM" value="40"/>
-        <variable inherited="false" name="BATCH_SIZE" value="2"/>
-        <variable inherited="false" name="DROPOUT" value="0.5"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png"/>
-      </genericInformation>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Create a RNN model")
-import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
-
-BATCH_SIZE=2
-HIDDEN_DIM=50
-EMBEDDING_DIM=50
-DROPOUT=0.5
-
-if 'variables' in locals():  
-  if variables.get("BATCH_SIZE") is not None:
-    BATCH_SIZE = variables.get("BATCH_SIZE")
-  else:
-    print("BATCH_SIZE not defined by the user. Using the default value:"+BATCH_SIZE)
-  if variables.get("HIDDEN_DIM") is not None:
-    HIDDEN_DIM = variables.get("HIDDEN_DIM")
-  else:
-    print("HIDDEN_DIM not defined by the user. Using the default value:"+HIDDEN_DIM)
-  if variables.get("EMBEDDING_DIM") is not None:
-    EMBEDDING_DIM = variables.get("EMBEDDING_DIM")
-  else:
-    print("EMBEDDING_DIM not defined by the user. Using the default value:"+EMBEDDING_DIM)
-  if variables.get("DROPOUT") is not None:
-    DROPOUT = variables.get("DROPOUT")
-  else:
-    print("DROPOUT not defined by the user. Using the default value:"+DROPOUT)
-
-
-MODEL_TYPE = 'RNN'
-MODEL_CLASS = """
-class RNN(nn.Module):
-
-    def __init__(self, embedding_dim, hidden_dim, vocab_size, label_size, use_gpu, batch_size, dropout=0.5):
-        super(RNN, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.use_gpu = use_gpu
-        self.batch_size = batch_size
-        self.dropout = dropout
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.RNN = nn.RNN(input_size=embedding_dim, hidden_size=hidden_dim)
-        self.hidden2label = nn.Linear(hidden_dim, label_size)
-        self.hidden = self.init_hidden()
-
-    def init_hidden(self):
-        if self.use_gpu:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim).cuda()))
-        else:
-            return (Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
-
-    def forward(self, sentence):
-        x = self.embeddings(sentence).view(len(sentence), self.batch_size, -1)
-        rnn_out, self.hidden = self.RNN(x, self.hidden)
-        y = self.hidden2label(rnn_out[-1])
-        log_probs = F.log_softmax(y)
-        return log_probs"""
+    <task name="RNN" 
     
-MODEL_DEF = """
-MODEL = RNN(embedding_dim="""+str(EMBEDDING_DIM)+""", hidden_dim="""+str(HIDDEN_DIM)+""", vocab_size=len(text_field.vocab), label_size=len(label_field.vocab)-1,use_gpu=USE_GPU, batch_size=BATCH_SIZE)
-"""
-print(MODEL_DEF)
-
-# Forward model
-try:
-    variables.put("MODEL_CLASS", MODEL_CLASS)
-    variables.put("MODEL_DEF", MODEL_DEF)
-    variables.put("BATCH_SIZE", BATCH_SIZE)
-    variables.put("HIDDEN_DIM", HIDDEN_DIM)
-    variables.put("EMBEDDING_DIM", EMBEDDING_DIM)
-    variables.put("DROPOUT", DROPOUT)
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END RNN model built")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-      <metadata>
-        <positionTop>
-            312.515625
-        </positionTop>
-        <positionLeft>
-            496.546875
-        </positionLeft>
-      </metadata>
-    </task>
-    <task fork="true" name="Import_Model">
-      <description>
-        <![CDATA[ Import a trained model by a deep learning algorithm. ]]>
-      </description>
-      <variables>
-        <variable inherited="false" name="MODEL_URL" value="https://s3.eu-west-2.amazonaws.com/activeeon-public/models/basic_sentiment_analysis.zip"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png"/>
-      </genericInformation>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Import_Model")
-
-import wget
-import uuid
-import shutil
-import zipfile
-
-from os.path import join, exists
-from os import remove, listdir, makedirs
-
-# Load a trained model on ResNet-18 with two classes [ants, bees]
-MODEL_URL = 'https://s3.eu-west-2.amazonaws.com/activeeon-public/models/model_resnet18.zip'
-
-if 'variables' in locals():
-  GLOBALSPACE = str(variables.get("PA_SCHEDULER_HOME")) + '/data/defaultglobal/'
-  MODEL_URL = variables.get("MODEL_URL")
-
-print("MODEL_URL:   " + MODEL_URL)
-assert MODEL_URL is not None
-
-# Get an unique ID
-ID = str(uuid.uuid4())
-
-
-# Create an empty dir
-MODEL_FOLDER = 'text_models/'
-MODEL_FOLDER =  join(MODEL_FOLDER, ID)
-
-if exists(MODEL_FOLDER):
-  shutil.rmtree(MODEL_FOLDER)
-makedirs(MODEL_FOLDER)
-print("MODEL_FOLDER: " + MODEL_FOLDER)
-
-print("Downloading...")
-filename = wget.download(MODEL_URL, MODEL_FOLDER)
-print("FILENAME: " + filename)
-print("OK")
-
-print("Extracting...")
-dataset_zip = zipfile.ZipFile(filename)
-dataset_zip.extractall(MODEL_FOLDER)
-dataset_zip.close()
-remove(filename)
-print("OK")
-
-MODEL_PATH = None
-LABELS_PATH = None
-TEXT_PATH = None 
-for file in listdir(MODEL_FOLDER):
-  if file.endswith(".pt"):
-    MODEL_PATH = join(MODEL_FOLDER, file)
-  if file.endswith("label.pkl"):
-    LABELS_PATH = join(MODEL_FOLDER, file)
-  if file.endswith("text.pkl"):
-    TEXT_PATH = join(MODEL_FOLDER, file)
-  if file.endswith(".txt"):
-    LABELS_PATH = join(MODEL_FOLDER, file)
-
-print("Model information: ")
-print("MODEL_PATH:  " + MODEL_PATH)
-print("LABELS_PATH: " + LABELS_PATH)
-print("TEXT_PATH: " + TEXT_PATH)
-assert MODEL_PATH is not None
-assert LABELS_PATH is not None
-
-if 'variables' in locals():
-  variables.put("MODEL_PATH", MODEL_PATH)
-  variables.put("LABELS_PATH", LABELS_PATH)
-  variables.put("TEXT_PATH", TEXT_PATH)
-  variables.put("MODEL_FOLDER", MODEL_FOLDER)
-
-print("END Import_Model")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-      <outputFiles>
-        <files accessMode="transferToGlobalSpace" includes="$MODEL_FOLDER/**"/>
-      </outputFiles>
-      <metadata>
-        <positionTop>
-            312.515625
-        </positionTop>
-        <positionLeft>
-            624.546875
-        </positionLeft>
-      </metadata>
-    </task>
-    <task fork="true" name="Predict_Text_Model">
-      <description>
-        <![CDATA[ Predict results based on new data ]]>
-      </description>
-      <variables>
-        <variable inherited="false" model="PA:List(L1Loss, MSELoss, CrossEntropyLoss, NLLLoss)" name="LOSS_FUNCTION" value="NLLLoss"/>
-      </variables>
-      <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/predict.png"/>
-      </genericInformation>
-      <depends>
-        <task ref="NewsTextExtractor"/>
-        <task ref="RNN"/>
-        <task ref="Import_Model"/>
-      </depends>
-      <inputFiles>
-        <files accessMode="transferFromGlobalSpace" includes="$DATASET_PATH/**"/>
-        <files accessMode="transferFromGlobalSpace" includes="$MODEL_FOLDER/**"/>
-      </inputFiles>
-      <forkEnvironment javaHome="/usr">
-        <envScript>
-          <script>
-            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
-          </script>
-        </envScript>
-      </forkEnvironment>
-      <scriptExecutable>
-        <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Prediction")
-
-from torchtext import data
-from torchtext import datasets
-from torchtext import vocab
-from torchtext.vocab import Vectors, FastText, GloVe, CharNGram
-from tqdm import tqdm
-import time, random
-import os
-from torch.autograd import Variable
-import torch.optim as optim
-import time
-#import spacy
-from itertools import *
-import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
-import pandas as pd
-import dill as pickle
-
-pd.options.display.max_colwidth = 500
-DEVICE = -1
-#-------------------------main code --------------------------
-DATASET_ITERATOR_UNL = None
-DATASET_ITERATOR = None
-#--------Get varaiables from previous tasks--------
-if 'variables' in locals():
-    if variables.get("MODEL_PATH") is not None:
-        MODEL_PATH = variables.get("MODEL_PATH")
-    if variables.get("LOSS_FUNCTION") is not None:
-        LOSS_FUNCTION = variables.get("LOSS_FUNCTION")
-    if variables.get("BATCH_SIZE") is not None:
-        BATCH_SIZE = variables.get("BATCH_SIZE")
-    if variables.get("USE_GPU") is not None:
-        USE_GPU = variables.get("USE_GPU")
-    if variables.get("DEVICE") is not None:
-        DEVICE = variables.get("DEVICE") 
-    if variables.get("IS_LABELED_DATA") is not None:
-        IS_LABELED_DATA = variables.get("IS_LABELED_DATA")
-    if variables.get("vocab_size") is not None:
-        vocab_size = variables.get("vocab_size")
-    if variables.get("label_size") is not None:
-        label_size = variables.get("label_size")
-    if variables.get("BATCH_SIZE") is not None:
-        label_size = variables.get("BATCH_SIZE")
-    if variables.get("MODEL_CLASS") is not None:
-        MODEL_CLASS = variables.get("MODEL_CLASS")
-    if variables.get("MODEL_DEF") is not None:
-        MODEL_DEF = variables.get("MODEL_DEF")
-
-
-#--------Load Dataset--------
-
-if 'variables' in locals():
-    if variables.get("DATASET_PATH") is not None:
-        DATASET_PATH = variables.get("DATASET_PATH")
-    if variables.get("DATASET_ITERATOR") is not None:
-        DATASET_ITERATOR = variables.get("DATASET_ITERATOR")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR)
-    if variables.get("DATASET_ITERATOR_UNL") is not None:
-        DATASET_ITERATOR_UNL = variables.get("DATASET_ITERATOR_UNL")
-        DATASET_PATH = variables.get("DATASET_PATH")
-        exec(DATASET_ITERATOR_UNL)
-    #Load model files
-    if variables.get("LABELS_PATH") is not None:
-        LABELS_PATH = variables.get("LABELS_PATH")
-    if variables.get("TEXT_PATH") is not None:
-        TEXT_PATH = variables.get("TEXT_PATH")
-   
-#-------Main--------
-def evaluate(model, test, data_iter, label_field, loss_function, name):
-    model.eval()
-    avg_loss = 0.0
-    truth_res = []
-    pred_res = []
-    i=0
-    acc = 0
-    pd.options.display.max_colwidth = 500
-    result =  pd.DataFrame(columns=['text','prediction','label'])
-    for batch in data_iter:
-        i=i+1
-        sent, label = batch.text, batch.label
-        label.data.sub_(1)
-        truth_res += list(label.data)
-        model.batch_size = len(test)
-        model.hidden = model.init_hidden()
-        pred = model(sent)
-        pred_label = pred.data.max(1)[1].numpy()
-        for i in range(model.batch_size):
-            test_fields = vars(test[i])
-            test_text = test_fields["text"]
-            test_label = test_fields["label"]
-            prede_label = pred_label[i]
-            gd_label = label[i]
-            result.loc[i] = [' '.join(test_text),label_field.vocab.itos[prede_label+1], test_label]
-        pred_res += [x for x in pred_label]
-        if name is 'test_labeled':
-            loss = loss_function(pred, label)
-            avg_loss += loss.data[0]
-    if name is 'test_labeled':
-        avg_loss /= len(test)
-        acc = get_accuracy(truth_res, pred_res)
-        print(name + ': loss %.2f acc %.1f' % (avg_loss, acc*100))
-    return acc, result
     
-def get_accuracy(truth, pred):
-     assert len(truth)==len(pred)
-     right = 0
-     for i in range(len(truth)):
-         if truth[i]==pred[i]:
-             right += 1.0
-     return right/len(truth)
-     
-LOSS ="""loss_function = nn."""+LOSS_FUNCTION+"""()"""
-
-exec(LOSS)
-
-
-label_field = pickle.load(open(LABELS_PATH,'rb'))
-text_field = pickle.load(open(TEXT_PATH,'rb'))
-exec(MODEL_CLASS)
-
-MODEL=torch.load(MODEL_PATH)
-if variables.get("DATASET_ITERATOR_UNL") is not None:
-    print('I am testing the unlabeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_unlabeled')
-else:
-    print('I am testing the labeled dataset')
-    test_acc, results = evaluate(MODEL, test, test_iter, label_field, loss_function, 'test_labeled')
-
-#------plot results-----
-# Forward results for preview 
-try:
-    variables.put("PREDICT_DATA_JSON", results.to_json(orient='split'))
-except NameError as err:
-    print("{0}".format(err))
-    print("Warning: this script is running outside from ProActive.")
-    pass
-
-print("END Prediction")
-]]>
-          </code>
-        </script>
-      </scriptExecutable>
-      <controlFlow block="none"/>
-      <metadata>
-        <positionTop>
-            440.515625
-        </positionTop>
-        <positionLeft>
-            496.546875
-        </positionLeft>
-      </metadata>
-    </task>
-    <task fork="true" name="Export_Results">
+    
+    
+    fork="true">
       <description>
-        <![CDATA[ Preview the predicted results ]]>
+        <![CDATA[ RNN is a class of artificial neural network where connections between units form a directed cycle. ]]>
       </description>
       <variables>
-        <variable inherited="false" name="OUTPUT_FILE" value="HTML"/>
+        <variable name="EMBEDDING_DIM" value="50" inherited="false"  description="Dimension of the vectors that will be used to map words in some languages."  advanced="false" hidden="false"/>
+        <variable name="HIDDEN_DIM" value="40" inherited="false"  description="Hidden dimension of the neural network."  advanced="false" hidden="false"/>
+        <variable name="DROPOUT" value="0.5" inherited="false"  description="Percentage of the neurons that will be ignored during the training."  advanced="false" hidden="false"/>
       </variables>
       <genericInformation>
-        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/export_results.png"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png"/>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_rnn"/>
       </genericInformation>
-      <depends>
-        <task ref="Predict_Text_Model"/>
-      </depends>
-      <forkEnvironment javaHome="/usr">
+      <selection>
+        <script type="static">
+          <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw" language="groovy"></file>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr" >
         <envScript>
           <script>
-            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
+            <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw" language="groovy"></file>
           </script>
         </envScript>
       </forkEnvironment>
       <scriptExecutable>
         <script>
-          <code language="cpython">
-            <![CDATA[
-print("BEGIN Export_Results")
-
-import base64
-import os.path
-import pandas as pd
-import numpy as np
-
-from pandas.io.json import json_normalize
-from PIL import Image
-from io import BytesIO
-
-PREDICT_DATA = variables.get("PREDICT_DATA_JSON")
-OUTPUT_FILE = variables.get("OUTPUT_FILE")
-   
-if PREDICT_DATA != None: 
-  prediction_result = pd.read_json(PREDICT_DATA, orient='split')      
- 
-def get_thumbnail(path):
-  i = Image.open(path)
-  i.thumbnail((150, 150), Image.LANCZOS)
-  return i
-
-def image_base64(im):
-  if isinstance(im, str):
-    im = get_thumbnail(im)
-  with BytesIO() as buffer:
-    im.save(buffer, 'jpeg')
-    return base64.b64encode(buffer.getvalue()).decode()
-
-def image_formatter(im):
-  return f'<img src="data:image/jpeg;base64,{image_base64(im)}" height="150" width="150">'
-    
-df = pd.DataFrame(prediction_result)
-
-result = ''
-with pd.option_context('display.max_colwidth', -1):
-  #result = df.to_html(escape=False)
-  result = df.to_html(escape=False, formatters=dict(Image=image_formatter), columns=["text","prediction"])
-
-css_style="""
-table {
-  border: 1px solid #999999;
-  text-align: center;
-  border-collapse: collapse;
-  width: 100%; 
-}
-td {
-  border: 1px solid #999999;         
-  padding: 3px 2px;
-  font-size: 13px;
-  border-bottom: 1px solid #999999;
-  #border-bottom: 1px solid #FF8C00;  
-  border-bottom: 1px solid #0B6FA4;   
-}
-th {
-  font-size: 17px;
-  font-weight: bold;
-  color: #FFFFFF;
-  text-align: center;
-  background: #0B6FA4;
-  #background: #E7702A;       
-  #border-left: 2px solid #999999
-  border-bottom: 1px solid #FF8C00;            
-}
-"""
-result = """<!DOCTYPE html>
-                  <html>
-                    <head>
-                      <meta charset="UTF-8">
-                        <meta name="description" content="Face API">
-                          <style>{0}</style>
-                        </head>
-                        <body>{1}</body></html>
-""".format(css_style, result)
-print(result)
-
-if OUTPUT_FILE == 'HTML':
-  result = result.encode('utf-8')
-  resultMetadata.put("file.extension", ".html")
-  resultMetadata.put("file.name", "result.html")
-  resultMetadata.put("content.type", "text/html")
-elif OUTPUT_FILE == 'CSV':
-  #result = prediction_result.to_csv()
-  result = df.to_csv()    
-  resultMetadata.put("file.extension", ".csv")
-  resultMetadata.put("file.name", "result.csv")
-  resultMetadata.put("content.type", "text/csv")    
-else:
-  print('It is not possible to export the data')
-
-print("END Export_Results")
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/deep-learning/resources/RNN_Script/raw" language="cpython"></file>
         </script>
       </scriptExecutable>
-      <controlFlow block="none"/>
+      <controlFlow block="none"></controlFlow>
       <metadata>
         <positionTop>
-            568.515625
+            258.9149475097656
         </positionTop>
         <positionLeft>
-            496.546875
+            516.9791870117188
         </positionLeft>
       </metadata>
     </task>
@@ -860,19 +512,19 @@ print("END Export_Results")
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2144px;
-            height:3048px;
+            width:2386px;
+            height:2885px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-179.515625px;left:-363.546875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_4" style="top: 184.516px; left: 368.547px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task wraps the Bing News Search API of Microsoft which provides an experience similar to Bing.com/search by returning search results that Bing determines are relevant to a user's query. The results include Web pages and may also include images, videos, and more. The task requires this third-party credential : $BING_SEARCH_API_KEY which provides access to this API. Please refer to the User documentation to learn how to add third-party credentials.
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-144.54861450195312px;left:-374.765625px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_533" style="top: 268.229px; left: 379.766px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task extracts news snippets from Bing News then prepares them as an custom format input for Predict_Text_Model task."><img src="/studio/images/Python.png" width="20px">&nbsp;<span class="name">NewsTextExtractor</span></a></div><div class="task ui-draggable" id="jsPlumb_1_536" style="top: 267.1px; left: 675.973px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Import a trained model by a deep learning algorithm."><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png" width="20px">&nbsp;<span class="name">Import_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_539" style="top: 396.171px; left: 435.721px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Predict a model using a text classification network."><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_predict.png" width="20px">&nbsp;<span class="name">Predict_Text_Classification_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_542" style="top: 503.463px; left: 478.976px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Preview the results of the predictions generated by the trained model."><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_export_results.png" width="20px">&nbsp;<span class="name">Preview_Results</span></a></div><div class="task ui-draggable" id="jsPlumb_1_545" style="top: 149.557px; left: 379.992px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task wraps the Bing News Search API of Microsoft which provides an experience similar to Bing.com/search by returning search results that Bing determines are relevant to a user's query. The results include Web pages and may also include images, videos, and more. The task requires this third-party credential : $BING_SEARCH_API_KEY which provides access to this API. Please refer to the User documentation to learn how to add third-party credentials.
 $COUNT (optional) is the number of news articles to return in the response.
 $FRESHNESS (optional) filter news articles by {&quot;Day&quot;, &quot;Week&quot;, &quot;Month&quot;}.
 $MARKET is the market where the results come from. Market codes are listed here: https://docs.microsoft.com/en-us/rest/api/cognitiveservices/bing-news-api-v7-reference#market-codes
 $CATEGORY (optional) is the category of articles to return. For example, Sports articles or Entertainment articles.
 $SORTED_BY (optional) is the order to return the trending topics in. For example, sorted by &quot;Date&quot;
-The task's output $BING_NEWS_SEARCH_OUTPUT is the result of the API call in a JSON format."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_bing_news_search.png" width="20px">&nbsp;<span class="name">BingNews</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_7" style="top: 312.516px; left: 368.547px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task extracts news snippets from Bing News then prepares them as an custom format input for Predict_Text_Model task."><img src="/studio/images/Python.png" width="20px">&nbsp;<span class="name">NewsTextExtractor</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_10" style="top: 312.516px; left: 496.547px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Simple RNN Model"><img src="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png" width="20px">&nbsp;<span class="name">RNN</span></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_13" style="top: 312.516px; left: 624.547px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Import a trained model by a deep learning algorithm."><img src="/automation-dashboard/styles/patterns/img/wf-icons/import_deep_model.png" width="20px">&nbsp;<span class="name">Import_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_16" style="top: 440.516px; left: 496.547px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Predict results based on new data"><img src="/automation-dashboard/styles/patterns/img/wf-icons/predict.png" width="20px">&nbsp;<span class="name">Predict_Text_Model</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_19" style="top: 568.516px; left: 496.547px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Preview the predicted results"><img src="/automation-dashboard/styles/patterns/img/wf-icons/export_results.png" width="20px">&nbsp;<span class="name">Export_Results</span></a></div><svg style="position:absolute;left:408.5px;top:224.5px" width="30" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9 88 C 19 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:417.5px;top:352.5px" width="151" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 130 88 C 140 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M113.97568,60.999424000000005 L99.01298341154074,45.99550081965448 L101.37002406137537,54.908657352276755 L92.92221676381749,58.6011567582791 L113.97568,60.999424000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M113.97568,60.999424000000005 L99.01298341154074,45.99550081965448 L101.37002406137537,54.908657352276755 L92.92221676381749,58.6011567582791 L113.97568,60.999424000000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:536.5px;top:352.5px" width="32" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 11 88 C 21 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M12.893024,66.303232 L16.31083689897854,45.39106915184926 L10.460052179499373,52.5162581434697 L2.523863042448242,47.824040972349884 L12.893024,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M12.893024,66.303232 L16.31083689897854,45.39106915184926 L10.460052179499373,52.5162581434697 L2.523863042448242,47.824040972349884 L12.893024,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:547.5px;top:352.5px" width="138" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 127 50 117 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.488729749999997,61.4125935 L34.40770975825615,58.036756505389754 L25.797153751870646,54.7415592031181 L27.736675461374258,45.728332503519106 L13.488729749999997,61.4125935" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.488729749999997,61.4125935 L34.40770975825615,58.036756505389754 L25.797153751870646,54.7415592031181 L27.736675461374258,45.728332503519106 L13.488729749999997,61.4125935" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:537.5px;top:480.5px" width="31" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 20 50 10 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.97856,66.303232 L8.153339129365806,47.69289562387942 L0.27782929033988846,52.486260285096634 L-5.663632585537553,45.43650633353954 L-1.97856,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.97856,66.303232 L8.153339129365806,47.69289562387942 L0.27782929033988846,52.486260285096634 L-5.663632585537553,45.43650633353954 L-1.97856,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 409px; top: 215px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 418px; top: 343px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 418px; top: 303px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 537px; top: 343px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 665px; top: 343px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 548px; top: 471px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 548px; top: 431px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 538px; top: 599px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 538px; top: 559px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+The task's output $BING_NEWS_SEARCH_OUTPUT is the result of the API call in a JSON format."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure/api_bing_news_search.png" width="20px">&nbsp;<span class="name">BingNews</span></a></div><div class="task ui-draggable active-task" id="jsPlumb_1_548" style="top: 258.915px; left: 516.983px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="RNN is a class of artificial neural network where connections between units form a directed cycle."><img src="/automation-dashboard/styles/patterns/img/wf-icons/deep_text_classification.png" width="20px">&nbsp;<span class="name">RNN</span></a></div><svg style="position:absolute;left:419.5px;top:188.5px" width="30" height="80" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9 79 C 19 29 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.11506075,59.41104325000002 L15.014629551615812,38.58333662729514 L9.000949425784741,45.571587577581944 L1.1751738791977369,40.6974479515104 L11.11506075,59.41104325000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.11506075,59.41104325000002 L15.014629551615812,38.58333662729514 L9.000949425784741,45.571587577581944 L1.1751738791977369,40.6974479515104 L11.11506075,59.41104325000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:428.5px;top:307.5px" width="111.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 90.5 88 C 100.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M81.694203125,62.2538125 L69.47258728935412,44.943927856655606 L70.2946015013283,54.12675381794402 L61.34552860729815,56.343529480327305 L81.694203125,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M81.694203125,62.2538125 L69.47258728935412,44.943927856655606 L70.2946015013283,54.12675381794402 L61.34552860729815,56.343529480327305 L81.694203125,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:519px;top:306.5px" width="217.5" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 89 C -10 39 206.5 50 196.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.172271999999996,60.226527999999995 L51.35000378801664,60.936229567441586 L43.533776797892955,56.04679241794657 L47.17026820596322,47.574724769548624 L30.172271999999996,60.226527999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.172271999999996,60.226527999999995 L51.35000378801664,60.936229567441586 L43.533776797892955,56.04679241794657 L47.17026820596322,47.574724769548624 L30.172271999999996,60.226527999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:519px;top:435.5px" width="25" height="68" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4 67 C 14 17 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.4127565,49.97915325000001 L11.891439752551529,29.510053860476024 L5.361664229490149,36.01866597201166 L-2.069047525436817,30.561146130985872 L6.4127565,49.97915325000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.4127565,49.97915325000001 L11.891439752551529,29.510053860476024 L5.361664229490149,36.01866597201166 L-2.069047525436817,30.561146130985872 L6.4127565,49.97915325000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 429px; top: 298px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 429px; top: 258px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 716px; top: 297px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 519.5px; top: 426px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 519.5px; top: 386px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 523.5px; top: 533px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 523.5px; top: 493px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 420px; top: 179px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 557px; top: 289px; visibility: visible;" dragid="jsPlumb_1_562" elid="jsPlumb_1_548"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:519px;top:298.5px" width="58.5" height="98" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 97 C -10 47 47.5 50 37.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M1.0199999999999987,72.51200000000001 L16.261642595837422,57.791526808531124 L7.311878739578011,60.00551120711949 L3.7551538029568974,51.499648068953114 L1.0199999999999987,72.51200000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg></div></div>
     </body>
 </html>
  ]]>
