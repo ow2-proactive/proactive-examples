@@ -516,7 +516,7 @@ def bokeh_page(doc):
         title='Column Type',
         width=140,
         height=25,
-        disabled=True
+        visible=False
     )
     coding_method = Select(
         options=['Auto', 'Label', 'OneHot', 'Dummy', 'Binary', 'BaseN', 'Hash', 'Target'],
@@ -567,12 +567,19 @@ def bokeh_page(doc):
             text_type.visible = False
             category_type.visible = False
             div_category.visible = False
-            label_column.visible = False
+            with open('label_column.txt') as f:
+                LABEL_COLUMN = f.read()
+            f.close()
+            if LABEL_COLUMN in list(data['Name']):
+                label_column.value = LABEL_COLUMN
+            else:
+                label_column.value = 'Select a label'
+            label_column.visible = True
             coding_method.visible = False
             tooltip.text = ''
             tooltip.visible = False
             edit_btn.visible = False
-            delete_btn.visible = False
+            delete_btn.visible = True
             target.visible = False
             base.visible = False
             n_components.visible = False
@@ -589,6 +596,7 @@ def bokeh_page(doc):
             n_components.visible = False
             tooltip.text = ''
             tooltip.visible = False
+            edit_btn.disabled = True
             edit_btn.visible = True
             delete_btn.visible = False
             button.visible = True
@@ -597,6 +605,8 @@ def bokeh_page(doc):
             text_type.visible = True
             if len(data['Name']) == 1:
                 delete_btn.disabled = True
+            edit_btn.visible = True
+            edit_btn.disabled = True
             text_row.value = str(pd.DataFrame(data)["Name"].tolist().index(selected_column))
             name = list(data['Name'])[int(text_row.value)]
             old_type = list(data['Type'])[int(text_row.value)]
@@ -742,7 +752,7 @@ def bokeh_page(doc):
                     category_type.labels = labels
                     coding_method.visible = True
                     label_column.visible = True
-                    label_column.value = 'Select a column'
+                    label_column.value = 'Select a label'
                     coding_method.value = 'Auto'
                 else:
                     category_type.visible = True
@@ -857,6 +867,23 @@ def bokeh_page(doc):
         dataframe = pd.DataFrame.from_dict(source.data)
         data = dataframe.reset_index(drop=True)
 
+        with open('label_column.txt') as f:
+            old_label = f.read()
+        f.close()
+        if label_column.value != old_label:
+            if label_column.value != 'Select a label':
+                f= open("label_column.txt","w+")
+                f.write(label_column.value)
+                f.close()
+            else:
+                f= open("label_column.txt","w+")
+                f.write('')
+                f.close()
+            updates_dict["label"] = False
+            if True not in updates_dict.values() :
+                error_message.text =''
+                edit_btn.disabled = True
+
         column_type = text_type.value
         selected_column = column_name.value
 
@@ -915,7 +942,7 @@ def bokeh_page(doc):
                         variable = data['Name'][i]
                         data['Cardinality'][i] = dataset[variable].unique().size
 
-        elif selected_column != 'All':
+        elif selected_column != 'All' and selected_column != 'Select a column':
             if selected_column not in list(data['Name']):
                 df = pd.read_csv(file_path, sep=FILE_DELIMITER)
                 df.columns.values[int(text_row.value)] = list(data['Name'])[int(text_row.value)]
@@ -932,14 +959,6 @@ def bokeh_page(doc):
                 error_message.text = ''
                 cat_type = category_type.active
                 coding = coding_method.value
-                if label_column.value != 'Select a label':
-                    f= open("label_column.txt","w+")
-                    f.write(label_column.value)
-                    f.close()
-                else:
-                    f= open("label_column.txt","w+")
-                    f.write('')
-                    f.close()
                 if cat_type is None:
                     text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                            '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
@@ -971,8 +990,6 @@ def bokeh_page(doc):
                     i = column_name.options.index(selected_column)
                     column_name.options = column_name.options[:i]+[list(data['Name'])[int(text_row.value)]]+column_name.options[i+1:]
                     column_name.value = list(data['Name'])[int(text_row.value)]
-                    if label_confirm.value == column_name.value:
-                        label_column.value = label_confirm.value
                     button.disabled = False
                     error_message.text = '<div style="width:100%;position:relative;padding:.75rem ' \
                                          '1.25rem;margin-bottom:1rem;border:1px solid ' \
@@ -1090,9 +1107,21 @@ def bokeh_page(doc):
                     columns_names = ['Select a column', 'All']
                     data_names = list((data['Name']))
                     column_name.options = [*columns_names, *data_names]
-                    edit_btn.visible = False
+                    label_column.options = [*columns_names, *data_names]
+                    edit_btn.visible = True
+                    edit_btn.disabled = True
                     delete_btn.visible = True
                     column_name.value = 'Select a column'
+                    with open('label_column.txt') as f:
+                        LABEL_COLUMN = f.read()
+                    f.close()
+                    if LABEL_COLUMN == column_name.value:
+                        f= open("label_column.txt","w+")
+                        f.write('')
+                        f.close()
+                        LABEL_COLUMN = 'Select a label'
+                    label_column.value = LABEL_COLUMN
+                    label_column.visible = True
                     error_message.visible = True
                     error_message.text += text_delete_column_info
                     source.data = dict(data)
@@ -1106,6 +1135,7 @@ def bokeh_page(doc):
                     original_data['index'] = list(range(len(original_data['Name'])))
                     if not pd.DataFrame.to_dict(original_data) == pd.DataFrame.to_dict(new_data):
                         restore_btn.visible = True
+                        edit_btn.visible = True
                         edit_btn.disabled = True
 
                     variable_options_dict_list = list()
@@ -1142,16 +1172,17 @@ def bokeh_page(doc):
             columns_names = ['Select a column', 'All']
             data_names = list((data['Name']))
             column_name.options = [*columns_names, *data_names]
-            edit_btn.visible = False
-            delete_btn.visible = False
+            edit_btn.visible = True
+            edit_btn.disabled = True
+            delete_btn.visible = True
             restore_btn.visible = False
-            label_column.visible = True
-            label_confirm.value = ''
             column_name.value = 'Select a column'
             error_message.text = ''
             f= open("label_column.txt","w+")
             f.write('')
             f.close()
+            label_column.value = 'Select a label'
+            label_column.visible = True
         except OSError:
             error_message.text = file_reading_exception
 
@@ -1162,6 +1193,7 @@ def bokeh_page(doc):
             name = list(data['Name'])[int(text_row.value)]
             if name in column_name.options:
                 column_name.value = name
+                text_type.visible = True
 
     def send_old_dataframe(attr, old, new):
         original_dataframe.to_csv(file_path_new, sep=FILE_DELIMITER, index=False, header=True)
@@ -1193,8 +1225,6 @@ def bokeh_page(doc):
         with open('label_column.txt') as f:
             old_label = f.read()
         f.close()
-        print("==============")
-        print(label, old_label)
         if old_label!=label:
             updates_dict["label"] = True
             error_message.text = save_new_changes_msg
@@ -1307,7 +1337,6 @@ def bokeh_page(doc):
 
         with open('label_column.txt') as f:
             LABEL_COLUMN = f.read()
-        label_confirm.value = LABEL_COLUMN
         if LABEL_COLUMN == '':
             error_message.text += '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                                   '1.25rem;margin-bottom:1rem;border:1px solid ' \
@@ -1435,8 +1464,6 @@ def bokeh_page(doc):
 
     error_message.visible = True
     button.on_click(display_encoded_dataframe)
-
-    label_confirm = TextInput(value="", title="", width=0, disabled=True, visible=False)
 
     layout = column(
         row(text_row, column_name, text_type, column(div_category, category_type), label_column, coding_method, base, n_components,
