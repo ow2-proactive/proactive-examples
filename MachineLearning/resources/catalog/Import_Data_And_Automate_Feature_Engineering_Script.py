@@ -455,8 +455,8 @@ def bokeh_page(doc):
                              'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border-color' \
                              ':#f5c6cb;"><strong>Error!</strong> Permission denied, Cannot open the file ' + file_path + '. Please make sure that the file is not in use by other background applications. </span></div> '
     save_new_changes_msg = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                              '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
-                              '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please don\'t forget to save the new changes. </span></div>'
+                           '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                           '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please don\'t forget to save the new changes. </span></div>'
     # Declaration of a dictionnary with the new updates to save
     updates_dict =	{
         "name": False,
@@ -1051,7 +1051,6 @@ def bokeh_page(doc):
                 column_name.options = column_name.options[:i]+[list(data['Name'])[int(text_row.value)]]+column_name.options[i+1:]
                 column_name.value = list(data['Name'])[int(text_row.value)]
 
-
         variable_options_dict_list = list()
 
         for s in list(data['Options']):
@@ -1081,10 +1080,23 @@ def bokeh_page(doc):
         dataframe = data
         source.data = dict(dataframe)
 
-
-        # Show up restore button after the save if new info is introduced!
+        # Update the dropdown list of label column
         dataframe = pd.DataFrame.from_dict(source.data)
         new_data = dataframe.reset_index(drop=True)
+        categorical_data_names =list(dataframe[dataframe.Type == "categorical"]['Name'])
+        label_column.options = ['Select a label', *categorical_data_names]
+        with open('label_column.txt') as f:
+            LABEL_COLUMN = f.read()
+        f.close()
+        if LABEL_COLUMN in categorical_data_names:
+            label_column.value = LABEL_COLUMN
+        else:
+            f= open("label_column.txt","w+")
+            f.write('')
+            f.close()
+            label_column.value = 'Select a label'
+
+        # Show up restore button after the save if new info is introduced!
         original_data['index'] = list(range(len(original_data['Name'])))
         if not pd.DataFrame.to_dict(original_data) == pd.DataFrame.to_dict(new_data):
             restore_btn.visible = True
@@ -1106,8 +1118,9 @@ def bokeh_page(doc):
                     df.to_csv(file_path, sep=FILE_DELIMITER, index=False, header=True)
                     columns_names = ['Select a column', 'All']
                     data_names = list((data['Name']))
+                    categorical_data_names =list(data[data.Type == "categorical"]['Name'])
                     column_name.options = [*columns_names, *data_names]
-                    label_column.options = [*columns_names, *data_names]
+                    label_column.options = ['Select a label', *categorical_data_names]
                     edit_btn.visible = True
                     edit_btn.disabled = True
                     delete_btn.visible = True
@@ -1253,10 +1266,10 @@ def bokeh_page(doc):
         height=25,
         disabled=False
     )
-    columns_names = ['Select a label']
-    dataframe = dict(source.data)
-    data_names = list((dataframe['Name']))
-    label_column.options = [*columns_names, *data_names]
+    dataframe = pd.DataFrame.from_dict(source.data)
+    data = dataframe.reset_index(drop=True)
+    categorical_data_names =list(dataframe[dataframe.Type == "categorical"]['Name'])
+    label_column.options = ['Select a label', *categorical_data_names]
     label_column.on_change('value', update_label_column_msg)
 
     error_message = Div(text='', visible=False)
