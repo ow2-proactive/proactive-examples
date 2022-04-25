@@ -4,37 +4,37 @@
 
 This module contains the Python script for the Import Data and Automate Feature Engineering task.
 """
-import os
-import ssl
-import uuid
 import ast
 import math
-import time
+import os
 import pickle
+import re
 import socket
+import ssl
+import time
 import urllib.request
+import uuid
+from io import StringIO
+from threading import Thread
+
+import category_encoders as ce
 import numpy as np
 import pandas as pd
 import yaml
-import category_encoders as ce
-
-from io import StringIO
-from threading import Thread
-from numpy import sort, array
-from flask import Flask, render_template, Response, request
-from tornado.ioloop import IOLoop
-from sklearn.preprocessing import scale, LabelEncoder
-from tensorflow.keras.models import load_model
-
 from bokeh.embed import server_document
 from bokeh.layouts import row, column, grid
 from bokeh.models import ColumnDataSource, TableColumn, DataTable, CustomJS
 from bokeh.models import Panel, Tabs
-from bokeh.models import RadioGroup, RadioButtonGroup, NumericInput
+from bokeh.models import RadioButtonGroup, NumericInput
 from bokeh.models import Select, Div, Button
 from bokeh.models.widgets import TextInput
 from bokeh.server.server import Server
 from bokeh.themes import Theme
+from flask import Flask, render_template, Response, request
+from numpy import sort, array
+from sklearn.preprocessing import scale, LabelEncoder
+from tensorflow.keras.models import load_model
+from tornado.ioloop import IOLoop
 
 pd.options.mode.chained_assignment = None  # default='warn'
 
@@ -96,26 +96,31 @@ file_path_params = os.path.join('.', ID + '.params.csv')
 open(file_path_new, 'a').close()
 open(file_path_params, 'a').close()
 
+
 # -------------------------------------------------------------
 # Configure network settings
 #
 def get_open_port():
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("",0))
+    s.bind(("", 0))
     s.listen(1)
     port = s.getsockname()[1]
     s.close()
     return port
+
+
 hostname = socket.gethostname()
 # local_ip = socket.gethostbyname(hostname)
 external_ip = urllib.request.urlopen('https://api.ipify.org').read().decode('utf8')
-bokeh_port = get_open_port() # 5007
-flask_port = get_open_port() # 8001
-bokeh_url = "http://"+external_ip+":"+str(bokeh_port)
-flask_url = "http://"+external_ip+":"+str(flask_port)
+bokeh_port = get_open_port()  # 5007
+flask_port = get_open_port()  # 8001
+bokeh_url = "http://" + external_ip + ":" + str(bokeh_port)
+flask_url = "http://" + external_ip + ":" + str(flask_port)
 
-schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "AutoFeat", flask_url, "/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png")
+schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "AutoFeat", flask_url,
+                                    "/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png")
+
 
 # -------------------------------------------------------------
 # AutoFeat
@@ -215,6 +220,7 @@ class DataTypeIdentifier(object):
             loaded_variable = pickle.load(file)
         return loaded_variable
 
+
 def bokeh_page(doc):
     def auto_mode(variable, cardinality, category):
         if cardinality < 15 and category == "Nominal":
@@ -225,6 +231,7 @@ def bokeh_page(doc):
             return "Ordinal"
         elif cardinality > 15 and category == "Ordinal":
             return "Binary"
+
     def encode_categorical_data(dataset, data):
         data = pd.DataFrame.from_dict(data)
         categorical_dataset = data[data.Type == "categorical"]
@@ -275,7 +282,7 @@ def bokeh_page(doc):
             # Create object for hash encoder
             variable_options = list(categorical_dataset["Options"][categorical_dataset.Name == variable])[0]
             if variable_options == '':
-                n=8
+                n = 8
             else:
                 variable_options_dict = ast.literal_eval(variable_options)
                 n = variable_options_dict[list(variable_options_dict.keys())[0]]
@@ -301,7 +308,7 @@ def bokeh_page(doc):
             # Create object for base_n encoder
             variable_options = list(categorical_dataset["Options"][categorical_dataset.Name == variable])[0]
             if variable_options == '':
-                n=2
+                n = 2
             else:
                 variable_options_dict = ast.literal_eval(variable_options)
             n = variable_options_dict[list(variable_options_dict.keys())[0]]
@@ -354,7 +361,6 @@ def bokeh_page(doc):
         return dataframe
 
     global file_path
-    # file_path = 'wine.csv'
     data = auto_detection(file_path)
     dataset = pd.read_csv(file_path, sep=FILE_DELIMITER)
     original_dataframe = pd.read_csv(file_path, sep=FILE_DELIMITER)
@@ -389,7 +395,7 @@ def bokeh_page(doc):
     data.loc[data.Type == "numerical", "Cardinality"] = '-'
 
     # Label_column.txt to save the label column
-    f= open("label_column.txt","w+")
+    f = open("label_column.txt", "w+")
     f.write("")
     f.close()
 
@@ -406,14 +412,29 @@ def bokeh_page(doc):
                                  '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
                                  '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please ' \
                                  'specify the target column for each of the dataframe columns, one by one.</span></div> '
+    text_missing_target_column = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
+                                 '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                                 '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please ' \
+                                 ' don\'t forget to specify the target column.</span></div> '
     text_missing_category_type = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                                  '1.25rem;margin-bottom:1rem;border:1px solid ' \
                                  'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border-color' \
                                  ':#f5c6cb;"><strong>Error!</strong> Please don\'t forget to specify the category type.</span></div> '
+    text_missing_type = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
+                        '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                        '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please don\'t forget to specify the type. </span></div>'
+    text_missing_label_column = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
+                                '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                                '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please don\'t forget to specify the label column. </span></div>'
     text_delete_column_info = '<div style="width:100%;position:relative;padding:.75rem ' \
                               '1.25rem;margin-bottom:1rem;border:1px solid ' \
                               'transparent;border-radius:.25rem;color:#155724;background-color:#d4edda;border-color' \
                               ':#c3e6cb"><strong>Success!</strong> The column has been deleted successfully.</div> '
+    text_save_label_column = '<div style="width:100%;position:relative;padding:.75rem ' \
+                             '1.25rem;margin-bottom:1rem;border:1px solid ' \
+                             'transparent;border-radius:.25rem;color:#155724;background-color:#d4edda' \
+                             ';border-color:#c3e6cb"><strong>Success!</strong> The label column has been ' \
+                             'modified successfully.</div> '
     text_missing_parameters_error = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                                     '1.25rem;margin-bottom:1rem;border:1px solid ' \
                                     'transparent;border-radius:.25rem;color:#721c24;background-color:#f8d7da;border-color:#f5c6cb' \
@@ -457,14 +478,14 @@ def bokeh_page(doc):
     save_new_changes_msg = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
                            '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
                            '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> Please don\'t forget to save the new changes. </span></div>'
-    # Declaration of a dictionnary with the new updates to save
-    updates_dict =	{
+
+    # Declaration of a dictionary with the new updates to save
+    updates_dict = {
         "name": False,
         "type": False,
         "category": False,
-        "coding_method": False,
-        "coding_options": False,
-        "label": False
+        "encoding_method": False,
+        "encoding_options": False
     }
     source = ColumnDataSource(data=data)
     columns = [TableColumn(field="Name", title="Name"), TableColumn(field="Type", title="Type"),
@@ -476,7 +497,6 @@ def bokeh_page(doc):
                            height_policy='fixed')
 
     text_row = TextInput(value="", title="", width=0, disabled=True, visible=False)
-
 
     source_code = """
     var grid = document.getElementsByClassName('grid-canvas')[8].children;
@@ -490,12 +510,12 @@ def bokeh_page(doc):
                     { column = j }
         }
     }
-    
+
     text_row.value = String(row);
 
     """
 
-    callback = CustomJS(args = dict(source = source, text_row = text_row), code = source_code)
+    callback = CustomJS(args=dict(source=source, text_row=text_row), code=source_code)
     source.selected.js_on_change('indices', callback)
 
     column_name = Select(
@@ -574,22 +594,20 @@ def bokeh_page(doc):
                 label_column.value = LABEL_COLUMN
             else:
                 label_column.value = 'Select a label'
-            label_column.visible = True
             coding_method.visible = False
             tooltip.text = ''
             tooltip.visible = False
             edit_btn.visible = False
-            delete_btn.visible = True
+            delete_btn.visible = False
             target.visible = False
             base.visible = False
             n_components.visible = False
 
         elif selected_column == 'All':
             text_type.visible = True
-            text_type.value = 'numerical'
+            text_type.value = 'Select'
             category_type.visible = False
             div_category.visible = False
-            label_column.visible = False
             coding_method.visible = False
             target.visible = False
             base.visible = False
@@ -619,15 +637,6 @@ def bokeh_page(doc):
                 category_type.labels = labels
                 category_type.visible = True
                 div_category.visible = True
-                label_column.visible = True
-
-                with open('label_column.txt') as f:
-                    LABEL_COLUMN = f.read()
-                f.close()
-                if LABEL_COLUMN in list(data['Name']):
-                    label_column.value = LABEL_COLUMN
-                else:
-                    label_column.value = 'Select a label'
                 coding_method.visible = True
                 coding_method.value = old_coding_method
                 columns_names = ['Select a column', 'All']
@@ -672,8 +681,6 @@ def bokeh_page(doc):
                 category_type.active = None
                 div_category.visible = False
                 coding_method.visible = False
-                label_column.value = 'Select a column'
-                label_column.visible = False
                 n_components.visible = False
                 base.visible = False
                 target.visible = False
@@ -692,7 +699,6 @@ def bokeh_page(doc):
                 category_type.active = None
                 category_type.labels = labels
                 coding_method.visible = True
-                label_column.visible = False
                 coding_method.value = 'Auto'
                 error_message.text = save_new_changes_msg
                 error_message.visible = True
@@ -701,9 +707,11 @@ def bokeh_page(doc):
                 category_type.visible = False
                 div_category.visible = False
                 coding_method.visible = False
-                label_column.visible = False
                 n_components.visible = False
+                n_components.value = None
+                base.value = None
                 base.visible = False
+                target.value = ''
                 target.visible = False
                 tooltip.text = ''
                 tooltip.visible = False
@@ -714,13 +722,14 @@ def bokeh_page(doc):
                 category_type.visible = False
                 div_category.visible = False
                 coding_method.visible = False
-                label_column.visible = False
                 n_components.visible = False
                 base.visible = False
                 target.visible = False
                 tooltip.text = ''
                 tooltip.visible = False
-
+                edit_btn.disabled = True
+                error_message.text = text_missing_type
+                error_message.visible = True
         elif column_name.value != 'All' and column_name.value != 'Select a column':
             old_type = data['Type'][int(text_row.value)]
             if column_type != old_type:
@@ -730,14 +739,13 @@ def bokeh_page(doc):
                 edit_btn.disabled = False
             else:
                 updates_dict["type"] = False
-                if True not in updates_dict.values() :
-                    error_message.text =''
+                if True not in updates_dict.values():
+                    error_message.text = ''
                     edit_btn.disabled = True
             if column_type == 'numerical':
                 category_type.visible = False
                 div_category.visible = False
                 coding_method.visible = False
-                label_column.visible = True
                 n_components.visible = False
                 base.visible = False
                 target.visible = False
@@ -751,8 +759,6 @@ def bokeh_page(doc):
                     category_type.active = None
                     category_type.labels = labels
                     coding_method.visible = True
-                    label_column.visible = True
-                    label_column.value = 'Select a label'
                     coding_method.value = 'Auto'
                 else:
                     category_type.visible = True
@@ -763,127 +769,109 @@ def bokeh_page(doc):
                     else:
                         category_type.active = None
                     coding_method.visible = True
-                    label_column.visible = True
                     coding_method.value = data['Coding'][int(text_row.value)]
             else:
                 category_type.visible = False
                 div_category.visible = False
                 coding_method.visible = False
-                label_column.visible = False
                 n_components.visible = False
                 base.visible = False
                 target.visible = False
                 tooltip.text = ''
                 tooltip.visible = False
                 edit_btn.visible = False
+                delete_btn.visible = False
 
         source.data = dict(data)
 
     def specify_more_encoding_values(attr, old, new):
-        dataframe = pd.DataFrame.from_dict(source.data)
-        data = dataframe.reset_index(drop=True)
-        coding = coding_method.value
-        old_coding_method = data['Coding'][int(text_row.value)]
-        if coding != old_coding_method:
-            updates_dict["coding"] = True
-            error_message.text = save_new_changes_msg
-            error_message.visible = True
-            edit_btn.disabled = False
-        else:
-            updates_dict["coding"] = False
-            if True not in updates_dict.values() :
-                error_message.text =''
-                edit_btn.disabled = True
-        if coding == 'Target':
+        if text_type.value == 'categorical':
             dataframe = pd.DataFrame.from_dict(source.data)
             data = dataframe.reset_index(drop=True)
-            columns_names = ['Select a column', 'All']
-            data_names = list((data['Name']))
-            column_name.options = [*columns_names, *data_names]
-            if column_name.value == 'All':
-                error_message.text = (error_message.text).replace(text_auto_all_coding_method, '')
-                error_message.text += text_target_column_info
+            coding = coding_method.value
+            old_coding_method = data['Coding'][int(text_row.value)]
+            if coding != old_coding_method:
+                updates_dict["encoding_method"] = True
+                error_message.text = save_new_changes_msg
                 error_message.visible = True
-                button.disabled = True
+                edit_btn.disabled = False
+            else:
+                updates_dict["encoding_method"] = False
+                if True not in updates_dict.values():
+                    error_message.text = ''
+                    edit_btn.disabled = True
+            if coding == 'Target':
+                dataframe = pd.DataFrame.from_dict(source.data)
+                data = dataframe.reset_index(drop=True)
+                columns_names = ['Select a column', 'All']
+                data_names = list((data['Name']))
+                column_name.options = [*columns_names, *data_names]
+                if column_name.value == 'All':
+                    error_message.text = (error_message.text).replace(text_auto_all_coding_method, '')
+                    error_message.text += text_target_column_info
+                    error_message.visible = True
+                    button.disabled = True
+                    target.visible = False
+                    n_components.visible = False
+                    base.visible = False
+                    tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted ' \
+                                   'black;display: inline-block; " onmouseover="this.style.overflow= '
+                    tooltip.text += "''"
+                    tooltip.text += ';" onmouseout="this.style.overflow='
+                    tooltip.text += "'hidden';"
+                    tooltip.text += target_encoder_description
+                    tooltip.visible = True
+                elif column_name.value != 'All' and column_name != 'Select a column':
+                    target_options = list(data['Name'])
+                    target_options.append('')
+                    target_options.remove(column_name.value)
+                    target.options = target_options
+                    target.value = ''
+                    base.visible = False
+                    n_components.visible = False
+                    target.visible = True
+                    tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted ' \
+                                   'black;display: inline-block; " onmouseover="this.style.overflow= '
+                    tooltip.text += "''"
+                    tooltip.text += ';" onmouseout="this.style.overflow='
+                    tooltip.text += "'hidden';"
+                    tooltip.text += target_encoder_description
+                    tooltip.visible = True
+            elif coding == 'Hash':
+                target.visible = False
+                base.visible = False
+                n_components.value = None
+                n_components.visible = True
+                tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted black;display: ' \
+                               'inline-block; " onmouseover="this.style.overflow= '
+                tooltip.text += "''"
+                tooltip.text += ";\" onmouseout=\"this.style.overflow="
+                tooltip.text += '\'hidden\';'
+                tooltip.text += hash_encoder_description
+                tooltip.visible = True
+            elif coding == 'BaseN':
                 target.visible = False
                 n_components.visible = False
-                base.visible = False
-                tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted ' \
-                               'black;display: inline-block; " onmouseover="this.style.overflow= '
+                base.value = None
+                base.visible = True
+                tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted black;display: ' \
+                               'inline-block; " onmouseover="this.style.overflow= '
                 tooltip.text += "''"
                 tooltip.text += ';" onmouseout="this.style.overflow='
-                tooltip.text += "'hidden';"
-                tooltip.text += target_encoder_description
+                tooltip.text += '\'hidden\';'
+                tooltip.text += base_n_encoder_description
                 tooltip.visible = True
-            elif column_name.value != 'All' and column_name != 'Select a column':
-                target_options = list(data['Name'])
-                target_options.append('')
-                target.value = ''
-                target_options.remove(column_name.value)
-                target.options = target_options
+            else:
                 base.visible = False
+                target.visible = False
+                tooltip.text = ''
+                tooltip.visible = False
                 n_components.visible = False
-                target.visible = True
-                tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted ' \
-                               'black;display: inline-block; " onmouseover="this.style.overflow= '
-                tooltip.text += "''"
-                tooltip.text += ';" onmouseout="this.style.overflow='
-                tooltip.text += "'hidden';"
-                tooltip.text += target_encoder_description
-                tooltip.visible = True
-        elif coding == 'Hash':
-            target.visible = False
-            base.visible = False
-            n_components.visible = True
-            tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted black;display: ' \
-                           'inline-block; " onmouseover="this.style.overflow= '
-            tooltip.text += "''"
-            tooltip.text += ";\" onmouseout=\"this.style.overflow="
-            tooltip.text += '\'hidden\';'
-            tooltip.text += hash_encoder_description
-            tooltip.visible = True
-            target_options = ['']
-        elif coding == 'BaseN':
-            target.visible = False
-            n_components.visible = False
-            base.visible = True
-            tooltip.text = '<div style="position:relative;overflow:hidden;border-bottom: 1px dotted black;display: ' \
-                           'inline-block; " onmouseover="this.style.overflow= '
-            tooltip.text += "''"
-            tooltip.text += ';" onmouseout="this.style.overflow='
-            tooltip.text += '\'hidden\';'
-            tooltip.text += base_n_encoder_description
-            tooltip.visible = True
-            target_options = ['']
-        else:
-            base.visible = False
-            target.visible = False
-            tooltip.text = ''
-            tooltip.visible = False
-            n_components.visible = False
-            target_options = ['']
+                target_options = ['']
 
     def update_dataframe(event):
         dataframe = pd.DataFrame.from_dict(source.data)
         data = dataframe.reset_index(drop=True)
-
-        with open('label_column.txt') as f:
-            old_label = f.read()
-        f.close()
-        if label_column.value != old_label:
-            if label_column.value != 'Select a label':
-                f= open("label_column.txt","w+")
-                f.write(label_column.value)
-                f.close()
-            else:
-                f= open("label_column.txt","w+")
-                f.write('')
-                f.close()
-            updates_dict["label"] = False
-            if True not in updates_dict.values() :
-                error_message.text =''
-                edit_btn.disabled = True
-
         column_type = text_type.value
         selected_column = column_name.value
 
@@ -916,7 +904,7 @@ def bokeh_page(doc):
                             error_message.text += text_base_n_default_set
                         else:
                             value = base.value
-                        data['Options'] = str({"base": value})
+                        data['Options'] = str({"Base": value})
 
                     elif coding == 'Target':
                         data['Options'] = str({"Target": target.value})
@@ -940,6 +928,7 @@ def bokeh_page(doc):
 
                     for i in range(len(data)):
                         variable = data['Name'][i]
+                        dataset = pd.read_csv(file_path, sep=FILE_DELIMITER)
                         data['Cardinality'][i] = dataset[variable].unique().size
 
         elif selected_column != 'All' and selected_column != 'Select a column':
@@ -948,6 +937,21 @@ def bokeh_page(doc):
                 df.columns.values[int(text_row.value)] = list(data['Name'])[int(text_row.value)]
                 try:
                     df.to_csv(file_path, sep=FILE_DELIMITER, index=False, header=True)
+                    i = column_name.options.index(selected_column)
+                    column_name.options = column_name.options[:i] + [
+                        list(data['Name'])[int(text_row.value)]] + column_name.options[i + 1:]
+                    column_name.value = list(data['Name'])[int(text_row.value)]
+                    if label_column.value == selected_column:
+                        i = label_column.options.index(selected_column)
+                        new_label_column_value = list(data['Name'])[int(text_row.value)]
+                        label_column.options = label_column.options[:i] + [
+                            new_label_column_value] + label_column.options[i + 1:]
+                        f = open("label_column.txt", "w+")
+                        f.write(new_label_column_value)
+                        with open('label_column.txt') as f:
+                            LABEL_COLUMN = f.read()
+                        f.close()
+                    selected_column = list(data['Name'])[int(text_row.value)]
                 except OSError:
                     error_message.text = file_reading_exception
             if column_type == 'categorical':
@@ -978,17 +982,18 @@ def bokeh_page(doc):
                         button.disabled = True
 
                 elif target.value == '' and coding == 'Target':
-                    text =  '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
-                            '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
-                            '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The Target column for encoding ' + \
-                            data["Name"][int(text_row.value)] + ' is missing.</span></div>'
+                    text = '<div style= "width:100%;padding-right:4rem;position:relative;padding:.75rem ' \
+                           '1.25rem;margin-bottom:1rem;border:1px solid transparent;border-radius:.25rem; color: ' \
+                           '#9F6000;background-color: #FEEFB3;border-color:#9F6000;"><strong>Warning!</strong> The Target column for encoding ' + \
+                           data["Name"][int(text_row.value)] + ' is missing.</span></div>'
                     error_message.text += text
                     error_message.visible = True
                     button.disabled = True
 
                 else:
                     i = column_name.options.index(selected_column)
-                    column_name.options = column_name.options[:i]+[list(data['Name'])[int(text_row.value)]]+column_name.options[i+1:]
+                    column_name.options = column_name.options[:i] + [
+                        list(data['Name'])[int(text_row.value)]] + column_name.options[i + 1:]
                     column_name.value = list(data['Name'])[int(text_row.value)]
                     button.disabled = False
                     error_message.text = '<div style="width:100%;position:relative;padding:.75rem ' \
@@ -1010,7 +1015,7 @@ def bokeh_page(doc):
                             error_message.text += text
                         else:
                             value = base.value
-                        data['Options'][int(text_row.value)] = str({"base": value})
+                        data['Options'][int(text_row.value)] = str({"Base": value})
 
                     elif coding == 'Target':
                         data['Options'][int(text_row.value)] = str({"Target": target.value})
@@ -1044,11 +1049,13 @@ def bokeh_page(doc):
                 data['Options'][int(text_row.value)] = ''
                 data['Max'][int(text_row.value)] = dataset[list(data['Name'])[int(text_row.value)]].max()
                 data['Min'][int(text_row.value)] = dataset[list(data['Name'])[int(text_row.value)]].min()
-                data['Mean'][int(text_row.value)] = round(dataset.mean(axis=0)[list(data['Name'])[int(text_row.value)]], 3)
+                data['Mean'][int(text_row.value)] = round(dataset.mean(axis=0)[list(data['Name'])[int(text_row.value)]],
+                                                          3)
                 data['Zeros'][int(text_row.value)] = (dataset[list(data['Name'])[int(text_row.value)]] == 0).sum()
                 data['Missing'][int(text_row.value)] = (dataset.isna().sum())[list(data['Name'])[int(text_row.value)]]
                 i = column_name.options.index(selected_column)
-                column_name.options = column_name.options[:i]+[list(data['Name'])[int(text_row.value)]]+column_name.options[i+1:]
+                column_name.options = column_name.options[:i] + [
+                    list(data['Name'])[int(text_row.value)]] + column_name.options[i + 1:]
                 column_name.value = list(data['Name'])[int(text_row.value)]
 
         variable_options_dict_list = list()
@@ -1083,18 +1090,22 @@ def bokeh_page(doc):
         # Update the dropdown list of label column
         dataframe = pd.DataFrame.from_dict(source.data)
         new_data = dataframe.reset_index(drop=True)
-        categorical_data_names =list(dataframe[dataframe.Type == "categorical"]['Name'])
-        label_column.options = ['Select a label', *categorical_data_names]
+        data_names = list((data['Name']))
+        label_column.options = ['Select a label', *data_names]
         with open('label_column.txt') as f:
             LABEL_COLUMN = f.read()
         f.close()
-        if LABEL_COLUMN in categorical_data_names:
+        if LABEL_COLUMN in data_names:
             label_column.value = LABEL_COLUMN
         else:
-            f= open("label_column.txt","w+")
+            f = open("label_column.txt", "w+")
             f.write('')
             f.close()
             label_column.value = 'Select a label'
+
+        # Reset values of the updates_dict dictionary
+        updates_dict["name"], updates_dict["type"], updates_dict["category"], updates_dict["encoding_method"], \
+        updates_dict["encoding_options"] = False, False, False, False, False
 
         # Show up restore button after the save if new info is introduced!
         original_data['index'] = list(range(len(original_data['Name'])))
@@ -1102,11 +1113,10 @@ def bokeh_page(doc):
             restore_btn.visible = True
             edit_btn.disabled = True
 
-
     def delete_column(event):
         dataframe = pd.DataFrame.from_dict(source.data)
         data = dataframe.reset_index(drop=True)
-
+        column_name_to_be_deleted = column_name.value
         if column_name.value != 'All' and column_name.value != 'Select a column':
             index = int(text_row.value)
             if len(data["index"]) > 0:
@@ -1118,9 +1128,8 @@ def bokeh_page(doc):
                     df.to_csv(file_path, sep=FILE_DELIMITER, index=False, header=True)
                     columns_names = ['Select a column', 'All']
                     data_names = list((data['Name']))
-                    categorical_data_names =list(data[data.Type == "categorical"]['Name'])
                     column_name.options = [*columns_names, *data_names]
-                    label_column.options = ['Select a label', *categorical_data_names]
+                    label_column.options = ['Select a label', *data_names]
                     edit_btn.visible = True
                     edit_btn.disabled = True
                     delete_btn.visible = True
@@ -1128,13 +1137,17 @@ def bokeh_page(doc):
                     with open('label_column.txt') as f:
                         LABEL_COLUMN = f.read()
                     f.close()
-                    if LABEL_COLUMN == column_name.value:
-                        f= open("label_column.txt","w+")
+                    if LABEL_COLUMN == column_name_to_be_deleted:
+                        f = open("label_column.txt", "w+")
                         f.write('')
                         f.close()
                         LABEL_COLUMN = 'Select a label'
+                        error_message.text = text_missing_label_column
+                        button.disabled = True
+                    with open('label_column.txt') as f:
+                        LABEL_COLUMN_new = f.read()
+                    f.close()
                     label_column.value = LABEL_COLUMN
-                    label_column.visible = True
                     error_message.visible = True
                     error_message.text += text_delete_column_info
                     source.data = dict(data)
@@ -1191,11 +1204,11 @@ def bokeh_page(doc):
             restore_btn.visible = False
             column_name.value = 'Select a column'
             error_message.text = ''
-            f= open("label_column.txt","w+")
+            f = open("label_column.txt", "w+")
             f.write('')
             f.close()
+            label_column.options = ['Select a label', *data_names]
             label_column.value = 'Select a label'
-            label_column.visible = True
         except OSError:
             error_message.text = file_reading_exception
 
@@ -1211,66 +1224,166 @@ def bokeh_page(doc):
     def send_old_dataframe(attr, old, new):
         original_dataframe.to_csv(file_path_new, sep=FILE_DELIMITER, index=False, header=True)
 
-    def update_category_msg(event):
-        dataframe = pd.DataFrame.from_dict(source.data)
-        data = dataframe.reset_index(drop=True)
-        category = category_type.active
-        old_cat = list(data['Category'])[int(text_row.value)]
-        old_category = old_cat
-        if old_cat != 'NA':
-            old_category = labels.index(old_cat)
-        if category != old_category:
-            updates_dict["category"] = True
-            error_message.text = save_new_changes_msg
-            error_message.visible = True
-            edit_btn.disabled = False
-        else:
-            updates_dict["category"] = False
-            if True not in updates_dict.values() :
-                error_message.text =''
-                edit_btn.disabled = True
+    def notify_change_category_type(event):
+        if text_type.value == 'categorical':
+            dataframe = pd.DataFrame.from_dict(source.data)
+            data = dataframe.reset_index(drop=True)
+            category = category_type.active
+            old_cat = list(data['Category'])[int(text_row.value)]
+            old_category = old_cat
+            if old_cat != 'NA':
+                old_category = labels.index(old_cat)
+            if category != old_category:
+                updates_dict["category"] = True
+                error_message.text = save_new_changes_msg
+                error_message.visible = True
+                edit_btn.disabled = False
+            else:
+                updates_dict["category"] = False
+                if True not in updates_dict.values():
+                    error_message.text = ''
+                    edit_btn.disabled = True
 
-    def update_label_column_msg(attr, old, new):
-        new_label = label_column.value
-        label = new_label
-        if label == 'Select a label':
-            label = ''
+    def update_label_column(attr, old, new):
         with open('label_column.txt') as f:
             old_label = f.read()
         f.close()
-        if old_label!=label:
-            updates_dict["label"] = True
-            error_message.text = save_new_changes_msg
-            error_message.visible = True
-            edit_btn.disabled = False
-            edit_btn.visible = True
-        else:
-            updates_dict["label"] = False
-            if True not in updates_dict.values() :
-                error_message.text =''
-                edit_btn.disabled = True
+        if label_column.value != old_label:
+            if label_column.value != 'Select a label':
+                f = open("label_column.txt", "w+")
+                f.write(label_column.value)
+                f.close()
+                button.disabled = False
+                error_message.text = text_save_label_column
+                error_message.visible = True
+            else:
+                if not text_delete_column_info in error_message.text:
+                    f = open("label_column.txt", "w+")
+                    f.write('')
+                    f.close()
+                    error_message.text = text_missing_label_column
+                    error_message.visible = True
+
+    def notify_change_base_n_value(attr, old, new):
+        if text_type.value == 'categorical':
+            dataframe = pd.DataFrame.from_dict(source.data)
+            data = dataframe.reset_index(drop=True)
+            old_coding_method = list(data['Options'])[int(text_row.value)]
+            if 'Base' in old_coding_method:
+                if base.value is None:
+                    new_option_value = 2
+                    error_message.text = text_base_n_default_set
+                    error_message.visible = True
+                else:
+                    new_option_value = int(base.value)
+                if old_coding_method == "":
+                    old_option_value = None
+                else:
+                    old_option_value = int(re.findall(r'\d+', old_coding_method)[0])
+                if new_option_value != old_option_value:
+                    updates_dict["encoding_options"] = True
+                    error_message.text = save_new_changes_msg
+                    error_message.visible = True
+                    edit_btn.disabled = False
+                    if base.value is None:
+                        error_message.text += text_base_n_default_set
+                else:
+                    updates_dict["encoding_options"] = False
+                    if True not in updates_dict.values():
+                        error_message.text = ''
+                        edit_btn.disabled = True
+
+    def notify_change_n_components_value(attr, old, new):
+        if text_type.value == 'categorical':
+            dataframe = pd.DataFrame.from_dict(source.data)
+            data = dataframe.reset_index(drop=True)
+            old_coding_method = list(data['Options'])[int(text_row.value)]
+            if 'nComponents' in old_coding_method:
+                if n_components.value is None:
+                    new_option_value = 8
+                    error_message.text = text_n_components_default_set
+                    error_message.visible = True
+                else:
+                    new_option_value = int(n_components.value)
+                old_option_value = int(re.findall(r'\d+', old_coding_method)[0])
+                if new_option_value != old_option_value:
+                    updates_dict["encoding_options"] = True
+                    error_message.text = save_new_changes_msg
+                    error_message.visible = True
+                    edit_btn.disabled = False
+                    if n_components.value is None:
+                        error_message.text += text_n_components_default_set
+                else:
+                    updates_dict["encoding_options"] = False
+                    if True not in updates_dict.values():
+                        error_message.text = ''
+                        edit_btn.disabled = True
+
+    def notify_change_target_column_value(attr, old, new):
+        if text_type.value == 'categorical':
+            dataframe = pd.DataFrame.from_dict(source.data)
+            data = dataframe.reset_index(drop=True)
+            old_coding_method = list(data['Options'])[int(text_row.value)]
+            if 'Target' in old_coding_method:
+                new_option_value = target.value
+                if new_option_value == '':
+                    error_message.text = text_missing_target_column
+                    error_message.visible = True
+                    edit_btn.disabled = False
+                else:
+                    old_option_value = old_coding_method[12:len(old_coding_method) - 2]
+                    if new_option_value != old_option_value:
+                        updates_dict["encoding_options"] = True
+                        error_message.text = save_new_changes_msg
+                        error_message.visible = True
+                        edit_btn.disabled = False
+                    else:
+                        updates_dict["encoding_options"] = False
+                        if True not in updates_dict.values():
+                            error_message.text = ''
+                            edit_btn.disabled = True
+            else:
+                if target.value != '' and 'The Target column for encoding' in error_message.text:
+                    error_message.text = save_new_changes_msg
+                    error_message.visible = True
+                    edit_btn.disabled = False
 
     text_row.on_change('value', select_column)
     text_type.on_change('value', update_layout)
-    category_type.on_click(update_category_msg)
+    category_type.on_click(notify_change_category_type)
     column_name.on_change('value', select_row)
     coding_method.on_change('value', specify_more_encoding_values)
+    base.on_change('value', notify_change_base_n_value)
+    n_components.on_change('value', notify_change_n_components_value)
+    target.on_change('value', notify_change_target_column_value)
+
+    def callback2(attr, old, new):
+        dataframe = pd.DataFrame.from_dict(source.data)
+        data = dataframe.reset_index(drop=True)
+        if column_name.value not in list(data["Name"]) and column_name.value != 'Select a column':
+            edit_btn.disabled = False
+            error_message.text = save_new_changes_msg
+            error_message.visible = True
+
+    source.on_change('data', callback2)
+
     div = Div(text="""""", margin=2)
     div_add = Div(text="""""", margin=5)
-    vertical_line = Div(text="<span style ='padding: 10px 24px; border-right: 1px solid #ddd; margin-right:48px;'></span>")
+    vertical_line = Div(
+        text="<span style ='padding: 10px 24px; border-right: 1px solid #ddd; margin-right:48px;'></span>")
     div_category = Div(text="Category Type", margin=6, visible=False)
     label_column = Select(
         value='Select a label',
-        title='Label',
+        title='Label Column',
         width=140,
         height=25,
         disabled=False
     )
     dataframe = pd.DataFrame.from_dict(source.data)
     data = dataframe.reset_index(drop=True)
-    categorical_data_names =list(dataframe[dataframe.Type == "categorical"]['Name'])
-    label_column.options = ['Select a label', *categorical_data_names]
-    label_column.on_change('value', update_label_column_msg)
+    data_names = list((data['Name']))
+    label_column.options = ['Select a label', *data_names]
+    label_column.on_change('value', update_label_column)
 
     error_message = Div(text='', visible=False)
 
@@ -1289,11 +1402,10 @@ def bokeh_page(doc):
     quit_btn.js_on_click(CustomJS(args=dict(quit=quit), code=""" if (confirm("Do you really want to leave? The changes you made will not be saved.") == true) {
                                                         quit.value = "OK abandon!";}"""))
     quit.on_change('value', send_old_dataframe)
-    quit.js_on_change('value',CustomJS(args=dict(urls=['/shutdown']), code=""" urls.forEach(url => $.get(url));
+    quit.js_on_change('value', CustomJS(args=dict(urls=['/shutdown']), code=""" urls.forEach(url => $.get(url));
                                                                             setTimeout(() => {  window.close(); }, 2000);"""))
 
     tab_id = NumericInput(value=0, title="", disabled=True, visible=False)
-
 
     def display_encoded_dataframe(event):
         # Check whether there is a missing attribute in the dataframe, category type ...
@@ -1359,7 +1471,6 @@ def bokeh_page(doc):
         if error_message.text == '':
             encoded_data = encode_categorical_data(dataset, dataframe)
 
-
             def display_n_encoded_dataframe(attr, old, new):
                 dataframe_size = encoded_data.shape[0]
                 if n_rows.value == 'All':
@@ -1377,15 +1488,21 @@ def bokeh_page(doc):
                 filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
                 coding_options = data
                 for i in range(len(coding_options)):
-                    if coding_options["Coding"][i] == "Auto":
-                        coding_options["Coding"][i] = auto_mode(list(coding_options["Name"])[i], list(coding_options["Cardinality"])[i], list(coding_options["Category"])[i])
-                coding_parameters = {"Column Name":coding_options["Name"], "Encoding Method":coding_options["Coding"], "Encoding Options":coding_options["Options"]}
+                    if list(coding_options["Coding"])[i] == "Auto":
+                        list(coding_options["Coding"])[i] = auto_mode(list(coding_options["Name"])[i],
+                                                                      list(coding_options["Cardinality"])[i],
+                                                                      list(coding_options["Category"])[i])
+                coding_parameters = {"Column Name": coding_options["Name"], "Encoding Method": coding_options["Coding"],
+                                     "Encoding Options": coding_options["Options"]}
                 coding_parameters_df = pd.DataFrame.from_dict(coding_parameters)
                 coding_parameters_columns = [TableColumn(field=Ci, title=Ci) for Ci in coding_parameters_df.columns]
                 source_coding_parameters = ColumnDataSource(coding_parameters)
-                coding_parameters_table = DataTable(source=source_coding_parameters, columns=coding_parameters_columns, editable=False)
+                coding_parameters_table = DataTable(source=source_coding_parameters, columns=coding_parameters_columns,
+                                                    editable=False)
 
-                layout4 = grid([[filter_datatable, None, None, actions], [encoded_data_table], [None], [coding_parameters_table]], sizing_mode='stretch_width')
+                layout4 = grid(
+                    [[filter_datatable, None, None, actions], [encoded_data_table], [None], [coding_parameters_table]],
+                    sizing_mode='stretch_width')
                 tab4 = Panel(child=layout4, title=title, closable=True)
                 structure.tabs[tab_index] = tab4
 
@@ -1431,10 +1548,10 @@ def bokeh_page(doc):
                                            width_policy='max', height_policy='max')
             confirm_btn = Button(label="Proceed", button_type="success", width=90)
             confirm = TextInput(value="", title="", width=0, disabled=True, visible=False)
-            confirm_btn.js_on_click(CustomJS(args=dict(confirm_input=confirm), code= """ if (confirm("Do you really want to quit AutoFeat and continue the workflow execution? The changes you made will be saved and transferred to the next connected task, if any exists.") == true) {
+            confirm_btn.js_on_click(CustomJS(args=dict(confirm_input=confirm), code=""" if (confirm("Do you really want to quit AutoFeat and continue the workflow execution? The changes you made will be saved and transferred to the next connected task, if any exists.") == true) {
                                                                                 confirm_input.value = "OK proceed!";}"""))
-            confirm.on_change('value',send_new_dataframe)
-            confirm.js_on_change('value',CustomJS(args=dict(urls=['/shutdown']), code=""" urls.forEach(url => $.get(url));
+            confirm.on_change('value', send_new_dataframe)
+            confirm.js_on_change('value', CustomJS(args=dict(urls=['/shutdown']), code=""" urls.forEach(url => $.get(url));
                                                                             setTimeout(() => {  window.close(); }, 2000);"""))
             cancel_btn = Button(label="Delete", button_type="danger", width=90)
             cancel_btn.on_click(delete_encoded_dataframe)
@@ -1446,17 +1563,22 @@ def bokeh_page(doc):
             actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm)
             filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
             coding_options = data
-            for i in range(len(coding_options)):
-                if coding_options["Coding"][i] == "Auto":
-                    coding_options["Coding"][i] = auto_mode(list(coding_options["Name"])[i], list(coding_options["Cardinality"])[i], list(coding_options["Category"])[i])
-
-            coding_parameters = {"Column Name":coding_options["Name"], "Encoding Method":coding_options["Coding"], "Encoding Options":coding_options["Options"]}
+            for i in range(len(list(coding_options["Coding"]))):
+                if list(coding_options["Coding"])[i] == "Auto":
+                    list(coding_options["Coding"])[i] = auto_mode(list(coding_options["Name"])[i],
+                                                                  list(coding_options["Cardinality"])[i],
+                                                                  list(coding_options["Category"])[i])
+            coding_parameters = {"Column Name": coding_options["Name"], "Encoding Method": coding_options["Coding"],
+                                 "Encoding Options": coding_options["Options"]}
             coding_parameters_df = pd.DataFrame.from_dict(coding_parameters)
             coding_parameters_columns = [TableColumn(field=Ci, title=Ci) for Ci in coding_parameters_df.columns]
             source_coding_parameters = ColumnDataSource(coding_parameters)
-            coding_parameters_table = DataTable(source=source_coding_parameters, columns=coding_parameters_columns, editable=False)
+            coding_parameters_table = DataTable(source=source_coding_parameters, columns=coding_parameters_columns,
+                                                editable=False)
 
-            layout4 = grid([[filter_datatable, None, None, actions], [encoded_data_table], [None], [coding_parameters_table]], sizing_mode='stretch_width')
+            layout4 = grid(
+                [[filter_datatable, None, None, actions], [encoded_data_table], [None], [coding_parameters_table]],
+                sizing_mode='stretch_width')
             title = 'ENCODED_DATA_' + str(encoded_tab_id)
             tab4 = Panel(child=layout4, title=title, closable=True)
             structure.tabs.append(tab4)
@@ -1479,8 +1601,9 @@ def bokeh_page(doc):
     button.on_click(display_encoded_dataframe)
 
     layout = column(
-        row(text_row, column_name, text_type, column(div_category, category_type), label_column, coding_method, base, n_components,
-            target, tooltip, column(div, edit_btn), column(div, restore_btn), column(div, delete_btn),column(div_add, vertical_line),
+        row(text_row, column_name, text_type, column(div_category, category_type), coding_method, base, n_components,
+            target, tooltip, column(div, edit_btn), column(div, restore_btn), column(div, delete_btn),
+            column(div_add, vertical_line), label_column,
             column(div, button), column(div, quit_btn), quit, tab_id), data_table)
     layout1 = grid([[div], [layout], [error_message], ], sizing_mode='stretch_width')
 
@@ -1567,7 +1690,7 @@ def bokeh_page(doc):
 
     # Define Document Structure
     tab0 = Panel(child=layout0, title='DATA PREVIEW', closable=False)
-    tab1 = Panel(child=layout1, title='EDIT COLUMN NAMES AND TYPES', closable=False)
+    tab1 = Panel(child=layout1, title='DATA PREPROCESSING', closable=False)
     tab2 = Panel(child=layout2, title='COLUMN SUMMARIES', closable=False)
     structure = Tabs(tabs=[tab0, tab2, tab1])
     doc.add_root(structure)
@@ -1579,13 +1702,15 @@ def bokeh_page(doc):
                 grid_line_color: white
     """, Loader=yaml.FullLoader))
 
+
 def thread_bokeh():
-    server = Server({'/': bokeh_page}, port=bokeh_port, io_loop=IOLoop(), allow_websocket_origin=["*:"+str(flask_port), "*:"+str(bokeh_port)])
+    server = Server({'/': bokeh_page}, port=bokeh_port, io_loop=IOLoop(),
+                    allow_websocket_origin=["*:" + str(flask_port), "*:" + str(bokeh_port)])
     server.start()
     server.io_loop.start()
 
 
-t_bokehApp = Thread(name='Bokeh App',target=thread_bokeh)
+t_bokehApp = Thread(name='Bokeh App', target=thread_bokeh)
 t_bokehApp.setDaemon(True)
 t_bokehApp.start()
 
@@ -1667,9 +1792,10 @@ if not os.stat(file_path_params).st_size == 0:
     encoding_parameters = encoding_parameters_df[encoding_parameters_df["Encoding Method"] != "-"]
     for variable in encoding_parameters["Column Name"]:
         index = int(encoding_parameters.index[encoding_parameters["Column Name"] == variable].values)
-        encoding_params_str += "the feature "+variable+" is encoded using the method "+encoding_parameters["Encoding Method"][index]
+        encoding_params_str += "the feature " + variable + " is encoded using the method " + \
+                               encoding_parameters["Encoding Method"][index]
         if str(encoding_parameters["Encoding Options"][index]) != "nan":
-            encoding_params_str += " ("+str(encoding_parameters["Encoding Options"][index])+").\n"
+            encoding_params_str += " (" + str(encoding_parameters["Encoding Options"][index]) + ").\n"
         else:
             encoding_params_str += ".\n"
     print(encoding_params_str)
