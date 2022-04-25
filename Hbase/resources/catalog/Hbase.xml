@@ -1,0 +1,1072 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Hbase" projectName="Service Automation - Deployment" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
+    <variables>
+        <variable name="INSTANCE_NAME" value="Hbase-$PA_JOB_ID" model="PA:NOT_EMPTY_STRING"    />
+        <variable name="hdfs_service_instance_id" value="xx" model="PA:NOT_EMPTY_STRING"   advanced="false" hidden="false"/>
+        <variable name="ZOOKEEPER_INSTANCE_ID" value="xx" model="PA:NOT_EMPTY_STRING"   advanced="false" hidden="false"/>
+        <variable name="nb_hbase_region_servers" value="3"    advanced="false" hidden="false"/>
+        <variable name="TARGETED_PA_NODE_SOURCE_NAME" value="" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/nodesources)"   advanced="false" hidden="false"/>
+    </variables>
+    <description>
+        <![CDATA[ Deploy a Hbase platform on an existing HDFS and Zookeeper ensemble with a master server, multiple Regions servers, a Backup master, a Thrift server and a Rest server. ]]>
+    </description>
+    <genericInformation>
+        <info name="bucketName" value="service-automation"/>
+        <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+        <info name="pca.states" value="(VOID,RUNNING)"/>
+        <info name="Documentation" value="https://hbase.apache.org/book.html"/>
+        <info name="pca.service.id" value="Hbase"/>
+        <info name="group" value="public-objects"/>
+    </genericInformation>
+    <taskFlow>
+        <task name="retrieve_services_variables"
+
+
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+            </genericInformation>
+            <scriptExecutable>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Retrieve_variables_from_service_instance_id/raw" language="groovy">
+                        <arguments>
+                            <argument value="$hdfs_service_instance_id"/>
+                            <argument value="hdfs_network_name"/>
+                            <argument value="hdfs_network_name"/>
+                            <argument value="hdfs_namenode_host_port"/>
+                            <argument value="hdfs_namenode_host_port"/>
+                        </arguments>
+                    </file>
+                </script>
+            </scriptExecutable>
+            <post>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+
+
+println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionId = schedulerapi.getSession()
+println "session id : " + sessionId
+
+// Define PCA URL
+def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+
+// Connect to APIs
+def apiClient = new ApiClient()
+apiClient.setBasePath(pcaUrl)
+def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+def serviceId = "Zookeeper"
+def instanceID = variables.get("ZOOKEEPER_INSTANCE_ID") as Integer
+println("ZOOKEEPER_SERVICE_ID:    " + serviceId)
+println("ZOOKEEPER_INSTANCE_NAME: " + instanceID)
+
+/*********************************************************************************
+*                     Using existing instance (if it exists)                     *
+/********************************************************************************/
+boolean instance_exists = false
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId, null)
+
+for (ServiceInstanceData serviceInstanceData : service_instances) {
+    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
+         println("instance id = " +  serviceInstanceData.getInstanceId() )
+        if (serviceInstanceData.getInstanceId() == instanceID) {
+
+            println("instance id = " +  serviceInstanceData.getInstanceId() )
+
+            instance_exists = true
+            def instanceId = serviceInstanceData.getInstanceId()
+            endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
+            println("ZOOKEEPER_INSTANCE_ID: " + instanceId)
+            println("ZOOKEEPER_ENDPOINT:    " + endpoint)
+            endpoint = endpoint.replace("zookeeper://", "")
+            variables.put("ZOOKEEPER_INSTANCE_ID", instanceId)
+            variables.put("ZOOKEEPER_ENDPOINT", endpoint)
+            break
+        }
+      }
+}
+
+if (instance_exists == false){
+    println("########### Zookeeper instance doesn't exist ############")
+    exit(1)
+    sleep(10000000000)
+}
+]]>
+                    </code>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    57.47221374511719
+                </positionTop>
+                <positionLeft>
+                    459.8888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="start_hbase_master"
+
+
+
+
+              fork="true"
+              runAsMe="true" >
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="retrieve_services_variables"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+selected = System.getProperty("proactive.node.nodesource").equals(variables.get("TARGETED_PA_NODE_SOURCE_NAME"))
+]]>
+                    </code>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def instance_name = variables.get("INSTANCE_NAME")
+def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def zookeeper_endpoint = variables.get("ZOOKEEPER_ENDPOINT")
+def targeted_network_name = variables.get("hdfs_network_name")
+def hdfs_path = variables.get("hdfs_namenode_host_port")
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def hbase_docker_image_name = "activeeon/hbase:latest"
+def hbase_master_container_name = instance_name + "-hbase-master-"
+
+// Find a free port
+def hbase_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hbase_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+cmd = ["docker", "run", "--rm","-v", localspace + ":" + localspace, "-dit", "--publish", hbase_gui_port + ":" + 16010, "--name", hbase_master_container_name, "--net", targeted_network_name, hbase_docker_image_name]
+println cmd
+def hbase_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_id, System.err)
+
+//Commande inspect
+cmd = ["docker", "inspect", hbase_master_container_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"]
+println cmd
+def hbase_container_ip = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_ip, System.err)
+
+// hbase configuration
+def hbase_site_config_command = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_site_config_command2 = "sed -i 's/ZOOKEEPER-replacement/" + zookeeper_endpoint + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_hdfs_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hdfs-site.xml"
+def hbase_core_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/core-site.xml"
+def hdfs_core_site_config = "cp -fr \$HBASE_HOME/conf/core-site.xml \$HADOOP_HOME/etc/hadoop/"
+def hdfs_hdfs_site_config = "cp -fr \$HBASE_HOME/conf/hdfs-site.xml \$HADOOP_HOME/etc/hadoop/"
+
+def command_in_container = hbase_site_config_command + ";" + hbase_site_config_command2 + ";"  + hbase_hdfs_site_config + ";" + hbase_core_site_config + ";" + hdfs_core_site_config + ";" + hdfs_hdfs_site_config
+cmd = ["docker", "exec", hbase_master_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+//starting hbase master
+def start_hbase_master = "bin/hbase-daemon.sh start master"
+cmd = ["docker", "exec", hbase_master_container_name, "/bin/sh", "-c", start_hbase_master]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Propagate variables
+variables.put("hbase_gui_port", hbase_gui_port)
+variables.put("hbase_pa_node_name", pa_node_name)
+variables.put("hbase_docker_image_name", hbase_docker_image_name)
+variables.put("hbase_master_container_name", hbase_master_container_name)
+variables.put("hbase_deployements_pa_node_names", pa_node_name)
+//for the workflow examples
+variables.put("zookeeper_endpoint", zookeeper_endpoint)
+variables.put("hdfs_path", hdfs_path)
+variables.put("targeted_network_name", targeted_network_name)
+//resultMap
+resultMap.put("hbaseservice_instance_id", service_instance_id)
+
+// Propagate variables to the current post script
+new File(localspace, "hbase_container_id").text = hbase_container_id.toString()
+new File(localspace, "hbase_container_name").text = hbase_master_container_name
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow >
+                <replicate>
+                    <script>
+                        <code language="groovy">
+                            <![CDATA[
+runs = variables.get("nb_hbase_region_servers")
+]]>
+                        </code>
+                    </script>
+                </replicate>
+            </controlFlow>
+            <post>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hbase_container_id = new File(localspace, "hbase_container_id").text
+def hbase_container_name = new File(localspace, "hbase_container_name").text
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def job_id = variables.get("PA_JOB_ID")
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+def instance_id = variables.get("PCA_INSTANCE_ID")
+def hbase_gui_port = variables.get("hbase_gui_port")
+def hbase_endpoint_url = "http://" + pa_node_host + ":" + hbase_gui_port
+
+// Build the proxified url
+def endpoint_id = "hbase-master-" + job_id
+def proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":endpoint_id,"url":hbase_endpoint_url,"proxyfied_url":proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hbase_container_id,"name":hbase_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("hbase_deployment_json_0", deployment_json)
+println "master = hbase_deployment_json_0"
+
+// Add token to the current node (RM API)
+rmapi.connect()
+nodeUrl = variables.get("PA_NODE_URL")
+println "Adding token " + instance_name + " to node " + nodeUrl
+rmapi.addNodeToken(nodeUrl, instance_name)
+]]>
+                    </code>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    185.4722137451172
+                </positionTop>
+                <positionLeft>
+                    459.8611145019531
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="propagate_variables_and_update_deployments_with_service"
+
+
+
+
+              fork="true"
+              runAsMe="true" >
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <depends>
+                <task ref="merge_json_deployments_and_propagate"/>
+            </depends>
+            <pre>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Propagate_variables_to_current_service/raw" language="groovy">
+                        <arguments>
+                            <argument value="hbase_pa_node_name"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="nb_deployments"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="hbase_deployements_pa_node_names"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="zookeeper_endpoint"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="hdfs_path"/>
+                            <argument value="VARIABLE_VALUE"/>
+                            <argument value="targeted_network_name"/>
+                            <argument value="VARIABLE_VALUE"/>
+                        </arguments>
+                    </file>
+                </script>
+            </pre>
+            <scriptExecutable>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Add_deployments_and_update_service/raw" language="groovy">
+                        <arguments>
+                            <argument value="hbase_deployment_json_"/>
+                            <argument value="$nb_deployments_total"/>
+                        </arguments>
+                    </file>
+                </script>
+            </scriptExecutable>
+            <cleaning>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw" language="groovy"></file>
+                </script>
+            </cleaning>
+            <metadata>
+                <positionTop>
+                    695.4583587646484
+                </positionTop>
+                <positionLeft>
+                    459.8888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="loop_over_hbase_status"
+
+
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+                <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+            </genericInformation>
+            <depends>
+                <task ref="propagate_variables_and_update_deployments_with_service"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+def hbase_pa_node_name = variables.get("hbase_pa_node_name")
+selected = (nodename == hbase_pa_node_name)
+]]>
+                    </code>
+                </script>
+            </selection>
+            <pre>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def hbase_master_container_name = variables.get("hbase_master_container_name")
+def hbase_master_backup_container_name = variables.get("hbase_master_backup_container_name")
+def instance_name = variables.get("INSTANCE_NAME")
+
+// Ensure hbase  is running
+def cmd = ["docker", "exec", hbase_master_container_name, "jps"]
+println cmd
+def docker_exec_jps_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+def is_hbase_master_ok = docker_exec_jps_output.toString().contains("Master")
+println "###### DEBUG is_hbase_master_ok  ##### " + is_hbase_master_ok + " value = " + docker_exec_jps_output
+
+ cmd = ["docker", "exec", hbase_master_backup_container_name, "jps"]
+println cmd
+docker_exec_jps_output = new StringBuilder()
+cmd.execute().waitForProcessOutput(docker_exec_jps_output, System.err)
+def is_hbase_backup_master_ok = docker_exec_jps_output.toString().contains("Master")
+println "###### DEBUG is_hbase_backup_master_ok  ##### " + is_hbase_backup_master_ok + " value = " + docker_exec_jps_output
+
+if (!is_hbase_master_ok) {
+    if (is_hbase_backup_master_ok) {
+        println "##### Running on Backup !! #####"
+    }
+    else println "#### No Master Is Running !! ####"
+}
+
+def is_hbase_ok = is_hbase_master_ok || is_hbase_backup_master_ok
+println "DEBUG is_hbase_ok " + is_hbase_ok
+def is_docker_based_service = true
+def token_to_remove = instance_name
+
+// Propagate to the current task script
+new File(localspace, "arguments.txt").text = String.valueOf(is_hbase_ok) + "," + String.valueOf(is_docker_based_service) + "," + token_to_remove
+]]>
+                    </code>
+                </script>
+            </pre>
+            <scriptExecutable>
+                <script>
+                    <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Loop_over_service_instance_status/raw" language="groovy"></file>
+                </script>
+            </scriptExecutable>
+            <controlFlow >
+                <loop target="loop_over_hbase_status">
+                    <script>
+                        <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw" language="groovy"></file>
+                    </script>
+                </loop>
+            </controlFlow>
+            <metadata>
+                <positionTop>
+                    823.4583587646484
+                </positionTop>
+                <positionLeft>
+                    459.8888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="start_hbase_region_servers"
+
+
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="start_hbase_master"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+selected = System.getProperty("proactive.node.nodesource").equals(variables.get("TARGETED_PA_NODE_SOURCE_NAME"))
+]]>
+                    </code>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def zookeeper_endpoint = variables.get("ZOOKEEPER_ENDPOINT")
+def targeted_network_name = variables.get("hdfs_network_name")
+def hdfs_path = variables.get("hdfs_namenode_host_port")
+def task_replication_id = variables.get("PA_TASK_REPLICATION")
+def hbase_docker_image_name = variables.get("hbase_docker_image_name")
+def hbase_exposed_regionserver_gui_port = 16030
+def hbase_regionserver_container_name = instance_name + "-hbase-regionserver-" + task_replication_id
+
+// Find a free port
+def hbase_regionServer_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hbase_regionServer_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+// Start  hbase  container
+cmd = ["docker", "run", "--rm", "-dit", "--publish", hbase_regionServer_gui_port + ":" + hbase_exposed_regionserver_gui_port, "--name", hbase_regionserver_container_name, "--net", targeted_network_name, hbase_docker_image_name]
+println cmd
+def hbase_regionserver_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_regionserver_container_id, System.err)
+
+//Commande inspect
+cmd = ["docker", "inspect", hbase_regionserver_container_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"]
+println cmd
+def hbase_regionserver_container_ip = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_regionserver_container_ip, System.err)
+
+// hbase configuration
+def hbase_site_config_command = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_site_config_command2 = "sed -i 's/ZOOKEEPER-replacement/" + zookeeper_endpoint + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_hdfs_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hdfs-site.xml"
+def hbase_core_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/core-site.xml"
+
+def command_in_container = hbase_site_config_command + ";" + hbase_site_config_command2 + ";"  + hbase_hdfs_site_config + ";" + hbase_core_site_config
+cmd = ["docker", "exec", hbase_regionserver_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+//starting hbase region server
+def start_hbase_regionserver = "bin/hbase-daemon.sh start regionserver"
+cmd = ["docker", "exec", hbase_regionserver_container_name, "/bin/sh", "-c", start_hbase_regionserver]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Propagate variables
+variables.put("hbase_server" + task_replication_id + "_pa_node_name", pa_node_name)
+variables.put("hbase_regionServer_gui_port" , hbase_regionServer_gui_port)
+variables.put("hbase_docker_image_name", hbase_docker_image_name)
+variables.put("hbase_server_" + task_replication_id + "_pa_node_name", pa_node_name)
+
+// Propagate variables to the current post script
+new File(localspace, "hbase_regionserver_container_id").text = hbase_regionserver_container_id.toString()
+new File(localspace, "hbase_regionserver_container_name").text = hbase_regionserver_container_name
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+            <post>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hbase_container_id = new File(localspace, "hbase_regionserver_container_id").text
+def hbase_container_name = new File(localspace, "hbase_regionserver_container_name").text
+
+// Retrieve variables
+def task_replication_id = variables.get("PA_TASK_REPLICATION")
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def job_id = variables.get("PA_JOB_ID")
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+def instance_id = variables.get("PCA_INSTANCE_ID")
+def hbase_regionserver_gui_port = variables.get("hbase_regionServer_gui_port")
+def hbase_endpoint_url = "http://" + pa_node_host + ":" + hbase_regionserver_gui_port
+
+// Build the proxified url
+def endpoint_id = "hbase-region_server-" + job_id + "-" + task_replication_id
+def proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":endpoint_id,"url":hbase_endpoint_url,"proxyfied_url":proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hbase_container_id,"name":hbase_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+variables.put("hbase_deployment_json_" + ((task_replication_id as Integer) + 1 ), deployment_json)
+println "replication = hbase_deployment_json_" + ((task_replication_id as Integer) + 1 )
+
+// Add token to the current node (RM API)
+rmapi.connect()
+println "Adding token " + instance_name + " to node " + pa_node_url
+rmapi.addNodeToken(pa_node_url, instance_name)
+]]>
+                    </code>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    312.4722137451172
+                </positionTop>
+                <positionLeft>
+                    459.8888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="start_hbase_thrift_server"
+
+
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="start_hbase_region_servers"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+selected = System.getProperty("proactive.node.nodesource").equals(variables.get("TARGETED_PA_NODE_SOURCE_NAME"))
+]]>
+                    </code>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def instance_name = variables.get("INSTANCE_NAME")
+def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def zookeeper_endpoint = variables.get("ZOOKEEPER_ENDPOINT")
+def targeted_network_name = variables.get("hdfs_network_name")
+def hdfs_path = variables.get("hdfs_namenode_host_port")
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def nb_rep = variables.get("nb_hbase_region_servers")
+def hbase_docker_image_name = variables.get("hbase_docker_image_name")
+def hbase_thrift_server_container_name = instance_name + "-hbase-thrift-server"
+def hbase_thrift_server_gui_internal_port = 9095
+
+// Find a free port
+def hbase_thrift_server_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hbase_thrift_server_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+cmd = ["docker", "run", "--rm","-v", localspace + ":" + localspace, "-dit", "--publish", hbase_thrift_server_gui_port + ":" + hbase_thrift_server_gui_internal_port, "--name", hbase_thrift_server_container_name, "--net", targeted_network_name, hbase_docker_image_name]
+println cmd
+def hbase_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_id, System.err)
+
+//Commande inspect
+cmd = ["docker", "inspect", hbase_thrift_server_container_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"]
+println cmd
+def hbase_container_ip = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_ip, System.err)
+
+// hbase configuration + Start
+def hbase_site_config_command = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_site_config_command2 = "sed -i 's/ZOOKEEPER-replacement/" + zookeeper_endpoint + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_hdfs_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hdfs-site.xml"
+def hbase_core_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/core-site.xml"
+def hdfs_core_site_config = "cp -fr \$HBASE_HOME/conf/core-site.xml \$HADOOP_HOME/etc/hadoop/"
+def hdfs_hdfs_site_config = "cp -fr \$HBASE_HOME/conf/hdfs-site.xml \$HADOOP_HOME/etc/hadoop/"
+
+def command_in_container = hbase_site_config_command + ";" + hbase_site_config_command2 + ";"  + hbase_hdfs_site_config + ";" + hbase_core_site_config + ";" + hdfs_core_site_config + ";" + hdfs_hdfs_site_config
+cmd = ["docker", "exec", hbase_thrift_server_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+//starting hbase thrift server
+def start_hbase_thrift_server = "bin/hbase-daemon.sh start thrift"
+cmd = ["docker", "exec", hbase_thrift_server_container_name, "/bin/sh", "-c", start_hbase_thrift_server]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Propagate variables
+variables.put("hbase_thrift_server_gui_port", hbase_thrift_server_gui_port)
+variables.put("hbase_pa_node_name", pa_node_name)
+variables.put("hbase_docker_image_name", hbase_docker_image_name)
+variables.put("hbase_server_" + ((nb_rep as Integer)) + "_pa_node_name", pa_node_name)
+
+// Propagate variables to the current post script
+new File(localspace, "hbase_container_id").text = hbase_container_id.toString()
+new File(localspace, "hbase_container_name").text = hbase_thrift_server_container_name
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+            <post>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hbase_container_id = new File(localspace, "hbase_container_id").text
+def hbase_container_name = new File(localspace, "hbase_container_name").text
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def job_id = variables.get("PA_JOB_ID")
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+def instance_id = variables.get("PCA_INSTANCE_ID")
+def hbase_gui_port = variables.get("hbase_thrift_server_gui_port")
+def hbase_endpoint_url = "http://" + pa_node_host + ":" + hbase_gui_port
+
+// Build the proxified url
+def endpoint_id = "hbase-thrift-server-gui-" + job_id
+def proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":endpoint_id,"url":hbase_endpoint_url,"proxyfied_url":proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hbase_container_id,"name":hbase_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+def nb_rep = variables.get("nb_hbase_region_servers")
+variables.put("hbase_deployment_json_" + ((nb_rep as Integer) + 1) , deployment_json)
+
+// Add token to the current node (RM API)
+rmapi.connect()
+nodeUrl = variables.get("PA_NODE_URL")
+println "Adding token " + instance_name + " to node " + nodeUrl
+rmapi.addNodeToken(nodeUrl, instance_name)
+]]>
+                    </code>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    439.4722137451172
+                </positionTop>
+                <positionLeft>
+                    268.8888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="start_hbase_master_backup"
+
+
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="start_hbase_region_servers"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+selected = System.getProperty("proactive.node.nodesource").equals(variables.get("TARGETED_PA_NODE_SOURCE_NAME"))
+]]>
+                    </code>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def instance_name = variables.get("INSTANCE_NAME")
+def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def zookeeper_endpoint = variables.get("ZOOKEEPER_ENDPOINT")
+def targeted_network_name = variables.get("hdfs_network_name")
+def hdfs_path = variables.get("hdfs_namenode_host_port")
+def task_replication_id = variables.get("PA_TASK_REPLICATION") as Integer
+def nb_rep = variables.get("nb_hbase_region_servers")
+def hbase_docker_image_name = variables.get("hbase_docker_image_name")
+
+// Find a free port
+def hbase_master_backup_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hbase_master_backup_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+def hbase_master_backup_container_name = instance_name + "-hbase-master-backup"
+
+cmd = ["docker", "run", "--rm","-v", localspace + ":" + localspace, "-dit", "--publish", hbase_master_backup_gui_port + ":" + 16010, "--name", hbase_master_backup_container_name, "--net", targeted_network_name, hbase_docker_image_name]
+println cmd
+def hbase_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_id, System.err)
+
+//Commande inspect
+cmd = ["docker", "inspect", hbase_master_backup_container_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"]
+println cmd
+def hbase_container_ip = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_ip, System.err)
+
+// hbase configuration
+def hbase_site_config_command = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_site_config_command2 = "sed -i 's/ZOOKEEPER-replacement/" + zookeeper_endpoint + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_hdfs_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hdfs-site.xml"
+def hbase_core_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/core-site.xml"
+def hdfs_core_site_config = "cp -fr \$HBASE_HOME/conf/core-site.xml \$HADOOP_HOME/etc/hadoop/"
+def hdfs_hdfs_site_config = "cp -fr \$HBASE_HOME/conf/hdfs-site.xml \$HADOOP_HOME/etc/hadoop/"
+
+def command_in_container = hbase_site_config_command + ";" + hbase_site_config_command2 + ";"  + hbase_hdfs_site_config + ";" + hbase_core_site_config + ";" + hdfs_core_site_config + ";" + hdfs_hdfs_site_config
+cmd = ["docker", "exec", hbase_master_backup_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+//starting hbase backup master
+def start_hbase_master = "bin/hbase-daemon.sh start master"
+cmd = ["docker", "exec", hbase_master_backup_container_name, "/bin/sh", "-c", start_hbase_master]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Propagate variables
+variables.put("hbase_master_backup_gui_port", hbase_master_backup_gui_port)
+variables.put("hbase_pa_node_name", pa_node_name)
+variables.put("hbase_docker_image_name", hbase_docker_image_name)
+variables.put("hbase_master_backup_container_name", hbase_master_backup_container_name)
+variables.put("hbase_server_" + ((nb_rep as Integer) + 1) + "_pa_node_name", pa_node_name)
+
+// Propagate variables to the current post script
+new File(localspace, "hbase_container_id").text = hbase_container_id.toString()
+new File(localspace, "hbase_container_name").text = hbase_master_backup_container_name
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+            <post>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hbase_container_id = new File(localspace, "hbase_container_id").text
+def hbase_container_name = new File(localspace, "hbase_container_name").text
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def job_id = variables.get("PA_JOB_ID")
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+def instance_id = variables.get("PCA_INSTANCE_ID")
+def hbase_gui_port = variables.get("hbase_master_backup_gui_port")
+def hbase_endpoint_url = "http://" + pa_node_host + ":" + hbase_gui_port
+
+// Build the proxified url
+def endpoint_id = "hbase-backup-master-gui-" + job_id
+def proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":endpoint_id,"url":hbase_endpoint_url,"proxyfied_url":proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hbase_container_id,"name":hbase_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+def nb_rep = variables.get("nb_hbase_region_servers")
+variables.put("hbase_deployment_json_" + ((nb_rep as Integer) + 2) , deployment_json)
+
+// Add token to the current node (RM API)
+rmapi.connect()
+nodeUrl = variables.get("PA_NODE_URL")
+println "Adding token " + instance_name + " to node " + nodeUrl
+rmapi.addNodeToken(nodeUrl, instance_name)
+]]>
+                    </code>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    439.4722137451172
+                </positionTop>
+                <positionLeft>
+                    459.8888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="start_hbase_rest_server"
+
+
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="start_hbase_region_servers"/>
+            </depends>
+            <selection>
+                <script type="dynamic">
+                    <code language="groovy">
+                        <![CDATA[
+selected = System.getProperty("proactive.node.nodesource").equals(variables.get("TARGETED_PA_NODE_SOURCE_NAME"))
+]]>
+                    </code>
+                </script>
+            </selection>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+// Retrieve variables
+def service_instance_id = variables.get("PCA_INSTANCE_ID") as Long
+def instance_name = variables.get("INSTANCE_NAME")
+def job_id = variables.get("PA_JOB_ID")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def zookeeper_endpoint = variables.get("ZOOKEEPER_ENDPOINT")
+def targeted_network_name = variables.get("hdfs_network_name")
+def hdfs_path = variables.get("hdfs_namenode_host_port")
+def nb_rep = variables.get("nb_hbase_region_servers")
+def hbase_docker_image_name = variables.get("hbase_docker_image_name")
+def hbase_rest_server_container_name = instance_name + "-hbase-rest-server"
+def hbase_rest_server_gui_internal_port = 8085
+
+// Find a free port
+def hbase_rest_server_gui_port = null
+try {
+  def server = new ServerSocket(0)
+  hbase_rest_server_gui_port = server.getLocalPort()
+  server.close()
+} catch (IOException e) {
+  throw new RuntimeException( "Failed to find free local port to bind the agent to", e);
+}
+
+cmd = ["docker", "run", "--rm","-v", localspace + ":" + localspace, "-dit", "--publish", hbase_rest_server_gui_port + ":" + hbase_rest_server_gui_internal_port, "--name", hbase_rest_server_container_name, "--net", targeted_network_name, hbase_docker_image_name]
+println cmd
+def hbase_container_id = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_id, System.err)
+
+//Commande inspect
+cmd = ["docker", "inspect", hbase_rest_server_container_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"]
+println cmd
+def hbase_container_ip = new StringBuilder()
+cmd.execute().waitForProcessOutput(hbase_container_ip, System.err)
+
+// hbase configuration + Start
+def hbase_site_config_command = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_site_config_command2 = "sed -i 's/ZOOKEEPER-replacement/" + zookeeper_endpoint + "/g' \$HBASE_HOME/conf/hbase-site.xml"
+def hbase_hdfs_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/hdfs-site.xml"
+def hbase_core_site_config = "sed -i 's/HDFS-replacement/" + hdfs_path + "/g' \$HBASE_HOME/conf/core-site.xml"
+def hdfs_core_site_config = "cp -fr \$HBASE_HOME/conf/core-site.xml \$HADOOP_HOME/etc/hadoop/"
+def hdfs_hdfs_site_config = "cp -fr \$HBASE_HOME/conf/hdfs-site.xml \$HADOOP_HOME/etc/hadoop/"
+
+def command_in_container = hbase_site_config_command + ";" + hbase_site_config_command2 + ";"  + hbase_hdfs_site_config + ";" + hbase_core_site_config + ";" + hdfs_core_site_config + ";" + hdfs_hdfs_site_config
+cmd = ["docker", "exec", hbase_rest_server_container_name, "/bin/sh", "-c", command_in_container]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+//starting hbase rest server
+def start_hbase_rest_server = "bin/hbase-daemon.sh start rest"
+cmd = ["docker", "exec", hbase_rest_server_container_name, "/bin/sh", "-c", start_hbase_rest_server]
+println cmd
+cmd.execute().waitForProcessOutput(System.out, System.err)
+
+// Propagate variables
+variables.put("hbase_rest_server_gui_port", hbase_rest_server_gui_port)
+variables.put("hbase_pa_node_name", pa_node_name)
+variables.put("hbase_docker_image_name", hbase_docker_image_name)
+variables.put("hbase_server_" + ((nb_rep as Integer) + 2) + "_pa_node_name", pa_node_name)
+
+// Propagate variables to the current post script
+new File(localspace, "hbase_container_id").text = hbase_container_id.toString()
+new File(localspace, "hbase_container_name").text = hbase_rest_server_container_name
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <controlFlow block="none"></controlFlow>
+            <post>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+import groovy.json.JsonOutput
+
+// Retrieve the script arguments
+def hbase_container_id = new File(localspace, "hbase_container_id").text
+def hbase_container_name = new File(localspace, "hbase_container_name").text
+
+// Retrieve variables
+def instance_name = variables.get("INSTANCE_NAME")
+def pa_node_name = variables.get("PA_NODE_NAME")
+def pa_node_host = variables.get("PA_NODE_HOST")
+def pa_node_source_name = variables.get("PA_NODE_SOURCE")
+def pa_node_url = variables.get("PA_NODE_URL")
+def job_id = variables.get("PA_JOB_ID")
+def pca_public_rest_url = variables.get('PA_CLOUD_AUTOMATION_REST_PUBLIC_URL')
+def instance_id = variables.get("PCA_INSTANCE_ID")
+def hbase_gui_port = variables.get("hbase_rest_server_gui_port")
+def hbase_endpoint_url = "http://" + pa_node_host + ":" + hbase_gui_port
+
+// Build the proxified url
+def endpoint_id = "hbase-rest-server-gui-" + job_id
+def proxyfied_url = pca_public_rest_url + "/services/" + instance_id + "/endpoints/" + endpoint_id + "/"
+
+// Create the deployment map and json
+def deployment_map = ["endpoint":["id":endpoint_id,"url":hbase_endpoint_url,"proxyfied_url":proxyfied_url],"node":["name":pa_node_name,"host":pa_node_host,"node_source_name":pa_node_source_name,"url":pa_node_url],"container":["id":hbase_container_id,"name":hbase_container_name]]
+def deployment_json = JsonOutput.toJson(deployment_map)
+
+// Propagate the deployment map
+def nb_rep = variables.get("nb_hbase_region_servers")
+variables.put("hbase_deployment_json_" + ((nb_rep as Integer) + 3) , deployment_json)
+
+// Add token to the current node (RM API)
+rmapi.connect()
+nodeUrl = variables.get("PA_NODE_URL")
+println "Adding token " + instance_name + " to node " + nodeUrl
+rmapi.addNodeToken(nodeUrl, instance_name)
+]]>
+                    </code>
+                </script>
+            </post>
+            <metadata>
+                <positionTop>
+                    439.4722137451172
+                </positionTop>
+                <positionLeft>
+                    649.3888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+        <task name="merge_json_deployments_and_propagate"
+
+
+
+
+              fork="true">
+            <genericInformation>
+                <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png"/>
+            </genericInformation>
+            <depends>
+                <task ref="start_hbase_master_backup"/>
+                <task ref="start_hbase_rest_server"/>
+                <task ref="start_hbase_thrift_server"/>
+            </depends>
+            <scriptExecutable>
+                <script>
+                    <code language="groovy">
+                        <![CDATA[
+//nb_deployments without counting the host node
+def nb_deployments = (variables.get("nb_hbase_region_servers") as Integer) + 3
+def hbase_deployements_pa_node_names = variables.get("hbase_deployements_pa_node_names")
+
+for (i = 0; i < nb_deployments; i++) {
+    hbase_deployements_pa_node_names += "," + variables.get("hbase_server_" + i + "_pa_node_name")
+}
+
+nb_deployments = "" + nb_deployments
+variables.put("hbase_deployements_pa_node_names", hbase_deployements_pa_node_names)
+variables.put("nb_deployments", nb_deployments)
+
+def nb_deployments_total = (variables.get("nb_hbase_region_servers") as Integer) + 4
+variables.put("nb_deployments_total", nb_deployments_total)
+]]>
+                    </code>
+                </script>
+            </scriptExecutable>
+            <metadata>
+                <positionTop>
+                    567.4583587646484
+                </positionTop>
+                <positionLeft>
+                    459.8888854980469
+                </positionLeft>
+            </metadata>
+        </task>
+    </taskFlow>
+    <metadata>
+        <visualization>
+            <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2508px;
+            height:2764px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-52.47221374511719px;left:-263.8888854980469px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_66" style="top: 57.4859px; left: 459.902px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">retrieve_services_variables</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_69" style="top: 185.486px; left: 459.875px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">start_hbase_master</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_72" style="top: 695.472px; left: 459.902px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">propagate_variables_and_update_deployments_with_service</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_75" style="top: 823.472px; left: 459.902px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">loop_over_hbase_status</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_78" style="top: 312.486px; left: 459.902px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title=""><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">start_hbase_region_servers</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_81" style="top: 439.486px; left: 268.902px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title=""><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">start_hbase_thrift_server</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_84" style="top: 439.486px; left: 459.902px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title=""><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">start_hbase_master_backup</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_87" style="top: 439.486px; left: 649.402px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title=""><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">start_hbase_rest_server</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_90" style="top: 567.472px; left: 459.902px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/hbase.png" width="20px">&nbsp;<span class="name">merge_json_deployments_and_propagate</span></a></div><svg style="position:absolute;left:511.5px;top:97.5px" width="37" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 26 50 16 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,66.303232 L10.047269700939381,48.51391706735172 L1.8312684117227083,52.69689720304326 L-3.559065096017358,45.217304655629015 L-1.4653440000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,66.303232 L10.047269700939381,48.51391706735172 L1.8312684117227083,52.69689720304326 L-3.559065096017358,45.217304655629015 L-1.4653440000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:548.7px;top:215.5px" width="48.19999999999993" height="98" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 27.199999999999932 87 C 37.19999999999993 87 -10 -10 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M26.99189839999994,76.056144 L27.50245312239381,54.87267559004784 L22.686721157449764,62.73452814792605 L14.180837270319856,59.17785283259801 L26.99189839999994,76.056144" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M26.99189839999994,76.056144 L27.50245312239381,54.87267559004784 L22.686721157449764,62.73452814792605 L14.180837270319856,59.17785283259801 L26.99189839999994,76.056144" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_101" style="position: absolute; transform: translate(-50%, -50%); left: 572.3px; top: 265.25px;">replicate</div><svg style="position:absolute;left:560px;top:606.5px" width="63.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 42.5 88 C 52.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M41.154719375000006,64.9032055 L36.49908598088989,44.23136287047984 L33.73953468002493,53.028230302577164 L24.624110783467057,51.64654756545491 L41.154719375000006,64.9032055" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M41.154719375000006,64.9032055 L36.49908598088989,44.23136287047984 L33.73953468002493,53.028230302577164 L24.624110783467057,51.64654756545491 L41.154719375000006,64.9032055" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:521px;top:734.5px" width="102.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 91.5 50 81.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.215295999999998,62.682047999999995 L27.208213679123375,55.661845533133686 L18.150790673500328,53.94048313746846 L18.466648816591842,44.72635085963336 L7.215295999999998,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.215295999999998,62.682047999999995 L27.208213679123375,55.661845533133686 L18.150790673500328,53.94048313746846 L18.466648816591842,44.72635085963336 L7.215295999999998,62.682047999999995" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:583.0266769263776px;top:772.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_113" style="position: absolute; transform: translate(-50%, -50%); left: 595px; top: 842.5px;">loop</div><svg style="position:absolute;left:511.5px;top:225.5px" width="38" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 17 87 C 27 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,65.388768 L20.144527959052745,44.272760719594906 L14.871462510144921,51.83548382516571 L6.591243784218459,47.78110620944998 L18.379808,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M18.379808,65.388768 L20.144527959052745,44.272760719594906 L14.871462510144921,51.83548382516571 L6.591243784218459,47.78110620944998 L18.379808,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:331px;top:352.5px" width="218.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 86 C -10 36 207.5 50 197.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.33992,57.729471999999994 L51.50466880158586,58.75582874391024 L43.76244255088473,53.75003882792751 L47.52523562951337,45.33330619302551 L30.33992,57.729471999999994" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.33992,57.729471999999994 L51.50466880158586,58.75582874391024 L43.76244255088473,53.75003882792751 L47.52523562951337,45.33330619302551 L30.33992,57.729471999999994" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:528.5px;top:352.5px" width="22.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 1.5 86 C 11.5 36 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.193578125,64.94400000000002 L10.202962770515416,44.62437165245774 L3.5060594672832384,50.96089168692129 L-3.780145542563307,45.311890310174505 L4.193578125,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.193578125,64.94400000000002 L10.202962770515416,44.62437165245774 L3.5060594672832384,50.96089168692129 L-3.780145542563307,45.311890310174505 L4.193578125,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:528.5px;top:352.5px" width="203" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 182 86 C 192 36 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M155.324603,58.11238399999999 L138.46808432211054,45.272688596215495 L142.01031484993337,53.78459806987417 L134.14029839198474,58.58697674628214 L155.324603,58.11238399999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M155.324603,58.11238399999999 L138.46808432211054,45.272688596215495 L142.01031484993337,53.78459806987417 L134.14029839198474,58.58697674628214 L155.324603,58.11238399999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:530px;top:478.5px" width="51" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 30 88 C 40 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.149295000000002,65.8307285 L28.583909256055367,44.69900903676998 L24.560839508460937,52.99448429777766 L15.747665053833021,50.287464528309044 L30.149295000000002,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M30.149295000000002,65.8307285 L28.583909256055367,44.69900903676998 L24.560839508460937,52.99448429777766 L15.747665053833021,50.287464528309044 L30.149295000000002,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:560px;top:478.5px" width="171.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 160.5 50 150.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M20.703125,60.1875 L41.86478175940966,59.099252235503464 L33.662179814507894,54.89005737977466 L36.56733913918432,46.14019742099557 L20.703125,60.1875" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M20.703125,60.1875 L41.86478175940966,59.099252235503464 L33.662179814507894,54.89005737977466 L36.56733913918432,46.14019742099557 L20.703125,60.1875" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:331px;top:478.5px" width="250" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 229 88 C 239 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M192.02496075,59.00425649999999 L174.45251931201136,47.163255617116015 L178.48219529530186,55.45552379112554 L170.9037866031369,60.70602107181413 L192.02496075,59.00425649999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M192.02496075,59.00425649999999 L174.45251931201136,47.163255617116015 L178.48219529530186,55.45552379112554 L170.9037866031369,60.70602107181413 L192.02496075,59.00425649999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 528px; top: 88px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 512px; top: 216px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 512px; top: 176px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 549.2px; top: 216px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 603px; top: 725px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 603px; top: 685px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 521.5px; top: 853px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 521.5px; top: 813px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 593px; top: 813px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 593px; top: 853px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 529px; top: 343px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 576.4px; top: 303px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 529px; top: 303px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 331.5px; top: 469px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 331.5px; top: 429px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 530.5px; top: 469px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 530.5px; top: 429px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 711px; top: 469px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 711px; top: 429px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 560.5px; top: 597px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 560.5px; top: 557px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+        </visualization>
+    </metadata>
+</job>
