@@ -17,7 +17,7 @@ public class HelloHBase {
 
     public void createHbaseTable() throws IOException {
         Configuration conf = HBaseConfiguration.create();
-        conf.set("hbase.zookeeper.quorum","trydev2.activeeon.com:56108");
+        conf.set("hbase.zookeeper.quorum","ZOOKEEPER-replacement");
         Connection connection = ConnectionFactory.createConnection(conf);
         Admin admin = connection.getAdmin();
 
