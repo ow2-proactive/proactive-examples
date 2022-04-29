@@ -109,8 +109,8 @@ if (DOCKER_ENABLED) {
     cmd.add("-w")
     cmd.add(workspaceContainer)
 
-    if (isWindows) {
-        // linux on windows does not allow sharing identities (such as AD identities)
+    if (isWindows || isMac) {
+        // linux on windows/mac does not allow sharing identities (such as AD identities)
     } else {
         sigar = new org.hyperic.sigar.Sigar()
         try {
