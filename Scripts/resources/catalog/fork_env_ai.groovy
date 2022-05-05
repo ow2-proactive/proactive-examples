@@ -265,7 +265,7 @@ if (CONTAINER_ENABLED && (
     }
 
     if (!isWindows && !isMac) {
-        // when not on windows, mount and use the current JRE
+        // when not on windows/mac, mount and use the current JRE
         currentJavaHome = System.getProperty("java.home")
         forkEnvironment.setJavaHome(currentJavaHome)
         if (!isPANodeInContainer) {
@@ -297,8 +297,8 @@ if (CONTAINER_ENABLED && (
     cmd.add("-w")
     cmd.add(workspaceContainer)
 
-    // linux on windows does not allow sharing identities (such as AD identities)
-    if (!isWindows && CONTAINER_ROOTLESS_ENABLED) {
+    // linux on windows/mac does not allow sharing identities (such as AD identities)
+    if (!isWindows && !isMac && CONTAINER_ROOTLESS_ENABLED) {
         sigar = new org.hyperic.sigar.Sigar()
         try {
             pid = sigar.getPid()
