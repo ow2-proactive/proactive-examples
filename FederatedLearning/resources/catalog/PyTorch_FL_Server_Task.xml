@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <job xmlns="urn:proactive:jobdescriptor:3.13" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="PyTorch_FL_Server_Task" onTaskError="cancelJob" priority="normal" projectName="1. PyTorch Federated Learning Tasks" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd">
   <variables>
-    <variable name="CONTAINER_PLATFORM" value="docker" advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)"/>
-    <variable name="CONTAINER_GPU_ENABLED" value="False" description="If True, containers will run based on images containing libraries that are compatible with GPU." hidden="false" group="Container Parameters" model="PA:Boolean" advanced="true"/>
-    <variable name="CONTAINER_IMAGE" value="docker://activeeon/flower:cpu" description="Name of the container image being used." group="Container Parameters" hidden="false" model="PA:LIST(docker://activeeon/flower:cpu)" advanced="true"/>
+    <variable advanced="false" description="Number of rounds between server and clients." hidden="false" model="PA:INTEGER" name="NUMBER_OF_ROUNDS" value="3"/>
+    <variable advanced="false" description="Minimum number of clients that need to be connected to the server before a training round can start." hidden="false" model="PA:INTEGER" name="MIN_NUMBER_OF_CLIENTS" value="2"/>
+    <variable advanced="false" description="Network port number used to run the Federated Learning server." hidden="false" model="PA:INTEGER" name="FEDERATED_LEARNING_SERVER_PORT" value="8080"/>
+    <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
+    <variable advanced="true" description="Name of the container image being used." group="Container Parameters" hidden="false" model="PA:LIST(docker://activeeon/flower:cpu)" name="CONTAINER_IMAGE" value="docker://activeeon/flower:cpu"/>
+    <variable advanced="true" description="If True, containers will run based on images containing libraries that are compatible with GPU." group="Container Parameters" hidden="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="False"/>
   </variables>
   <description>
     <![CDATA[ Simple Federated Learning Server task template using PyTorch. ]]>
@@ -20,8 +23,8 @@
         <![CDATA[ Simple Federated Learning Server task template using PyTorch. ]]>
       </description>
       <variables>
-        <variable advanced="false" hidden="false" inherited="false" name="TASK_NODE_SOURCE_NAME" value="$NODE_SOURCE_NAME" description="If not empty, the task will be run only on nodes belonging to the specified node source."/>
-        <variable advanced="false" hidden="false" inherited="false" name="TASK_NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN" description="If not empty, the task will be run only on nodes that contains the specified token."/>
+        <variable advanced="false" description="If not empty, the task will be run only on nodes belonging to the specified node source." hidden="false" inherited="false" name="TASK_NODE_SOURCE_NAME" value="$NODE_SOURCE_NAME"/>
+        <variable advanced="false" description="If not empty, the task will be run only on nodes that contains the specified token." hidden="false" inherited="false" name="TASK_NODE_ACCESS_TOKEN" value="$NODE_ACCESS_TOKEN"/>
       </variables>
       <genericInformation>
         <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/pytoch.jpg"/>
@@ -64,16 +67,37 @@ print("BEGIN " + __file__)
 
 import flwr as fl
 
+NUMBER_OF_ROUNDS = int(variables.get("NUMBER_OF_ROUNDS"))
+MIN_NUMBER_OF_CLIENTS = int(variables.get("MIN_NUMBER_OF_CLIENTS"))
+
+FEDERATED_LEARNING_SERVER_PORT = variables.get("FEDERATED_LEARNING_SERVER_PORT")
+if FEDERATED_LEARNING_SERVER_PORT is None or FEDERATED_LEARNING_SERVER_PORT.strip() == '':
+    FEDERATED_LEARNING_SERVER_PORT = "8080"
+
+FEDERATED_LEARNING_SERVER_ADDR = "[::]:" + FEDERATED_LEARNING_SERVER_PORT
+print("FEDERATED_LEARNING_SERVER_ADDR: ", FEDERATED_LEARNING_SERVER_ADDR)
+
+"""
+fraction_eval: a float defining the fraction of clients that will be selected for evaluation. If fraction_eval is set to 0.1 and 100 clients are connected to the server, then 10 will be randomly selected for evaluation. If fraction_eval is set to 0.0, federated evaluation will be disabled.
+
+min_eval_clients: an int: the minimum number of clients to be selected for evaluation. If fraction_eval is set to 0.1, min_eval_clients is set to 20, and 100 clients are connected to the server, then 20 clients will be selected for evaluation.
+
+min_available_clients: an int that defines the minimum number of clients which need to be connected to the server before a round of federated evaluation can start. If fewer than min_available_clients are connected to the server, the server will wait until more clients are connected before it continues to sample clients for evaluation.
+"""
+
 # Define strategy
 strategy = fl.server.strategy.FedAvg(
-    fraction_fit=0.5,
-    fraction_eval=0.5,
+    fraction_fit=0.5,   # Sample 50% of available clients for training
+    fraction_eval=0.5,  # Sample 50% of available clients for evaluation
+	min_fit_clients=2,  # Never sample less than 2 clients for training
+	min_eval_clients=2, # Never sample less than 2 clients for evaluation
+	min_available_clients=MIN_NUMBER_OF_CLIENTS, # Wait until at least MIN_NUMBER_OF_CLIENTS clients are available
 )
 
 # Start server
 fl.server.start_server(
-    server_address="[::]:8080",
-    config={"num_rounds": 3},
+    server_address=FEDERATED_LEARNING_SERVER_ADDR,
+    config={"num_rounds": NUMBER_OF_ROUNDS},
     strategy=strategy,
 )
 
