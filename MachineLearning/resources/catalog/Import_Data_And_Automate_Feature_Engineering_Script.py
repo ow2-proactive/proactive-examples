@@ -1489,7 +1489,7 @@ def bokeh_page(doc):
                 coding_options = data
                 for i in range(len(coding_options)):
                     if list(coding_options["Coding"])[i] == "Auto":
-                        list(coding_options["Coding"])[i] = auto_mode(list(coding_options["Name"])[i],
+                        coding_options["Coding"][i] = auto_mode(list(coding_options["Name"])[i],
                                                                       list(coding_options["Cardinality"])[i],
                                                                       list(coding_options["Category"])[i])
                 coding_parameters = {"Column Name": coding_options["Name"], "Encoding Method": coding_options["Coding"],
@@ -1565,7 +1565,7 @@ def bokeh_page(doc):
             coding_options = data
             for i in range(len(list(coding_options["Coding"]))):
                 if list(coding_options["Coding"])[i] == "Auto":
-                    list(coding_options["Coding"])[i] = auto_mode(list(coding_options["Name"])[i],
+                    coding_options["Coding"][i] = auto_mode(list(coding_options["Name"])[i],
                                                                   list(coding_options["Cardinality"])[i],
                                                                   list(coding_options["Category"])[i])
             coding_parameters = {"Column Name": coding_options["Name"], "Encoding Method": coding_options["Coding"],
