@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2022. All rights reserved.
 #!/usr/bin/env python3
 
 import argparse
@@ -24,7 +25,7 @@ from tempfile import TemporaryFile
 from urllib.parse import quote
 from cryptography.fernet import Fernet
 from flask_cors import CORS
-
+from flask import render_template
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -38,6 +39,7 @@ except ImportError:
 
 
 # Environment variables
+ENGINE = True if (os.getenv('ENGINE') is not None and os.getenv('ENGINE').lower() == "docker") else False
 INSTANCE_PATH = os.getenv('INSTANCE_PATH') if os.getenv('INSTANCE_PATH') is not None else "/model_as_service"
 MODEL_SAVE_PATH = join(INSTANCE_PATH, "tmp")
 PROMETHEUS_SERVICE_INTERNAL_PORT = os.getenv('PROMETHEUS_SERVICE_INTERNAL_PORT') if os.getenv(
@@ -97,6 +99,9 @@ if not isfile(CONFIG_FILE):
         json.dump(config, f)
     print("Done")
 
+# Import utils in case ENGINE = docker
+if ENGINE:
+    import dash_utils
 
 # ----- Helper functions ----- #
 
@@ -550,6 +555,24 @@ def trace_preview_api(key) -> str:
     else:
         return log("[ERROR] Invalid key", key)
 
+def dashapp_api(key) -> str:
+    if ENGINE:
+        if USER_KEY == key.encode():
+
+            if not exists(TRACE_FILE):
+                log("[WARN] Trace file is empty", key)
+            return render_template(
+                'index.jinja2',
+                title='Plotly Dash Flask',
+                description='Embed Plotly Dash into your Flask applications.',
+                template='home-template',
+                body="This is a homepage served with Flask."
+            )
+        else:
+            return log("Invalid key", key)
+    else:
+        return log("Dash dashboard is not available for Singularity", log)
+
 
 # ----- Main entry point ----- #
 if __name__ == '__main__':
@@ -560,5 +583,6 @@ if __name__ == '__main__':
     app = connexion.FlaskApp(__name__, port=args.port, specification_dir=INSTANCE_PATH)
     CORS(app.app)
     app.add_api('dl_service-api.yaml', arguments={'title': 'Deep Learning Model Service'})
-
+    if ENGINE:
+        dash_utils.init_dashboard(app.app)
     app.run(debug=DEBUG_ENABLED)
