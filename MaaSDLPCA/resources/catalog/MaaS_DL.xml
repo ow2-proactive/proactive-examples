@@ -14,7 +14,7 @@
     <variable name="PYTHON_ENTRYPOINT" value="dl_service"  description="This entry script starts the service and defines the different functions to deploy the model, scores the prediction requests based on the deployed model, and returns the results. This script is specific to your model. This file should be stored in the Catalog under the model_as_service bucket" group="MaaS_DL Service Configuration" advanced="true" hidden="false"/>
     <variable name="SERVICE_PORT" value="-1"  description="The port that will be used to expose the service." group="Proactive Service Parameters" advanced="true" hidden="false"/>
     <variable name="ENGINE" value="docker" model="PA:List(docker,singularity)" description="The container engine type. It is possible to select Docker or Singularity." group="Proactive Service Parameters" advanced="false" hidden="false"/>
-    <variable name="DOCKER_IMAGE" value="activeeon/maas_dl"  description="Name of the Docker image that will be used to run the different workflow tasks." group="Proactive Service Parameters" advanced="true" hidden="false"/>
+    <variable name="DOCKER_IMAGE" value="activeeon/maas_dl:latest" model="" description="Name of the Docker image that will be used to run the different workflow tasks." group="Proactive Service Parameters" advanced="true" hidden="false"/>
     <variable name="MODEL_BASE_PATH" value="/tmp"  description="The model base path." group="MaaS_DL Service Configuration" advanced="true" hidden="false"/>
     <variable name="MODELS_DEPLOYMENT_REFRESH" value="30" model="PA:Integer" description="Models deployment refreshing interval." group="MaaS_DL Service Configuration" advanced="true" hidden="false"/>
     <variable name="SINGULARITY_IMAGE_PATH" value="/tmp/maas_dl.sif"  description="Location of the singularity image on the node file system. If the image does not exist in the specified location, it is possible to automatically built it from the specified Docker image." group="Singularity management" advanced="true" hidden="false"/>
@@ -337,10 +337,10 @@ println("END " + variables.get("PA_TASK_NAME"))
       </cleaning>
       <metadata>
         <positionTop>
-            320.85938262939453
+            366.2673797607422
         </positionTop>
         <positionLeft>
-            296.89239501953125
+            423.45489501953125
         </positionLeft>
       </metadata>
     </task>
@@ -438,10 +438,10 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
       </controlFlow>
       <metadata>
         <positionTop>
-            448.8541946411133
+            502.2743377685547
         </positionTop>
         <positionLeft>
-            296.89239501953125
+            383.45489501953125
         </positionLeft>
       </metadata>
     </task>
@@ -485,10 +485,10 @@ if(engine.toLowerCase().equals("singularity")){
       </controlFlow>
       <metadata>
         <positionTop>
-            192.85590362548828
+            229.27085876464844
         </positionTop>
         <positionLeft>
-            360.89410400390625
+            513.4549560546875
         </positionLeft>
       </metadata>
     </task>
@@ -535,6 +535,7 @@ CONFIG_FILE_POLL_SECONDS=$variables_MODELS_DEPLOYMENT_REFRESH
 PROMETHEUS_SERVICE_INTERNAL_PORT=9091
 MODEL_SERVICE_INTERNAL_PORT=9090
 DOCKER_IMAGE=$variables_DOCKER_IMAGE
+ENGINE=$variables_ENGINE
 HTTPS_ENABLED=$variables_HTTPS_ENABLED
 DEBUG_ENABLED=$variables_DEBUG_ENABLED
 USER_KEY=$variables_USER_KEY
@@ -587,7 +588,7 @@ if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
 else
     echo "Running $INSTANCE_NAME container"
     echo "docker run -dit --name $INSTANCE_NAME -v /etc/localtime:/etc/localtime -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e USER_KEY=$USER_KEY -p $MODEL_SERVICE_HOST_PORT:$MODEL_SERVICE_INTERNAL_PORT $DOCKER_IMAGE"
-    docker run -dit --name $INSTANCE_NAME -v /etc/localtime:/etc/localtime -e INSTANCE_PATH=$INSTANCE_PATH -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e USER_KEY=$USER_KEY -p $MODEL_SERVICE_HOST_PORT:$MODEL_SERVICE_INTERNAL_PORT -e CONFIG_FILE_POLL_SECONDS=$CONFIG_FILE_POLL_SECONDS -e MODEL_BASE_PATH=$MODEL_BASE_PATH $DOCKER_IMAGE
+    docker run -dit --name $INSTANCE_NAME -v /etc/localtime:/etc/localtime -e ENGINE=$ENGINE -e INSTANCE_PATH=$INSTANCE_PATH -e HTTPS_ENABLED=$HTTPS_ENABLED -e DEBUG_ENABLED=$DEBUG_ENABLED -e USER_KEY=$USER_KEY -p $MODEL_SERVICE_HOST_PORT:$MODEL_SERVICE_INTERNAL_PORT -e CONFIG_FILE_POLL_SECONDS=$CONFIG_FILE_POLL_SECONDS -e MODEL_BASE_PATH=$MODEL_BASE_PATH $DOCKER_IMAGE
     echo "docker exec $INSTANCE_NAME mkdir -p $INSTANCE_PATH"
     docker exec $INSTANCE_NAME mkdir -p $INSTANCE_PATH
     #Copy the needed files to launch the service
@@ -626,133 +627,7 @@ echo END "$variables_PA_TASK_NAME"
       <controlFlow block="none"></controlFlow>
       <post>
         <script>
-          <code language="groovy">
-            <![CDATA[
-import org.ow2.proactive.pca.service.client.ApiClient
-import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
-import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
-import org.ow2.proactive.pca.service.client.model.Container
-import org.ow2.proactive.pca.service.client.model.Endpoint
-import org.ow2.proactive.pca.service.client.model.Deployment
-import org.ow2.proactive.pca.service.client.model.Node
-import java.net.URLEncoder;
-
-// Acquire variables
-def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def instanceName = variables.get("INSTANCE_NAME")
-def proxyfied = variables.get("PROXYFIED")
-def hostname = variables.get("PA_NODE_HOST")
-def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
-def httpsEnabled = variables.get("HTTPS_ENABLED")
-def userKey = variables.get("USER_KEY")
-def traceEnabled = variables.get("TRACE_ENABLED")
-def engine = variables.get("ENGINE")
-
-// Handle service parameters
-def port = new File(instanceName+"_port").text.trim()
-def containerUrl = hostname+":"+port
-def containerID = ""
-if (engine != null && "singularity".equalsIgnoreCase(engine)) {
-    containerID = "0"
-} else {
-    containerID = new File(instanceName+"_containerID").text.trim()
-}
-
-// Determine Cloud Automation URL
-def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
-
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-// Implement service model
-
-// Container
-def Container container = new Container()
-container.setId(containerID)
-container.setName(instanceName)
-
-// Endpoint
-def Endpoint endpoint = new Endpoint();
-endpoint.setId(endpointID);
-// Set the endpoint parameters according to the Proxy settings
-if (proxyfied.toLowerCase()=="true"){
-    if (httpsEnabled.toLowerCase()=="true"){
-        containerUrl = "https://"+containerUrl
-    } else{
-        containerUrl = "http://"+containerUrl
-    }
-    containerUrl = URLDecoder.decode(containerUrl, "UTF-8");
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointID+"/api/trace_preview?key="+userKey
-    endpoint.setProxyfied(true);
-    endpoint.setProxyfiedUrl(proxyfiedURL)
-}else{
-    endpoint.setProxyfied(false)
-    ENDPOINT_PATH = "/api/ui"
-    if (traceEnabled.toLowerCase()=="true"){
-        ENDPOINT_PATH = "/api/trace_preview?key="+userKey
-    }
-    if (httpsEnabled.toLowerCase()=="true"){
-        containerUrl = "https://"+containerUrl+ENDPOINT_PATH
-    } else{
-        containerUrl = "http://"+containerUrl+ENDPOINT_PATH
-    }
-    containerUrl = URLDecoder.decode(containerUrl, "UTF-8");
-}
-endpoint.setUrl(containerUrl);
-
-// Node
-def Node node = new Node();
-node.setName(variables.get("PA_NODE_NAME"))
-node.setHost(variables.get("PA_NODE_HOST"))
-node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
-node.setUrl(variables.get("PA_NODE_URL"))
-
-// Deployment
-def Deployment deployment = new Deployment()
-deployment.setNode(node)
-deployment.setContainer(container)
-deployment.setEndpoint(endpoint)
-
-// Update service instance model (add Deployment, Groups)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
-serviceInstanceData.setInstanceStatus("RUNNING")
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-if (proxyfied.toLowerCase()=="true"){
-    serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
-    serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
-}
-serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
-println(serviceInstanceData)
-
-schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)
-
-// Inform other platforms that service is running through Synchronization API
-channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, false)
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
-// Add token to the current node
-token = instanceName
-nodeUrl = variables.get("PA_NODE_URL")
-println("Current nodeUrl: " + nodeUrl)
-println("Adding token:    " + token)
-rmapi.connect()
-rmapi.addNodeToken(nodeUrl, token)
-
-// Log output
-println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
-
-println("END " + variables.get("PA_TASK_NAME"))
-]]>
-          </code>
+          <file url="${PA_CATALOG_REST_URL}/buckets/model-as-a-service/resources/MaaS_Post_Script/raw" language="groovy"></file>
         </script>
       </post>
       <cleaning>
@@ -762,10 +637,10 @@ println("END " + variables.get("PA_TASK_NAME"))
       </cleaning>
       <metadata>
         <positionTop>
-            321.8576431274414
+            350.2604522705078
         </positionTop>
         <positionLeft>
-            423.888916015625
+            661.4410400390625
         </positionLeft>
       </metadata>
     </task>
@@ -809,10 +684,10 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
       </controlFlow>
       <metadata>
         <positionTop>
-            448.8541946411133
+            484.27085876464844
         </positionTop>
         <positionLeft>
-            424.8958740234375
+            683.4375
         </positionLeft>
       </metadata>
     </task>
@@ -826,15 +701,15 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2386px;
-            height:3139px;
+            width:3152px;
+            height:3871px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-187.85590362548828px;left:-291.89239501953125px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1" style="top: 320.861px; left: 296.896px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull DL_Model_Service image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_MaaS_DL_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4" style="top: 448.861px; left: 296.896px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_7" style="top: 192.861px; left: 360.896px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_10" style="top: 321.859px; left: 423.896px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull DL_Model_Service image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_MaaS_DL_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_13" style="top: 448.861px; left: 424.896px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:345.5px;top:360.5px" width="49" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 28 88 C 38 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.3293185,65.8307285 L27.243134379193783,44.66896571766761 L23.033139643665223,52.87115715208451 L14.283563031278282,49.96514457400239 L28.3293185,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.3293185,65.8307285 L27.243134379193783,44.66896571766761 L23.033139643665223,52.87115715208451 L14.283563031278282,49.96514457400239 L28.3293185,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:451.0266769263776px;top:398.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_24" style="position: absolute; transform: translate(-50%, -50%); left: 463px; top: 468.5px;">loop</div><svg style="position:absolute;left:286.5px;top:232.5px" width="85" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 74 50 64 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.998374500000004 L22.929075029560156,54.31512137928547 L13.721469712576434,53.84607519109808 L12.776775720658232,44.675058166709036 L4.081406499999998,63.998374500000004" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.081406499999998,63.998374500000004 L22.929075029560156,54.31512137928547 L13.721469712576434,53.84607519109808 L12.776775720658232,44.675058166709036 L4.081406499999998,63.998374500000004" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_30" style="position: absolute; transform: translate(-50%, -50%); left: 328.5px; top: 276.5px;">if</div><svg style="position:absolute;left:350.5px;top:232.5px" width="83.8958740234375" height="89.85938262939453" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 62.8958740234375 88.85938262939453 C 72.8958740234375 38.85938262939453 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M58.93464583932496,64.76421784194375 L50.515384695108814,45.31901170301346 L49.44016182597153,54.47564294936625 L40.226809802531314,54.81349571636689 L58.93464583932496,64.76421784194375" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M58.93464583932496,64.76421784194375 L50.515384695108814,45.31901170301346 L49.44016182597153,54.47564294936625 L40.226809802531314,54.81349571636689 L58.93464583932496,64.76421784194375" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_34" style="position: absolute; transform: translate(-50%, -50%); left: 391.948px; top: 276.93px;">else</div><svg style="position:absolute;left:472.8958740234375px;top:361.35938262939453px" width="49.6041259765625" height="88.14061737060547" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 28.6041259765625 87.14061737060547 C 38.6041259765625 37.14061737060547 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.879066040191653,65.04870040499688 L27.560099103074176,43.90017028541668 L23.440610151301335,52.14818888240235 L14.659587580479648,49.338626174306995 L28.879066040191653,65.04870040499688" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M28.879066040191653,65.04870040499688 L27.560099103074176,43.90017028541668 L23.440610151301335,52.14818888240235 L14.659587580479648,49.338626174306995 L28.879066040191653,65.04870040499688" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:579.0266769263776px;top:398.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_43" style="position: absolute; transform: translate(-50%, -50%); left: 591px; top: 468.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 346px; top: 351px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 287px; top: 311px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 374px; top: 479px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 374px; top: 439px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 461px; top: 439px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 461px; top: 479px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 401px; top: 223px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 351px; top: 223px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 473.396px; top: 351.859px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 413.896px; top: 311.859px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 502px; top: 479px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 502px; top: 439px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 589px; top: 439px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 589px; top: 479px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-224.27085876464844px;left:-378.45489501953125px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_87" style="top: 366.284px; left: 423.455px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull DL_Model_Service image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_MaaS_DL_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_90" style="top: 502.291px; left: 383.455px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_S</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_93" style="top: 229.288px; left: 513.455px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Condition</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_96" style="top: 350.277px; left: 661.441px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull DL_Model_Service image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Start_MaaS_DL_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_99" style="top: 484.288px; left: 683.438px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:459.5px;top:405.5px" width="33" height="97" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 96 C -10 46 22 50 12 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.7275560000000008,72.607428 L8.72227696669965,54.17373626535072 L0.7656543355908072,58.83122016828872 L-5.053930865011629,51.680525929759916 L-1.7275560000000008,72.607428" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.7275560000000008,72.607428 L8.72227696669965,54.17373626535072 L0.7656543355908072,58.83122016828872 L-5.053930865011629,51.680525929759916 L-1.7275560000000008,72.607428" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:537.0266769263776px;top:451.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_110" style="position: absolute; transform: translate(-50%, -50%); left: 549px; top: 521.5px;">loop</div><svg style="position:absolute;left:412.5px;top:268.5px" width="111" height="98" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 97 C -10 47 100 50 90 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.741249999999997,70.09196875 L28.67834751194523,62.9147727237522 L19.607668914860533,61.264684911425356 L19.85106367337058,52.04835380889167 L8.741249999999997,70.09196875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.741249999999997,70.09196875 L28.67834751194523,62.9147727237522 L19.607668914860533,61.264684911425356 L19.85106367337058,52.04835380889167 L8.741249999999997,70.09196875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_116" style="position: absolute; transform: translate(-50%, -50%); left: 467.5px; top: 317px;">if</div><svg style="position:absolute;left:502.5px;top:268.5px" width="169" height="82" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 148 81 C 158 31 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M128.5320305,54.64572975 L112.26237875562023,41.07007388677921 L115.42308447990652,49.730901752778166 L107.3475507583984,54.17901990687268 L128.5320305,54.64572975" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M128.5320305,54.64572975 L112.26237875562023,41.07007388677921 L115.42308447990652,49.730901752778166 L107.3475507583984,54.17901990687268 L128.5320305,54.64572975" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_120" style="position: absolute; transform: translate(-50%, -50%); left: 586.5px; top: 309px;">else</div><svg style="position:absolute;left:710px;top:389.5px" width="71" height="95" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 50 94 C 60 44 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.44242,69.34530600000001 L41.794560196218455,48.92223865846611 L39.462773352941745,57.84203518739666 L30.29128938361511,56.90188530552435 L47.44242,69.34530600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.44242,69.34530600000001 L41.794560196218455,48.92223865846611 L39.462773352941745,57.84203518739666 L30.29128938361511,56.90188530552435 L47.44242,69.34530600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:838.0266769263776px;top:433.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294152,28.91537600442066 L-10.77778447022079,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_129" style="position: absolute; transform: translate(-50%, -50%); left: 850px; top: 503.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 472px; top: 396px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 413px; top: 356px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 460px; top: 532px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 460px; top: 492px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 547px; top: 492px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 547px; top: 532px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 553px; top: 259px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 503px; top: 259px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 710.5px; top: 380px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 651px; top: 340px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 760.5px; top: 514px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 760.5px; top: 474px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 848px; top: 474px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 848px; top: 514px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
