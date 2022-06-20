@@ -1484,7 +1484,7 @@ def bokeh_page(doc):
                                                reorderable=False, width_policy='max', height_policy='max')
                 n_rows_label_pre = Div(text="Show", margin=(30, 0, -10, 0))
                 n_rows_label_post = Div(text="entries of " + str(dataframe_size) + " rows", margin=(30, -10, 0, 0))
-                actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm)
+                actions = row(children=[column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm], css_classes = ['bk-encoded-actions'])
                 filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
                 coding_options = data
                 for i in range(len(coding_options)):
@@ -1560,7 +1560,7 @@ def bokeh_page(doc):
             export_btn.js_on_click(
                 CustomJS(args=dict(urls=['/download']), code="urls.forEach(url => window.open(url))"))
             div = Div(text="""""", margin=2)
-            actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm)
+            actions = row(children=[column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm], css_classes = ['bk-encoded-actions'])
             filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
             coding_options = data
             for i in range(len(list(coding_options["Coding"]))):
