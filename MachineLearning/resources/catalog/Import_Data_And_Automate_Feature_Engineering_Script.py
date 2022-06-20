@@ -1663,7 +1663,7 @@ def bokeh_page(doc):
 
     refresh_btn = Button(label="Refresh", button_type="primary", width=25, visible=True)
     refresh_btn.on_click(refresh_datatable)
-    actions = column(div, refresh_btn)
+    actions = column(children=[div, refresh_btn], css_classes = ['btn_refresh'])
     source0 = ColumnDataSource(data=dataset.head(int(options[0])))
     columns0 = [TableColumn(field=Ci, title=Ci) for Ci in dataset.columns]
     filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
