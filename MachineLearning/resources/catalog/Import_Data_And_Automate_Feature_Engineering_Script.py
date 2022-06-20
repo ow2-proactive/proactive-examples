@@ -30,7 +30,7 @@ from bokeh.models import Select, Div, Button
 from bokeh.models.widgets import TextInput
 from bokeh.server.server import Server
 from bokeh.themes import Theme
-from flask import Flask, render_template, Response, request, url_for
+from flask import Flask, render_template, Response, request
 from numpy import sort, array
 from sklearn.preprocessing import scale, LabelEncoder
 from tensorflow.keras.models import load_model
