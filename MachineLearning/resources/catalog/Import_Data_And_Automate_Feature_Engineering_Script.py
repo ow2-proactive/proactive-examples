@@ -30,7 +30,7 @@ from bokeh.models import Select, Div, Button
 from bokeh.models.widgets import TextInput
 from bokeh.server.server import Server
 from bokeh.themes import Theme
-from flask import Flask, render_template, Response, request
+from flask import Flask, render_template, Response, request, url_for
 from numpy import sort, array
 from sklearn.preprocessing import scale, LabelEncoder
 from tensorflow.keras.models import load_model
@@ -1387,10 +1387,10 @@ def bokeh_page(doc):
 
     error_message = Div(text='', visible=False)
 
-    edit_btn = Button(label="Save", button_type="success", width=45, visible=False)
+    edit_btn = Button(label="Save", button_type="primary", width=45, visible=False)
     edit_btn.on_click(update_dataframe)
 
-    restore_btn = Button(label="Restore", button_type="success", width=60, visible=False)
+    restore_btn = Button(label="Restore", button_type="primary", width=60, visible=False)
     restore_btn.on_click(restore_dataframe)
 
     delete_btn = Button(label="Delete Column", button_type="danger", width=97, visible=False)
@@ -1601,10 +1601,10 @@ def bokeh_page(doc):
     button.on_click(display_encoded_dataframe)
 
     layout = column(
-        row(text_row, column_name, text_type, column(div_category, category_type), coding_method, base, n_components,
+        row(children=[text_row, column_name, text_type, column(div_category, category_type), coding_method, base, n_components,
             target, tooltip, column(div, edit_btn), column(div, restore_btn), column(div, delete_btn),
             column(div_add, vertical_line), label_column,
-            column(div, button), column(div, quit_btn), quit, tab_id), data_table)
+            column(div, button), quit, tab_id, column(children=[div,quit_btn], css_classes = ['btn_quit'])], css_classes = ['bk_actions']), data_table)
     layout1 = grid([[div], [layout], [error_message], ], sizing_mode='stretch_width')
 
     # Define TAB0's Layout
@@ -1716,7 +1716,7 @@ t_bokehApp.start()
 
 
 def thread_flask():
-    app = Flask(__name__)
+    app = Flask(__name__,  static_url_path='/static')
 
     def shutdown_server():
         func = request.environ.get('werkzeug.server.shutdown')
