@@ -1,4 +1,3 @@
-# Copyright Activeeon 2007-2022. All rights reserved.
 #!/usr/bin/env python3
 
 import argparse
