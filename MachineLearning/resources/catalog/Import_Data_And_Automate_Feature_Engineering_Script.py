@@ -493,7 +493,7 @@ def bokeh_page(doc):
                TableColumn(field="Coding", title="Encoding Method"),
                TableColumn(field="Options", title="Encoding Options")]
 
-    data_table = DataTable(source=source, columns=columns, editable=True, reorderable=False, width_policy='max',
+    data_table = DataTable(source=source, columns=columns, editable=True, reorderable=False, sortable=False, width_policy='max',
                            height_policy='fixed')
 
     text_row = TextInput(value="", title="", width=0, disabled=True, visible=False)
