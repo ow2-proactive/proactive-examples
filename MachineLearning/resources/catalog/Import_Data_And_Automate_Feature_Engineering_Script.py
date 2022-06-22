@@ -493,7 +493,7 @@ def bokeh_page(doc):
                TableColumn(field="Coding", title="Encoding Method"),
                TableColumn(field="Options", title="Encoding Options")]
 
-    data_table = DataTable(source=source, columns=columns, editable=True, reorderable=False, width_policy='max',
+    data_table = DataTable(source=source, columns=columns, editable=True, reorderable=False, sortable=False, width_policy='max',
                            height_policy='fixed')
 
     text_row = TextInput(value="", title="", width=0, disabled=True, visible=False)
@@ -1387,10 +1387,10 @@ def bokeh_page(doc):
 
     error_message = Div(text='', visible=False)
 
-    edit_btn = Button(label="Save", button_type="success", width=45, visible=False)
+    edit_btn = Button(label="Save", button_type="primary", width=45, visible=False)
     edit_btn.on_click(update_dataframe)
 
-    restore_btn = Button(label="Restore", button_type="success", width=60, visible=False)
+    restore_btn = Button(label="Restore", button_type="primary", width=60, visible=False)
     restore_btn.on_click(restore_dataframe)
 
     delete_btn = Button(label="Delete Column", button_type="danger", width=97, visible=False)
@@ -1484,7 +1484,7 @@ def bokeh_page(doc):
                                                reorderable=False, width_policy='max', height_policy='max')
                 n_rows_label_pre = Div(text="Show", margin=(30, 0, -10, 0))
                 n_rows_label_post = Div(text="entries of " + str(dataframe_size) + " rows", margin=(30, -10, 0, 0))
-                actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm)
+                actions = row(children=[column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm], css_classes = ['bk-encoded-actions'])
                 filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
                 coding_options = data
                 for i in range(len(coding_options)):
@@ -1560,7 +1560,7 @@ def bokeh_page(doc):
             export_btn.js_on_click(
                 CustomJS(args=dict(urls=['/download']), code="urls.forEach(url => window.open(url))"))
             div = Div(text="""""", margin=2)
-            actions = row(column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm)
+            actions = row(children=[column(div, cancel_btn), column(div, confirm_btn), column(div, export_btn), confirm], css_classes = ['bk-encoded-actions'])
             filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
             coding_options = data
             for i in range(len(list(coding_options["Coding"]))):
@@ -1601,10 +1601,10 @@ def bokeh_page(doc):
     button.on_click(display_encoded_dataframe)
 
     layout = column(
-        row(text_row, column_name, text_type, column(div_category, category_type), coding_method, base, n_components,
+        row(children=[text_row, column_name, text_type, column(div_category, category_type), coding_method, base, n_components,
             target, tooltip, column(div, edit_btn), column(div, restore_btn), column(div, delete_btn),
             column(div_add, vertical_line), label_column,
-            column(div, button), column(div, quit_btn), quit, tab_id), data_table)
+            column(div, button), quit, tab_id, column(children=[div,quit_btn], css_classes = ['btn_quit'])], css_classes = ['bk_actions']), data_table)
     layout1 = grid([[div], [layout], [error_message], ], sizing_mode='stretch_width')
 
     # Define TAB0's Layout
@@ -1663,7 +1663,7 @@ def bokeh_page(doc):
 
     refresh_btn = Button(label="Refresh", button_type="primary", width=25, visible=True)
     refresh_btn.on_click(refresh_datatable)
-    actions = column(div, refresh_btn)
+    actions = column(children=[div, refresh_btn], css_classes = ['btn_refresh'])
     source0 = ColumnDataSource(data=dataset.head(int(options[0])))
     columns0 = [TableColumn(field=Ci, title=Ci) for Ci in dataset.columns]
     filter_datatable = row(n_rows_label_pre, n_rows, n_rows_label_post)
@@ -1716,7 +1716,7 @@ t_bokehApp.start()
 
 
 def thread_flask():
-    app = Flask(__name__)
+    app = Flask(__name__,  static_url_path='/static')
 
     def shutdown_server():
         func = request.environ.get('werkzeug.server.shutdown')
