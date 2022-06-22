@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.13" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Kursawe_Multiobjective_Function" onTaskError="continueJobExecution" priority="normal" projectName="2.  Objective Functions" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd">
+  <variables>
+    <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
+    <variable advanced="true" description="Name of the container image being used to run the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(,docker://activeeon/dlm3)" name="CONTAINER_IMAGE" value=""/>
+    <variable advanced="true" description="If True, containers will run based on images containing libraries that are compatible with GPU." group="Container Parameters" hidden="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="False"/>
+    <variable advanced="true" description="If true, the container will run in rootless mode." group="Container Parameters" model="PA:Boolean" name="CONTAINER_ROOTLESS_ENABLED" value="False"/>
+    <variable advanced="false" description="A set of specific variables (usecase-related) that are used in the model training process." hidden="false" model="PA:JSON" name="INPUT_VARIABLES" value="{&quot;x&quot;: 3.5976705887960527, &quot;y&quot;: -1.8471754188451843}"/>
+    <variable advanced="false" description="Specifies the representation of the search space which has to be defined using dictionaries or by entering the path of a json file stored in the catalog." hidden="false" model="PA:JSON" name="SEARCH_SPACE" value="{&quot;x&quot;:{&quot;uniform&quot;: [-5, 5]}, &quot;y&quot;:{&quot;uniform&quot;: [-5, 5]}}"/>
+  </variables>
+  <description>
+    <![CDATA[ Python script used as multiobjective function for hyperparameter optmization. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="auto-ml-optimization"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kursawe.png"/>
+<info name="Documentation" value="PML/PMLUserGuide.html#_objective_functions"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Kursawe_Multiobjective_Function">
+      <description>
+        <![CDATA[ The simplest task, ran by a Python engine. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.documentation" value="PML/PMLUserGuide.html#_objective_functions"/>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kursawe.png"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw"/>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/auto-ml-optimization/resources/get_automl_variables/raw"/>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+# 
+# Kursawe multiobjective function is a bi-objective test problem,
+# used to test the performance of multiobjective optimization algorithms.
+# https://en.wikipedia.org/wiki/Test_functions_for_optimization
+#
+import json
+import numpy as np
+
+from math import sin, exp, sqrt
+
+# Get task name
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# Get current job ID
+PA_JOB_ID = int(variables.get("PA_JOB_ID"))
+PA_JOB_ID_LOG = "job_ID_" + str(PA_JOB_ID)
+
+# Check parent job ID
+PARENT_JOB_ID = genericInformation.get('PARENT_JOB_ID')
+
+############################ INPUT FROM AUTOML ############################
+"""
+SEARCH_SPACE:
+{"x": {"uniform": [-5, 5]}, "y": {"uniform": [-5, 5]}}
+
+INPUT_VARIABLES:
+{"x": 3.5976705887960527, "y": -1.8471754188451843}
+"""
+# Get token and input variables
+token = variables.get('TOKEN')
+input_variables = variables.get('INPUT_VARIABLES')
+
+# Convert from JSON to dict
+token = json.loads(token)
+input_variables = json.loads(input_variables)
+###########################################################################
+
+# Kursawe's function
+def objective_function(x, y):
+    individual = [x, y]
+    f1 = sum(-10 * exp(-0.2 * sqrt(x * x + y * y)) for x, y in zip(individual[:-1], individual[1:]))
+    f2 = sum(abs(x)**0.8 + 5 * sin(x * x * x) for x in individual)
+    return f1, f2
+
+# Calculate the loss for the sampled point (minimized)
+x = input_variables['x']
+y = input_variables['y']
+print('x: ', x)
+print('y: ', y)
+loss = objective_function(**input_variables)
+print('loss: ', loss)
+
+############################### TENSORBOARD ###############################
+TENSORBOARD_ENABLED = variables.get("TENSORBOARD_ENABLED")
+if TENSORBOARD_ENABLED is not None and TENSORBOARD_ENABLED.lower() == "true":
+    try:
+        from tensorboardX import SummaryWriter
+        TENSORBOARD_CONTAINER_LOG_PATH = variables.get("TENSORBOARD_CONTAINER_LOG_PATH")
+        assert TENSORBOARD_CONTAINER_LOG_PATH is not None
+        PATH = os.path.join(TENSORBOARD_CONTAINER_LOG_PATH, PA_JOB_ID_LOG)
+        print('PATH: ', PATH)
+        if os.path.isdir(PATH):
+            try:
+                print('Removing existing path')
+                shutil.rmtree(PATH)
+            except:
+                print('Error while deleting directory')
+        os.mkdir(PATH)
+        writer = SummaryWriter(PATH)
+        token_id = token['_chocolate_id'] # 0
+        # writer.add_text('Text/parent_job', 'text logged at job: ' + PA_JOB_ID_LOG, str(loss))
+        # writer.add_scalar('Loss', loss, token_id)  # plot loss by token id
+        writer.add_scalar('f1', loss[0], PA_JOB_ID)  # plot loss by job id
+        writer.add_scalar('f2', loss[1], PA_JOB_ID)  # plot loss by job id
+        writer.close()
+    except Exception as err:
+        print("An exception occurred while plotting in Tensorboard")
+        print(err)
+###########################################################################
+
+################################# VISDOM ##################################
+VISDOM_ENDPOINT = variables.get("VISDOM_ENDPOINT")
+if VISDOM_ENDPOINT is not None:
+    try:
+        from visdom import Visdom
+        VISDOM_ENDPOINT = VISDOM_ENDPOINT.replace("http://", "")
+        print("VISDOM_ENDPOINT: ", VISDOM_ENDPOINT)
+        (VISDOM_HOST, VISDOM_PORT) = VISDOM_ENDPOINT.split(":")
+        print("VISDOM_HOST: ", VISDOM_HOST)
+        print("VISDOM_PORT: ", VISDOM_PORT)
+        print("Connecting to %s:%s" % (VISDOM_HOST, VISDOM_PORT))
+        vis = Visdom(server="http://"+VISDOM_HOST, port=int(VISDOM_PORT))
+        assert vis.check_connection()
+        env = 'main'
+        if PARENT_JOB_ID is not None:
+            env = 'job_id_' + PARENT_JOB_ID
+        win_params = 'win_params'
+        append = True if vis.win_exists(win_params, env=env) else False
+        if not append:
+            vis.text("List of hyperparameters:\n", append=append, env=env, win=win_params)
+            append = True
+        vis.text("Job ID: {}, x: {:.4f}, y: {:.4f}\n".format(PA_JOB_ID, x, y), append=append, env=env, win=win_params)
+        # plot scatter
+        win_scatter = 'win_scatter'
+        update = 'append' if vis.win_exists(win_scatter, env=env) else None
+        vis.scatter(
+            X=[[x, y]],
+            Y=[1],
+            opts=dict(
+                #legend=['params'],
+                markersize=10,
+                markersymbol='cross-thin-open',
+                title='Hyperparameters value',
+                xlabel='X',
+                ylabel='Y',
+                markercolor=np.floor([255]),
+            ),
+            env=env,
+            win=win_scatter,
+            update=update
+        )
+        # plot surface
+        X = np.arange(-5, 5, 0.1)
+        Y = np.arange(-5, 5, 0.1)
+        X, Y = np.meshgrid(X, Y)
+        Z1 = np.zeros(X.shape)
+        Z2 = np.zeros(X.shape)
+        for i in range(X.shape[0]):
+            for j in range(X.shape[1]):
+                Z1[i,j], Z2[i,j] = objective_function(X[i,j],Y[i,j])
+        win_surface = 'win_surface'
+        if not vis.win_exists(win_surface, env=env):
+            vis.surf(X=Z1, opts=dict(title='f1',colormap='Hot'), env=env, win=win_surface)
+            vis.surf(X=Z2, opts=dict(title='f2',colormap='Hot'), env=env, win='win_surface2')
+        else:
+            print('The surface plot is already done')
+    except Exception as err:
+        print("An exception occurred while plotting in Visdom")
+        print(err)
+###########################################################################
+
+############################ OUTPUT FOR AUTOML ############################
+# to appear in Job Analytics
+resultMap.put("LOSS", str(loss))
+resultMap.put("f1", str(loss[0]))
+resultMap.put("f2", str(loss[1]))
+# to be used by AutoML workflow
+result = {
+    'token': token,
+    'loss': loss
+}
+result = json.dumps(result)
+resultMap.put("RESULT_JSON", result)
+###########################################################################
+
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            203.1333465576172
+        </positionTop>
+        <positionLeft>
+            126.23333740234375
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2491px;
+            height:4780px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-198.1333465576172px;left:-121.23333740234375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" style="top: 203.134px; left: 126.233px;" id="jsPlumb_1_1415"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/automation-dashboard/styles/patterns/img/wf-icons/himmelblau_function.png" width="20px">&nbsp;<span class="name">Kursawe_Multiobjective_Function</span></a></div><div style="position: absolute; height: 20px; width: 20px; left: 208px; top: 233px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
