@@ -53,7 +53,7 @@ PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
 PYTHON_ENTRYPOINT = variables.get("PYTHON_ENTRYPOINT")
 YAML_FILE = variables.get("YAML_FILE")
 
-PA_MAAS_RESOURCES_URL = "/buckets/model-as-a-service/resources/"
+PA_MAAS_RESOURCES_URL = "/buckets/ai-model-as-a-service/resources/"
 python_file_url = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + PYTHON_ENTRYPOINT + "/raw"
 yaml_file_url   = PA_CATALOG_REST_URL + PA_MAAS_RESOURCES_URL + YAML_FILE + "/raw"
 print("python_file_url: ", python_file_url)
