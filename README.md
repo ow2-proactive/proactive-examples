@@ -44,7 +44,7 @@ If you need to retest the extracting and loading of proactive-examples, please r
 		"version": "1.0"
 	},
 	"catalog" : {
-		"bucket" : "machine-learning",
+		"bucket" : "ai-machine-learning",
 		"objects" : [
 			{
 				"name" : "text_analysis",
