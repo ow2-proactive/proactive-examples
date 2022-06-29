@@ -220,7 +220,7 @@ Feature values decreasing the prediction are in blue.</p>
 <medium>Activeeon</medium>
 </a>
 <li class="nav-item">
-<a class="nav-link" href="PML/PMLUserGuide.html" target="_blank">
+<a class="nav-link" href="PAIO/PAIOUserGuide.html" target="_blank">
 <medium>Machine Learning Open Studio</medium>
 </a>
 </li>
