@@ -17,7 +17,7 @@ sessionid = schedulerapi.getSession()
 # Import an external python script containing a collection of
 # common utility Python functions and classes
 PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
-PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/machine-learning/resources/Utils_Script/raw"
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/ai-machine-learning/resources/Utils_Script/raw"
 req = urllib.request.Request(PA_PYTHON_UTILS_URL)
 req.add_header('sessionid', sessionid)
 if PA_PYTHON_UTILS_URL.startswith('https'):
