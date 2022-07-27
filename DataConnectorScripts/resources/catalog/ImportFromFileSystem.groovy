@@ -4,15 +4,18 @@
 # https://commons.apache.org/proper/commons-vfs/index.html
 */
 
-import java.io.File;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.regex.Pattern;
-import org.apache.commons.vfs2.*;
-import org.apache.commons.vfs2.auth.*;
-import org.apache.commons.vfs2.impl.*;
-import org.apache.commons.vfs2.provider.local.*;
-import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder;
+import org.apache.commons.net.util.KeyManagerUtils
+import javax.net.ssl.KeyManager
+import java.io.File
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.util.regex.Pattern
+import org.apache.commons.vfs2.*
+import org.apache.commons.vfs2.auth.*
+import org.apache.commons.vfs2.impl.*
+import org.apache.commons.vfs2.provider.local.*
+import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder
+import org.apache.commons.vfs2.provider.ftps.FtpsFileSystemConfigBuilder
 import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
 
 URI_SCHEME = args[0]
@@ -24,7 +27,15 @@ username = variables.get("USERNAME")
 port = variables.get("PORT")
 password = checkParametersAndReturnPassword()
 
-//Initialize the connection manger to the remote SFTP/FTP server.
+//Initialize SSL Certificate parameters
+keyStorePath = variables.get("KEY_STORE_PATH")
+keyStorePassword = variables.get("KEY_STORE_PASSWORD")
+keyManager = null
+if(keyStorePath != null & !keyStorePath.isEmpty() && keyStorePassword != null && !keyStorePassword.isEmpty()){
+    keyManager = KeyManagerUtils.createClientKeyManager(new File(keyStorePath),keyStorePassword)
+}
+
+//Initialize the connection manager to the remote SFTP/FTP server.
 optsRemote = new FileSystemOptions()
 fsManager = null
 initializeAuthentication()
@@ -158,7 +169,11 @@ void initializeAuthentication() {
     def auth = new StaticUserAuthenticator(null, username, password)
     try {
         DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
-        FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
+        if (keyManager != null) {
+            FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
+        } else {
+            FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
+        }
     } catch (FileSystemException ex) {
         throw new RuntimeException("Failed to set user authenticator", ex);
     }
