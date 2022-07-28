@@ -9,6 +9,7 @@ import javax.net.ssl.KeyManager
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+import org.apache.commons.io.IOUtils
 import java.util.regex.Pattern
 import org.apache.commons.vfs2.*
 import org.apache.commons.vfs2.auth.*
@@ -17,6 +18,12 @@ import org.apache.commons.vfs2.provider.local.*
 import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder
 import org.apache.commons.vfs2.provider.ftps.FtpsFileSystemConfigBuilder
 import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
+import java.security.PrivateKey
+import java.security.KeyFactory
+import java.security.KeyStore
+import java.security.GeneralSecurityException
+import java.security.cert.*
+import java.security.spec.PKCS8EncodedKeySpec
 
 
 URI_SCHEME = args[0]
@@ -28,12 +35,15 @@ username = variables.get("USERNAME")
 port = variables.get("PORT")
 password = checkParametersAndReturnPassword()
 
-//Initialize SSL Certificate parameters
-keyStorePath = variables.get("KEY_STORE_PATH")
-keyStorePassword = variables.get("KEY_STORE_PASSWORD")
-keyManager = null
-if(keyStorePath != null & !keyStorePath.isEmpty() && keyStorePassword != null && !keyStorePassword.isEmpty()){
-    keyManager = KeyManagerUtils.createClientKeyManager(new File(keyStorePath),keyStorePassword)
+//Initialize keystore parameters
+clientCertificate = new File(variables.get("CLIENT_CERTIFICATE_FILE_PATH")).text
+clientPrivateKey = new File(variables.get("CLIENT_PRIVATE_KEY_FILE_PATH")).text
+clientPrivateKeyPassword = variables.get("CLIENT_PRIVATE_KEY_PASSWORD")
+clientPrivateKeyAlias = variables.get("CLIENT_PRIVATE_KEY_ALIAS")
+
+if(clientCertificate != null & !clientCertificate.isEmpty() && clientPrivateKey != null && !clientPrivateKey.isEmpty()){
+    keyStore = createKeyStore(clientCertificate, clientPrivateKey)
+    keyManager = KeyManagerUtils.createClientKeyManager(keyStore, clientPrivateKeyAlias, clientPrivateKeyPassword)
 }
 
 //Initialize the connection manager to the remote SFTP/FTP server.
@@ -53,6 +63,54 @@ remoteSrc = null
 //Export file(s) to the SFTP/FTP server
 exportFiles()
 release()
+
+def createEmptyKeyStore() throws IOException, GeneralSecurityException {
+    KeyStore keyStore = KeyStore.getInstance("JKS")
+    keyStore.load(null,null)
+    return keyStore
+}
+
+/**
+ * Load Public Certificate From PEM String
+ */
+def loadCertificate(InputStream publicCertIn) throws IOException, GeneralSecurityException {
+    CertificateFactory factory = CertificateFactory.getInstance("X.509")
+    X509Certificate cert = (X509Certificate)factory.generateCertificate(publicCertIn)
+    return cert
+}
+
+/**
+ * Load Private Key From PEM String
+ */
+def loadPrivateKey(InputStream privateKeyIn) throws IOException, GeneralSecurityException {
+    //need the full file - org.apache.commons.io.IOUtils is handy
+    byte[] fullFileAsBytes = IOUtils.toByteArray(privateKeyIn)
+    //remember this is supposed to be a text source with the BEGIN/END and base64 in the middle of the file
+    String fullFileAsString = new String(fullFileAsBytes)
+    //extract out between BEGIN/END
+    String encoded = fullFileAsString
+            .replace("-----BEGIN PRIVATE KEY-----", "")
+            .replaceAll(System.lineSeparator(), "")
+            .replace("-----END PRIVATE KEY-----", "")
+    //decode the Base64 string
+    byte[] keyDecoded = Base64.getMimeDecoder().decode(encoded)
+    //for my example, the source is in common PKCS#8 format
+    PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(keyDecoded)
+    //from there we can use the KeyFactor to generate
+    KeyFactory keyFactory = KeyFactory.getInstance("RSA")
+    PrivateKey privateKey = keyFactory.generatePrivate(keySpec)
+    return privateKey
+}
+
+def createKeyStore(String clientCertificate, String clientPrivateKey) throws IOException, GeneralSecurityException {
+    KeyStore keyStore = createEmptyKeyStore()
+    X509Certificate publicCert = loadCertificate(new ByteArrayInputStream(IOUtils.toByteArray(clientCertificate)))
+    PrivateKey privateKey = loadPrivateKey(new ByteArrayInputStream(clientPrivateKey.getBytes()))
+    keyStore.setCertificateEntry("aliasForCertHere", publicCert)
+    chain =  [publicCert] as Certificate[]
+    keyStore.setKeyEntry(clientPrivateKeyAlias, (PrivateKey)privateKey, clientPrivateKeyPassword.toCharArray(), chain)
+    return keyStore
+}
 
 /**
  * Retrieves files that match the specified File pattern from the local directory (data space)
@@ -172,7 +230,7 @@ void initializeAuthentication() {
         if (keyManager != null) {
             FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
         } else {
-             FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
+            FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
         }
 
     } catch (FileSystemException ex) {
