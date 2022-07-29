@@ -24,6 +24,9 @@ import java.security.KeyStore
 import java.security.GeneralSecurityException
 import java.security.cert.*
 import java.security.spec.PKCS8EncodedKeySpec
+import org.bouncycastle.util.io.pem.PemObject
+import org.bouncycastle.util.io.pem.PemReader
+import java.io.FileReader
 
 URI_SCHEME = args[0]
 
@@ -36,12 +39,12 @@ password = checkParametersAndReturnPassword()
 
 //Initialize keystore parameters
 clientCertificate = new File(variables.get("CLIENT_CERTIFICATE_FILE_PATH")).text
-clientPrivateKey = new File(variables.get("CLIENT_PRIVATE_KEY_FILE_PATH")).text
+clientPrivateKeyFile = new File(variables.get("CLIENT_PRIVATE_KEY_FILE_PATH"))
 clientPrivateKeyPassword = variables.get("CLIENT_PRIVATE_KEY_PASSWORD")
 clientPrivateKeyAlias = variables.get("CLIENT_PRIVATE_KEY_ALIAS")
 
-if(clientCertificate != null & !clientCertificate.isEmpty() && clientPrivateKey != null && !clientPrivateKey.isEmpty()){
-    keyStore = createKeyStore(clientCertificate, clientPrivateKey)
+if(clientCertificate != null & !clientCertificate.isEmpty() && clientPrivateKeyFile != null){
+    keyStore = createKeyStore(clientCertificate, clientPrivateKeyFile)
     keyManager = KeyManagerUtils.createClientKeyManager(keyStore, clientPrivateKeyAlias, clientPrivateKeyPassword)
 }
 
@@ -81,30 +84,27 @@ def loadCertificate(InputStream publicCertIn) throws IOException, GeneralSecurit
 /**
  * Load Private Key From PEM String
  */
-def loadPrivateKey(InputStream privateKeyIn) throws IOException, GeneralSecurityException {
-    //need the full file - org.apache.commons.io.IOUtils is handy
-    byte[] fullFileAsBytes = IOUtils.toByteArray(privateKeyIn)
-    //remember this is supposed to be a text source with the BEGIN/END and base64 in the middle of the file
-    String fullFileAsString = new String(fullFileAsBytes)
-    //extract out between BEGIN/END
-    String encoded = fullFileAsString
-            .replace("-----BEGIN PRIVATE KEY-----", "")
-            .replaceAll(System.lineSeparator(), "")
-            .replace("-----END PRIVATE KEY-----", "")
-    //decode the Base64 string
-    byte[] keyDecoded = Base64.getMimeDecoder().decode(encoded)
-    //for my example, the source is in common PKCS#8 format
-    PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(keyDecoded)
-    //from there we can use the KeyFactor to generate
-    KeyFactory keyFactory = KeyFactory.getInstance("RSA")
-    PrivateKey privateKey = keyFactory.generatePrivate(keySpec)
-    return privateKey
+def loadPrivateKey(File file) throws Exception {
+    KeyFactory factory = KeyFactory.getInstance("RSA");
+    FileReader keyReader = null
+    PemReader pemReader = null
+    println file.getName()
+    try {
+        keyReader = new FileReader(file)
+        pemReader = new PemReader(keyReader)
+        PemObject pemObject = pemReader.readPemObject()
+        byte[] content = pemObject.getContent()
+        PKCS8EncodedKeySpec privKeySpec = new PKCS8EncodedKeySpec(content)
+        return factory.generatePrivate(privKeySpec)
+    } catch (FileSystemException ex) {
+        throw new RuntimeException(ex);
+    }
 }
 
-def createKeyStore(String clientCertificate, String clientPrivateKey) throws IOException, GeneralSecurityException {
+def createKeyStore(String clientCertificate, File clientPrivateKeyFile) throws IOException, GeneralSecurityException {
     KeyStore keyStore = createEmptyKeyStore()
     X509Certificate publicCert = loadCertificate(new ByteArrayInputStream(IOUtils.toByteArray(clientCertificate)))
-    PrivateKey privateKey = loadPrivateKey(new ByteArrayInputStream(clientPrivateKey.getBytes()))
+    PrivateKey privateKey = loadPrivateKey(clientPrivateKeyFile)
     keyStore.setCertificateEntry("aliasForCertHere", publicCert)
     chain =  [publicCert] as Certificate[]
     keyStore.setKeyEntry(clientPrivateKeyAlias, (PrivateKey)privateKey, clientPrivateKeyPassword.toCharArray(), chain)
