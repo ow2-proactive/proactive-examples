@@ -55,7 +55,7 @@ if (currentStatus.equals("FINISHED")){
         // Tell the CRON loop to stop
         variables.put("IS_FINISHED",true)
         // Exit with error
-        System.exit(1)
+        throw new IllegalStateException("An internal error occured in docker container: " + instanceName)
     } else {
         // Fetch all logs or only new logs since last fetch time mark
         def lastTime=variables.get('LAST_TIME_MARKER')

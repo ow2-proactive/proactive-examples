@@ -39,7 +39,7 @@ if (status.equals(ALREADY_REMOVED_MESSAGE)){
     println("[WARNING] docker container: " + instanceName + " is already removed.")
 } else if (!status.equals(instanceName)){
     println("[ERROR] Could not remove docker container: " + instanceName + ". Docker output: " + status)
-    System.exit(1)
+    throw new IllegalStateException("Could not remove docker container: " + instanceName + ". Docker output: " + status)
 }
 
 println("END " + variables.get("PA_TASK_NAME"))
