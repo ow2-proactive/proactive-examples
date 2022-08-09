@@ -9,7 +9,7 @@ import groovy.json.JsonSlurper
 
 if (args.length != 2) {
     println("[Add_deployments_and_update_service] ERROR: Number of arguments must be == 2")
-    System.exit(1)
+    throw new IllegalArgumentException("Number of arguments must be == 2")
 }
 
 // Retrieve script arguments
