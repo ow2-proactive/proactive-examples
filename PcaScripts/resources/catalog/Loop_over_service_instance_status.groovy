@@ -88,7 +88,7 @@ if (current_status.equals("FINISHED")){
         variables.put("IS_FINISHED",true)
 
         // Exit with error
-        throw new IllegalStateException("")
+        throw new IllegalStateException("Service status is in error")
 
     } else if (is_docker_based_service) {
         // Fetch all logs or only new logs since last fetch time mark

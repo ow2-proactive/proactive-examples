@@ -57,6 +57,5 @@ if (currentStatus.equals("FINISHED")){
         variables.put("IS_FINISHED",true)
         // Exit with error
         throw new IllegalStateException("An internal error occured in singularity container: " + instanceName)
-
     }
 }
