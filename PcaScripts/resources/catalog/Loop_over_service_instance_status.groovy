@@ -10,7 +10,7 @@ if (new File(localspace, "arguments.txt").exists()) {
 
 if (arguments_array.length != 3) {
     println("[Loop_over_service_instance_status] ERROR Number of arguments must be == 3")
-    System.exit(1)
+    throw new IllegalArgumentException("Number of arguments must be 3")
 }
 
 def i = 0
@@ -88,7 +88,7 @@ if (current_status.equals("FINISHED")){
         variables.put("IS_FINISHED",true)
 
         // Exit with error
-        System.exit(1)
+        throw new IllegalStateException("")
 
     } else if (is_docker_based_service) {
         // Fetch all logs or only new logs since last fetch time mark

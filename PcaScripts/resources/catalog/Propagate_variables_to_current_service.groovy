@@ -4,7 +4,7 @@ import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 // Arguments must be var0 val0 var1 val1 (if val == VARIABLE_VALUE, let's consider var == val)
 if (args.length < 2 && (args.length % 2) != 0) {
     println("[Propagate_variables_to_current_service] ERROR Number of arguments must be even and > 1")
-    System.exit(1)
+    throw new IllegalArgumentException("Number of arguments must be even and > 1")
 }
 
 // Retrieve variables

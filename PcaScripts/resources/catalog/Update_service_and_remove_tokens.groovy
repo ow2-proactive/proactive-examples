@@ -4,7 +4,7 @@ import com.google.common.base.Strings;
 
 if (args.length != 2) {
     println("[Update_service_and_remove_tokens] ERROR: Number of arguments must be == 2")
-    System.exit(1)
+    throw new IllegalArgumentException("Number of arguments must be == 2")
 }
 
 def i = 0
