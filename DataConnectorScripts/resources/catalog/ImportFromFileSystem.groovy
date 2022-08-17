@@ -38,13 +38,13 @@ port = variables.get("PORT")
 password = checkParametersAndReturnPassword()
 
 //Initialize keystore parameters
-clientCertificate = new File(variables.get("CLIENT_CERTIFICATE_FILE_PATH")).text
-clientPrivateKeyFile = new File(variables.get("CLIENT_PRIVATE_KEY_FILE_PATH"))
+clientCertificate = credentials.get(variables.get("CLIENT_CERTIFICATE_CRED"))
+clientPrivateKey = credentials.get(variables.get("CLIENT_PRIVATE_KEY_CRED"))
 clientPrivateKeyPassword = variables.get("CLIENT_PRIVATE_KEY_PASSWORD")
 clientPrivateKeyAlias = variables.get("CLIENT_PRIVATE_KEY_ALIAS")
 
-if(clientCertificate != null & !clientCertificate.isEmpty() && clientPrivateKeyFile != null){
-    keyStore = createKeyStore(clientCertificate, clientPrivateKeyFile)
+if(clientCertificate != null && !clientCertificate.isEmpty() && clientPrivateKey != null && !clientPrivateKey.isEmpty()){
+    keyStore = createKeyStore(clientCertificate, clientPrivateKey)
     keyManager = KeyManagerUtils.createClientKeyManager(keyStore, clientPrivateKeyAlias, clientPrivateKeyPassword)
 }
 
@@ -84,27 +84,30 @@ def loadCertificate(InputStream publicCertIn) throws IOException, GeneralSecurit
 /**
  * Load Private Key From PEM String
  */
-def loadPrivateKey(File file) throws Exception {
+def loadPrivateKey(String clientPrivateKey) throws Exception {
     KeyFactory factory = KeyFactory.getInstance("RSA");
     FileReader keyReader = null
     PemReader pemReader = null
-    println file.getName()
+    File tmpFile = File.createTempFile("privateKey", ".pem")
+    FileWriter writer = new FileWriter(tmpFile)
+    writer.write(clientPrivateKey)
+    writer.close()
     try {
-        keyReader = new FileReader(file)
+        keyReader = new FileReader(tmpFile)
         pemReader = new PemReader(keyReader)
         PemObject pemObject = pemReader.readPemObject()
         byte[] content = pemObject.getContent()
         PKCS8EncodedKeySpec privKeySpec = new PKCS8EncodedKeySpec(content)
         return factory.generatePrivate(privKeySpec)
     } catch (FileSystemException ex) {
-        throw new RuntimeException(ex);
+        throw new RuntimeException(ex)
     }
 }
 
-def createKeyStore(String clientCertificate, File clientPrivateKeyFile) throws IOException, GeneralSecurityException {
+def createKeyStore(String clientCertificate, String clientPrivateKey) throws IOException, GeneralSecurityException {
     KeyStore keyStore = createEmptyKeyStore()
     X509Certificate publicCert = loadCertificate(new ByteArrayInputStream(IOUtils.toByteArray(clientCertificate)))
-    PrivateKey privateKey = loadPrivateKey(clientPrivateKeyFile)
+    PrivateKey privateKey = loadPrivateKey(clientPrivateKey)
     keyStore.setCertificateEntry("aliasForCertHere", publicCert)
     chain =  [publicCert] as Certificate[]
     keyStore.setKeyEntry(clientPrivateKeyAlias, (PrivateKey)privateKey, clientPrivateKeyPassword.toCharArray(), chain)
