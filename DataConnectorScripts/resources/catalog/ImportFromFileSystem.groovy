@@ -5,6 +5,7 @@
 */
 
 import org.apache.commons.net.util.KeyManagerUtils
+import org.apache.commons.net.util.TrustManagerUtils
 import javax.net.ssl.KeyManager
 import java.io.File
 import java.nio.file.Path
@@ -30,27 +31,38 @@ import java.io.FileReader
 
 URI_SCHEME = args[0]
 
-///Set connection parameters and retrieve the SFTP/FTP password
+//Set connection parameters and retrieve the SFTP/FTP password
 URL_KEY = URI_SCHEME + "://<username>@<host>";
 host = variables.get("HOST")
 username = variables.get("USERNAME")
 port = variables.get("PORT")
+keyManager = null
+optsRemote = new FileSystemOptions()
+fsManager = null
 password = checkParametersAndReturnPassword()
 
 //Initialize keystore parameters
-clientCertificate = credentials.get(variables.get("CLIENT_CERTIFICATE_CRED"))
-clientPrivateKey = credentials.get(variables.get("CLIENT_PRIVATE_KEY_CRED"))
-clientPrivateKeyPassword = variables.get("CLIENT_PRIVATE_KEY_PASSWORD")
-clientPrivateKeyAlias = variables.get("CLIENT_PRIVATE_KEY_ALIAS")
-
-if(clientCertificate != null && !clientCertificate.isEmpty() && clientPrivateKey != null && !clientPrivateKey.isEmpty()){
-    keyStore = createKeyStore(clientCertificate, clientPrivateKey)
-    keyManager = KeyManagerUtils.createClientKeyManager(keyStore, clientPrivateKeyAlias, clientPrivateKeyPassword)
+if (variables.get("CERTIFICATE_AUTHENTICATION")) {
+    clientCertificate = credentials.get(variables.get("CLIENT_CERTIFICATE_CRED"))
+    clientPrivateKey = credentials.get(variables.get("CLIENT_PRIVATE_KEY_CRED"))
+    clientPrivateKeyPassword = variables.get("CLIENT_PRIVATE_KEY_PASSWORD")
+    clientPrivateKeyAlias = variables.get("CLIENT_PRIVATE_KEY_ALIAS")
+    certificateVerification = variables.get("SERVER_CERTIFICATE_VERIFICATION")
+    if (clientCertificate != null && !clientCertificate.isEmpty() && clientPrivateKey != null && !clientPrivateKey.isEmpty()) {
+        keyStore = createKeyStore(clientCertificate, clientPrivateKey)
+        keyManager = KeyManagerUtils.createClientKeyManager(keyStore, clientPrivateKeyAlias, clientPrivateKeyPassword)
+    }
+    if (certificateVerification.equalsIgnoreCase("false")) {
+        FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getAcceptAllTrustManager())
+    } else {
+        serverCertificate = credentials.get(variables.get("SERVER_CERTIFICATE_CRED"))
+        keyStore = createKeyStore(serverCertificate, null)
+        FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getDefaultTrustManager(keyStore))
+    }
 }
 
+
 //Initialize the connection manager to the remote SFTP/FTP server.
-optsRemote = new FileSystemOptions()
-fsManager = null
 initializeAuthentication()
 
 //Initialize file pattern, local and remote bases
@@ -104,13 +116,15 @@ def loadPrivateKey(String clientPrivateKey) throws Exception {
     }
 }
 
-def createKeyStore(String clientCertificate, String clientPrivateKey) throws IOException, GeneralSecurityException {
+def createKeyStore(String certificate, String clientPrivateKey) throws IOException, GeneralSecurityException {
     KeyStore keyStore = createEmptyKeyStore()
-    X509Certificate publicCert = loadCertificate(new ByteArrayInputStream(IOUtils.toByteArray(clientCertificate)))
-    PrivateKey privateKey = loadPrivateKey(clientPrivateKey)
+    X509Certificate publicCert = loadCertificate(new ByteArrayInputStream(IOUtils.toByteArray(certificate)))
     keyStore.setCertificateEntry("aliasForCertHere", publicCert)
-    chain =  [publicCert] as Certificate[]
-    keyStore.setKeyEntry(clientPrivateKeyAlias, (PrivateKey)privateKey, clientPrivateKeyPassword.toCharArray(), chain)
+    if(clientPrivateKey != null && !clientPrivateKey.isEmpty()){
+        PrivateKey privateKey = loadPrivateKey(clientPrivateKey)
+        chain =  [publicCert] as Certificate[]
+        keyStore.setKeyEntry(clientPrivateKeyAlias, (PrivateKey)privateKey, clientPrivateKeyPassword.toCharArray(), chain)
+    }
     return keyStore
 }
 
@@ -227,12 +241,12 @@ void initializeAuthentication() {
     }
     def auth = new StaticUserAuthenticator(null, username, password)
     try {
-        DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
+        DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth)
+        FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true)
         if (keyManager != null) {
-            FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
-        } else {
             FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
         }
+
     } catch (FileSystemException ex) {
         throw new RuntimeException("Failed to set user authenticator", ex);
     }
