@@ -4,37 +4,73 @@
 # https://commons.apache.org/proper/commons-vfs/index.html
 */
 
-import java.io.File;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.regex.Pattern;
-import org.apache.commons.vfs2.*;
-import org.apache.commons.vfs2.auth.*;
-import org.apache.commons.vfs2.impl.*;
-import org.apache.commons.vfs2.provider.local.*;
-import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder;
+import org.apache.commons.net.util.KeyManagerUtils
+import org.apache.commons.net.util.TrustManagerUtils
+import javax.net.ssl.KeyManager
+import java.io.File
+import java.nio.file.Path
+import java.nio.file.Paths
+import org.apache.commons.io.IOUtils
+import java.util.regex.Pattern
+import org.apache.commons.vfs2.*
+import org.apache.commons.vfs2.auth.*
+import org.apache.commons.vfs2.impl.*
+import org.apache.commons.vfs2.provider.local.*
+import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder
+import org.apache.commons.vfs2.provider.ftps.FtpsFileSystemConfigBuilder
 import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
+import java.security.PrivateKey
+import java.security.KeyFactory
+import java.security.KeyStore
+import java.security.GeneralSecurityException
+import java.security.cert.*
+import java.security.spec.PKCS8EncodedKeySpec
+import org.bouncycastle.util.io.pem.PemObject
+import org.bouncycastle.util.io.pem.PemReader
+import java.io.FileReader
 
 URI_SCHEME = args[0]
 
-///Set connection parameters and retrieve the SFTP/FTP password
+//Set connection parameters and retrieve the SFTP/FTP password
 URL_KEY = URI_SCHEME + "://<username>@<host>";
 host = variables.get("HOST")
 username = variables.get("USERNAME")
 port = variables.get("PORT")
-password = checkParametersAndReturnPassword()
-
-//Initialize the connection manger to the remote SFTP/FTP server.
+keyManager = null
 optsRemote = new FileSystemOptions()
 fsManager = null
+password = checkParametersAndReturnPassword()
+
+//Initialize keystore parameters
+if (variables.get("CLIENT_CERTIFICATE_AUTHENTICATION")) {
+    clientCertificate = credentials.get(variables.get("CLIENT_CERTIFICATE_CRED"))
+    clientPrivateKey = credentials.get(variables.get("CLIENT_PRIVATE_KEY_CRED"))
+    clientPrivateKeyPassword = variables.get("CLIENT_PRIVATE_KEY_PASSWORD")
+    clientPrivateKeyAlias = variables.get("CLIENT_PRIVATE_KEY_ALIAS")
+    if (clientCertificate != null && !clientCertificate.isEmpty() && clientPrivateKey != null && !clientPrivateKey.isEmpty()) {
+        keyStore = createKeyStore(clientCertificate, clientPrivateKey)
+        keyManager = KeyManagerUtils.createClientKeyManager(keyStore, clientPrivateKeyAlias, clientPrivateKeyPassword)
+    }
+}
+
+//Verify server certificate
+serverCertificateVerification = variables.get("SERVER_CERTIFICATE_VERIFICATION")
+provideServerCertificate = variables.get("PROVIDE_SERVER_CERTIFICATE")
+if ("false".equalsIgnoreCase(serverCertificateVerification)) {
+    FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getAcceptAllTrustManager())
+}
+if ("true".equalsIgnoreCase(provideServerCertificate)) {
+    serverCertificate = credentials.get(variables.get("SERVER_CERTIFICATE_CRED"))
+    keyStore = createKeyStore(serverCertificate, null)
+    FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getDefaultTrustManager(keyStore))
+}
+
+//Initialize the connection manager to the remote SFTP/FTP server.
 initializeAuthentication()
 
 //Initialize file pattern, local and remote bases
 remoteDir = variables.get("REMOTE_BASE")
 filePattern = variables.get("FILE_PATTERN")
-if (filePattern.isEmpty()) {
-    throw new IllegalArgumentException("FILE_PATTERN variable is not provided by the user. Empty value is not allowed.")
-}
 localBase = variables.get("LOCAL_BASE")
 
 // used for cleanup in release()
@@ -44,6 +80,57 @@ remoteSrc = null
 //Export file(s) to the SFTP/FTP server
 importFiles()
 release()
+
+def createEmptyKeyStore() throws IOException, GeneralSecurityException {
+    KeyStore keyStore = KeyStore.getInstance("JKS")
+    keyStore.load(null,null)
+    return keyStore
+}
+
+/**
+ * Load Public Certificate From PEM String
+ */
+def loadCertificate(InputStream publicCertIn) throws IOException, GeneralSecurityException {
+    CertificateFactory factory = CertificateFactory.getInstance("X.509")
+    X509Certificate cert = (X509Certificate)factory.generateCertificate(publicCertIn)
+    return cert
+}
+
+/**
+ * Load Private Key From PEM String
+ */
+def loadPrivateKey(String clientPrivateKey) throws Exception {
+    KeyFactory factory = KeyFactory.getInstance("RSA");
+    FileReader keyReader = null
+    PemReader pemReader = null
+    File tmpFile = File.createTempFile("privateKey", ".pem")
+    FileWriter writer = new FileWriter(tmpFile)
+    writer.write(clientPrivateKey)
+    writer.close()
+    try {
+        keyReader = new FileReader(tmpFile)
+        pemReader = new PemReader(keyReader)
+        PemObject pemObject = pemReader.readPemObject()
+        byte[] content = pemObject.getContent()
+        PKCS8EncodedKeySpec privKeySpec = new PKCS8EncodedKeySpec(content)
+        return factory.generatePrivate(privKeySpec)
+    } catch (FileSystemException ex) {
+        throw new RuntimeException(ex)
+    }
+}
+
+def createKeyStore(String certificate, String clientPrivateKey) throws IOException, GeneralSecurityException {
+    KeyStore keyStore = createEmptyKeyStore()
+    X509Certificate publicCert = loadCertificate(new ByteArrayInputStream(IOUtils.toByteArray(certificate)))
+    keyStore.setCertificateEntry("aliasForCertHere", publicCert)
+    if(clientPrivateKey != null && !clientPrivateKey.isEmpty()){
+        PrivateKey privateKey = loadPrivateKey(clientPrivateKey)
+        chain =  [publicCert] as Certificate[]
+        keyStore.setKeyEntry(clientPrivateKeyAlias, (PrivateKey)privateKey, clientPrivateKeyPassword.toCharArray(), chain)
+    }
+    return keyStore
+}
+
 
 /**
  * Retrieves files that match the specified File pattern from the SFTP/FTP server
@@ -157,8 +244,12 @@ void initializeAuthentication() {
     }
     def auth = new StaticUserAuthenticator(null, username, password)
     try {
-        DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
-        FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
+        DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth)
+        FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true)
+        if (keyManager != null) {
+            FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
+        }
+
     } catch (FileSystemException ex) {
         throw new RuntimeException("Failed to set user authenticator", ex);
     }
