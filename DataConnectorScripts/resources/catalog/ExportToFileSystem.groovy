@@ -42,25 +42,28 @@ fsManager = null
 password = checkParametersAndReturnPassword()
 
 //Initialize keystore parameters
-if (variables.get("CERTIFICATE_AUTHENTICATION")) {
+if (variables.get("CLIENT_CERTIFICATE_AUTHENTICATION")) {
     clientCertificate = credentials.get(variables.get("CLIENT_CERTIFICATE_CRED"))
     clientPrivateKey = credentials.get(variables.get("CLIENT_PRIVATE_KEY_CRED"))
     clientPrivateKeyPassword = variables.get("CLIENT_PRIVATE_KEY_PASSWORD")
     clientPrivateKeyAlias = variables.get("CLIENT_PRIVATE_KEY_ALIAS")
-    certificateVerification = variables.get("SERVER_CERTIFICATE_VERIFICATION")
     if (clientCertificate != null && !clientCertificate.isEmpty() && clientPrivateKey != null && !clientPrivateKey.isEmpty()) {
         keyStore = createKeyStore(clientCertificate, clientPrivateKey)
         keyManager = KeyManagerUtils.createClientKeyManager(keyStore, clientPrivateKeyAlias, clientPrivateKeyPassword)
     }
-    if (certificateVerification.equalsIgnoreCase("false")) {
-        FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getAcceptAllTrustManager())
-    } else {
-        serverCertificate = credentials.get(variables.get("SERVER_CERTIFICATE_CRED"))
-        keyStore = createKeyStore(serverCertificate, null)
-        FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getDefaultTrustManager(keyStore))
-    }
 }
 
+//Verify server certificate
+serverCertificateVerification = variables.get("SERVER_CERTIFICATE_VERIFICATION")
+provideServerCertificate = variables.get("PROVIDE_SERVER_CERTIFICATE")
+if ("false".equalsIgnoreCase(serverCertificateVerification)) {
+    FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getAcceptAllTrustManager())
+}
+if ("true".equalsIgnoreCase(provideServerCertificate)) {
+    serverCertificate = credentials.get(variables.get("SERVER_CERTIFICATE_CRED"))
+    keyStore = createKeyStore(serverCertificate, null)
+    FtpsFileSystemConfigBuilder.getInstance().setTrustManager(optsRemote, TrustManagerUtils.getDefaultTrustManager(keyStore))
+}
 
 //Initialize the connection manager to the remote SFTP/FTP server.
 initializeAuthentication()
@@ -120,7 +123,7 @@ def createKeyStore(String certificate, String clientPrivateKey) throws IOExcepti
     KeyStore keyStore = createEmptyKeyStore()
     X509Certificate publicCert = loadCertificate(new ByteArrayInputStream(IOUtils.toByteArray(certificate)))
     keyStore.setCertificateEntry("aliasForCertHere", publicCert)
-    if (clientPrivateKey != null && !clientPrivateKey.isEmpty()) {
+    if(clientPrivateKey != null && !clientPrivateKey.isEmpty()){
         PrivateKey privateKey = loadPrivateKey(clientPrivateKey)
         chain =  [publicCert] as Certificate[]
         keyStore.setKeyEntry(clientPrivateKeyAlias, (PrivateKey)privateKey, clientPrivateKeyPassword.toCharArray(), chain)
