@@ -4,7 +4,7 @@ import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 // Arguments must be <service_id> <var0_name_to_store> <var0_to_retrieve> <var1_name_to_store> <var1_to_retrieve> ...
 if (args.length != 2) {
     println("[set_service_FINISHED_if_all_clean_OK] ERROR: Number of arguments must be == 2")
-    System.exit(1)
+    throw new IllegalArgumentException("Number of arguments must be == 2")
 }
 
 def action = args[0]
@@ -40,5 +40,5 @@ if(action.equals("FINISHED")){
 // Print warning or error messages and force job to exit with error if there are any.
 if (any_clean_failed){
     println "[set_service_FINISHED_if_all_clean_OK] ERROR: clean failed"
-    System.exit(1)
+    throw new IllegalStateException("Clean failed")
 }

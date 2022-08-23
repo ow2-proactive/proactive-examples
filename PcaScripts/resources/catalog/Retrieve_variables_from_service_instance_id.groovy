@@ -4,7 +4,7 @@ import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 // Arguments must be <service_id> <var0_name_to_store> <var0_to_retrieve> <var1_name_to_store> <var1_to_retrieve> ...
 if (args.length < 3) {
     println "[Retrieve_variables_from_service_instance_id] ERROR: Number of arguments must be >= 3"
-    System.exit(1)
+    throw new IllegalArgumentException("Number of arguments must be >= 3")
 }
 
 if (args[0] == "") {
