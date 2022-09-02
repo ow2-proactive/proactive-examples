@@ -27,7 +27,7 @@ if (DOCKER_ENABLED) {
 
 if (DOCKER_ENABLED) {
     // Prepare Docker parameters
-    containerName = "java"
+    containerName = "adoptopenjdk/openjdk8:latest"
     if (variables.get("DOCKER_IMAGE") != null && !variables.get("DOCKER_IMAGE").isEmpty()) {
         containerName = variables.get("DOCKER_IMAGE")
     }
