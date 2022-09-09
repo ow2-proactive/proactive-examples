@@ -24,6 +24,14 @@ def engine = variables.get("ENGINE") // docker, singularity
 
 // Handle service parameters
 def hostname = variables.get("PA_NODE_HOST")
+
+// Use kubernetes node service name as hostname to access service pod in kubernetes infrastructure
+paKubernetesServiceName = System.getenv('KUBERNETES_NODE_SERVICE')
+isPANodeInKubernetes = (paKubernetesServiceName != null && !paKubernetesServiceName.isEmpty())
+if (isPANodeInKubernetes) {
+    hostname = paKubernetesServiceName
+}
+
 def port = new File(instanceName+"_port").text.trim()
 
 def containerID="";
