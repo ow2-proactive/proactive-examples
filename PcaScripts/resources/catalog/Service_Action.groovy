@@ -1,12 +1,11 @@
-println("BEGIN " + variables.get("PA_TASK_NAME"))
-
-
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.CatalogRestApi
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
 import org.ow2.proactive.pca.service.client.model.ServiceDescription
 import java.util.concurrent.TimeoutException
+
+println("BEGIN " + variables.get("PA_TASK_NAME"))
 
 // Get schedulerapi access
 schedulerapi.connect()
@@ -72,7 +71,9 @@ def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceActionUsin
 
 if (action.toLowerCase().contains("finish")) {
     try {
-        schedulerapi.waitForJob(serviceInstanceData.getJobSubmissions().get(0).getJobId().toString(), 180000)
+        serviceJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId().toString()
+        println("SERVICE_JOB_ID: " + serviceJobId)
+        schedulerapi.waitForJob(serviceJobId, 180000)
     } catch (TimeoutException toe) {
         println("[Warning] Timeout reached. Disable to wait until the PCA service " + instanceId + " finishes." )
     }

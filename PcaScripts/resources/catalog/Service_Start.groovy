@@ -43,7 +43,7 @@ if(!catalogRestApi.listAllWorkflowsByServiceIdUsingGET(sessionId).keySet().conta
     throw new IllegalArgumentException("The provided SERVICE_ID:<" + serviceId + "> does not belong to the existing Service Activation list. You have to specify an existing service id.")
 }
 
-println("SERVICE_ID:    " + serviceId)
+println("SERVICE_ID: " + serviceId)
 println("INSTANCE_NAME: " + instanceName)
 
 def startingState = variables.get("STARTING_STATE")
@@ -127,6 +127,7 @@ if (!instance_exists){
     // Acquire service job id
     serviceJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId().toString()
     variables.put("SERVICE_JOB_ID", serviceJobId)
+    println("SERVICE_JOB_ID: " + serviceJobId)
 
     if (publishService) {
         schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
