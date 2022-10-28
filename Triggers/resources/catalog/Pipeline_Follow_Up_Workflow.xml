@@ -1,0 +1,916 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns="urn:proactive:jobdescriptor:3.13" xsi:schemaLocation="urn:proactive:jobdescriptor:3.13 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.13/schedulerjob.xsd"  name="Pipeline_Follow_Up_Workflow" projectName="File Watcher - Pipeline" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+    <variables>
+    <variable name="EMAIL_FROM" value="support@activeeon.com"  model="PA:NOT_EMPTY_STRING"  description="The email sender" group="Email notification" advanced="false" hidden="false"/>
+    <variable name="EMAIL_TO" value="user@contact.com" model="PA:NOT_EMPTY_STRING" description="The email recipient" group="Email notification" advanced="false" hidden="false"/>
+    <variable name="FILE_TO_PROCESS" value="" model="PA:USER_FILE" description="The name of file to be imported from the user space"  group="File Location" advanced="false" hidden="false"/>
+    <variable name="WATCHED_FOLDER_PATH" value="/folder/path/" model="PA:REGEXP(^$|^.+/$)" description="The path of the folder on the given HOST to be monitored for the presence of new files"  group="File Location" advanced="false" hidden="false"/>
+    <variable name="HOST_TO_MONITOR" value="server_host_name" model="PA:NOT_EMPTY_STRING" description="Hostname of the server where the File Event Trigger will be activated"  group="File Location" advanced="false" hidden="false"/>
+    <variable name="ACCESS_KEY" value=""  description="S3 user access key" group="S3 Storage Connection" advanced="false" hidden="false"/>
+    <variable name="SECRET_KEY" value="$ACCESS_KEY" model="PA:CREDENTIAL" description="Third-party credential storing the user secret key associated with the given user access key" group="S3 Storage Connection" advanced="false" hidden="false"/>
+    <variable name="ENDPOINT" value="https://SN_SERVER.com/api/now" group="Servicenow Connection" model="PA:URL" description="Base URL of the server or service that will be queried."  advanced="false" hidden="false"/>
+    <variable name="USER" value="admin" group="Servicenow Connection" model="PA:NOT_EMPTY_STRING" description="Basic auth user"   />
+    <variable name="PASSWORD" value="servicenow@${USER}" group="Servicenow Connection" model="PA:CREDENTIAL" description="Basic auth password key credential"  advanced="false" hidden="false"/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow represents an example of followup process triggered once a new file arrives in a monitored folder. This workflow is composed of 5 steps:
+1. The file to be processed is first loaded from the user space.
+2. The loaded file is then compressed and a ZIP archive is created.
+3. The ZIP archive file is then encrypted with password using GPG. If there is a problem, the workload stops, and an alert is sent to the service desk: in this case ServiceNow helpdesk. If the file is properly encrypted, it continues to step 4
+4. The encrypted file is then archived in s3 cloud storage.
+5. Finally, an email notification is sent to a user or group of users, to inform that the operation is terminated. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="triggers"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/Pipeline.png"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Load_File"
+
+
+
+    preciousResult="true"
+    fork="true">
+      <description>
+        <![CDATA[ Load CSV file from the user space and retrieve its content. ]]>
+      </description>
+      <variables>
+        <variable name="FILE_TO_PROCESS" value="" inherited="true"    advanced="false" hidden="false"/>
+        <variable name="WATCHED_FOLDER_PATH" value="" inherited="true"    advanced="false" hidden="false"/>
+          <variable name="HOST_TO_MONITOR" value="" inherited="true"    advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/metadata.png"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_host_name/raw" language="groovy">
+            <arguments>
+              <argument value="${HOST_TO_MONITOR}"/>
+            </arguments>
+          </file>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// The image will be available through the 'Preview' tab in the scheduler.
+// You can download it or save it.
+import com.google.common.net.MediaType
+import java.nio.file.Path
+import java.nio.file.Paths
+
+fileName = variables.get("FILE_TO_PROCESS")
+folderToMonitor = variables.get("WATCHED_FOLDER_PATH");
+path = Paths.get(folderToMonitor, fileName)
+csvFile = new File(path.toString())
+//csvFile = new File(fileName)
+result = csvFile.getBytes()
+resultMetadata.put("file.name", fileName)
+resultMetadata.put("content.type", "text/csv")
+println ("The " + fileName + " file is successfully loaded")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            189.990234375
+        </positionTop>
+        <positionLeft>
+            567.001953125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Compress_File"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ Compress the loaded file into a ZIP archive ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/zip-file.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Load_File"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*
+Sending an email requires to configure an SMTP connection
+Please look at the following link for the configuration:
+http://doc.activeeon.com/latest/admin/ProActiveAdminGuide.html#_email_notificataion
+
+This task loops through the results array to retieve files and send them by email.
+If a parent task produces a file and stores it in the result field, then it will be accessible in this task.
+If not the result will be converted to a text file.
+
+To add corresponding tasks logs set addTasksLogs to true, this will produce a text file with all results logs
+which is the Stdout and Stderr outputs of tasks.
+
+Note that if a result produces a source code file like a .java there is a high probabilty that the attachment
+will be blocked by the email service, considering it potentially dangerous.
+For some email services this behavior is configurable.
+*/
+
+// Go to https://try.activeeon.com/doc/user/ProActiveUserGuide.html#_task_result for further documentation about task results.
+
+import java.util.zip.*
+
+def jobId = variables.get("PA_JOB_ID");
+def jobName = variables.get("PA_JOB_NAME");
+// Array that will contain all the results files
+def resultFiles = []
+
+// ------------------------- FUNCTION ---------------------------
+def fileName
+// If the first element of the results is the default "true" string, there are no results
+if (results[0] != null && !results[0].toString().equals("true")) {
+
+    // Loop over tasks results
+    results.eachWithIndex { item, index ->
+        // Base file name is taskId.txt
+        fileName = item.getTaskId().toString()+".txt";
+
+        // There is a file.name property
+        if (item.getMetadata() != null && item.getMetadata().containsKey("file.name")) {
+
+            fileName = item.getMetadata().get("file.name");
+
+            // There is a file.extension property then file name is taskId + file extension
+        } else if (item.getMetadata() != null && item.getMetadata().containsKey("file.extension")) {
+
+            def fileExtension = item.getMetadata().get("file.extension")
+            def baseName = item.getTaskId().toString();
+            fileName = baseName + fileExtension;
+        }
+
+        resultFile = new File(fileName);
+        resultFile.createNewFile();
+        resultFile.append(item.getSerializedValue());
+        resultFiles.add(resultFile);
+    }
+}
+
+println ("Start the compression of the " + fileName + " file")
+
+// Create zip file
+new File(fileName + "-results").mkdirs()
+def archiveName = fileName + "-results/" + fileName +"-compressed-file.zip"
+variables.put("ARCHIVE_NAME", archiveName)
+def File archiveFile = new File(archiveName);
+archiveFile.createNewFile();
+
+ZipOutputStream zipFile = new ZipOutputStream(new FileOutputStream(archiveFile));
+
+// Write each result in the zip file
+resultFiles.each { file ->
+    if (file.isFile()) {
+        zipFile.putNextEntry(new ZipEntry(file.name));
+        def buffer = new byte[file.size()];
+        file.withInputStream {
+            zipFile.write(buffer, 0, it.read(buffer));
+        }
+        zipFile.closeEntry();
+    }
+}
+zipFile.close();
+
+println ("The " + fileName + " file is successfully compressed")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="${FILE_TO_PROCESS}-results/**" accessMode="transferToUserSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            318.0078125
+        </positionTop>
+        <positionLeft>
+            565.99609375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="send_results_by_email"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task that will send direct parent tasks results by email.
+Do not forget to specify the sender and the recipient of the email by updating the "EMAIL_FROM" and "EMAIL_TO variable values. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/email_notification_red_one.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Export_to_S3"/>
+      </depends>
+      <inputFiles>
+        <files  includes="${FILE_TO_PROCESS}-results/**" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+/*
+Sending an email requires to configure an SMTP connection
+Please look at the following link for the configuration:
+http://doc.activeeon.com/latest/admin/ProActiveAdminGuide.html#_email_notification
+
+This task loops through the results array to retieve files and send them by email.
+If a parent task produces a file and stores it in the result field, then it will be accessible in this task.
+If not the result will be converted to a text file.
+
+To add corresponding tasks logs set addTasksLogs to true, this will produce a text file with all results logs
+which is the Stdout and Stderr outputs of tasks.
+
+Note that if a result produces a source code file like a .java there is a high probabilty that the attachment
+will be blocked by the email service, considering it potentially dangerous.
+For some email services this behavior is configurable.
+*/
+
+// Go to https://try.activeeon.com/doc/user/ProActiveUserGuide.html#_task_result for further documentation about task results.
+
+import java.util.zip.*
+import org.ow2.proactive.addons.email.EmailSender;
+
+def jobId = variables.get("PA_JOB_ID");
+def jobName = variables.get("PA_JOB_NAME");
+
+// Retrieve user inputs
+def from = variables.get("EMAIL_FROM");
+def to = variables.get("EMAIL_TO");
+
+def subject = "Result of the job: "+ jobName +" with id: "+ jobId;
+
+def emailBody = String.format("Dear Activeeon ProActive Workflow & Scheduler (PWS) User,%n%nYou will find in attachment the results of the job %s , Id: %s.%n%nBest Regards, %nActiveeon Team %n -- %nThis email was auto-generated by ProActive Workflows & Scheduling (PWS) installed on Host %nPlease do not reply.",
+                                 jobName,
+                                 jobId);
+
+def encryptedArchiveName = variables.get("ARCHIVE_NAME") + ".gpg";
+archiveFile = new File(encryptedArchiveName);
+archiveFile.createNewFile();
+archiveFile.append(archiveFile.getBytes());
+
+
+EmailSender.Builder builder = new EmailSender.Builder(credentials);
+builder.setFrom(from)
+builder.addRecipient(to)
+builder.setSubject(subject)
+builder.setBody(emailBody.toString())
+builder.setAttachmentPath(archiveFile.getAbsolutePath())
+builder.setAttachmentName(archiveFile.getName())
+builder.build().sendPlainTextEmailWithAttachment();
+println "Result of parent tasks for job: " + jobName + " with id: " + jobId + " are sent";
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"></controlFlow>
+      <metadata>
+        <positionTop>
+            700.009765625
+        </positionTop>
+        <positionLeft>
+            648.505859375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Export_to_S3"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ This task allows to export data to S3.
+The task requires the following third-party credential: {key: ACCESS_KEY, value: SECRET_KEY} Please refer to the User documentation to learn how to add third-party credentials. ]]>
+      </description>
+      <variables>
+        <variable name="LOCAL_RELATIVE_PATH" value="${FILE_TO_PROCESS}-results/" inherited="false"  description="Local relative path from which we upload file(s). LOCAL_RELATIVE_PATH can contain either a path to a file, a directory terminated by / or an empty value if you want to upload the whole localspace (user or global)" group="S3 Storage Parameters" advanced="false" hidden="false"/>
+        <variable name="BUCKET" value="activeeon-demo-s3" inherited="false" model="PA:NOT_EMPTY_STRING" description="S3 bucket name" group="S3 Storage Parameters" advanced="false" hidden="false"/>
+        <variable name="REGION" value="eu-west-1" inherited="false" model="PA:NOT_EMPTY_STRING" description="Region where your bucket resides" group="S3 Storage Parameters" advanced="false" hidden="false"/>
+        <variable name="REMOTE_RELATIVE_PATH" value="file_trigger" inherited="false"  description="Remote relative path to which we upload file(s). Empty value is allowed" group="S3 Storage Parameters" advanced="false" hidden="false"/>
+        <variable name="ACCESS_KEY" value="" inherited="true"  description="S3 user access key" group="S3 Storage Connection" advanced="false" hidden="false"/>
+        <variable name="SECRET_KEY" value="$ACCESS_KEY" inherited="true" model="PA:CREDENTIAL" description="Third-party credential storing the user secret key associated with the given user access key" group="S3 Storage Connection" advanced="false" hidden="false"/>
+        <variable name="TRANSFER_DIRECTIVE" value="" inherited="false" model="PA:SPEL(! ( variables[&#39;LOCAL_RELATIVE_PATH&#39;].endsWith(&#39;/&#39;) || variables[&#39;LOCAL_RELATIVE_PATH&#39;].isEmpty() ? variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;LOCAL_RELATIVE_PATH&#39;] + &#39;**&#39; : variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;LOCAL_RELATIVE_PATH&#39;]).isEmpty())"    hidden="true"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/aws_s3.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_amazon_s3"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="$TRANSFER_DIRECTIVE" accessMode="transferFromUserSpace"/>
+        <files  includes="aws-java-sdk-fat-1.11.228.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "aws-java-sdk-fat-1.11.228.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.Serializable
+import java.nio.file.Paths
+import java.util.ArrayList
+import java.util.List
+import java.util.Map
+
+import com.amazonaws.auth.AWSStaticCredentialsProvider
+import com.amazonaws.auth.BasicAWSCredentials
+import com.amazonaws.client.builder.AwsClientBuilder
+import com.amazonaws.services.s3.AmazonS3
+import com.amazonaws.services.s3.AmazonS3Client
+import com.amazonaws.services.s3.AmazonS3ClientBuilder
+import com.amazonaws.services.s3.internal.ServiceUtils
+import com.amazonaws.services.s3.model.Bucket
+import com.amazonaws.services.s3.transfer.MultipleFileUpload
+import com.amazonaws.services.s3.transfer.TransferManager
+import com.amazonaws.services.s3.transfer.TransferManagerBuilder
+import com.amazonaws.services.s3.transfer.Upload
+import com.amazonaws.AmazonClientException;
+import com.amazonaws.services.s3.transfer.Transfer;
+import com.amazonaws.services.s3.transfer.TransferProgress;
+import com.amazonaws.util.AwsHostNameUtils
+import com.amazonaws.AmazonServiceException
+import com.amazonaws.regions.RegionUtils
+
+//Set S3 connection parameters and retrieve the S3 secret key
+bucket = variables.get("BUCKET")
+region = variables.get("REGION")
+localRelativePath = variables.get("LOCAL_RELATIVE_PATH")
+remoteRelativePath = variables.get("REMOTE_RELATIVE_PATH")
+accessKey = variables.get("ACCESS_KEY")
+secretKey = checkParametersAndReturnSecretKey()
+
+List<String> filesRelativePathName = new ArrayList<>()
+File file = new File(localRelativePath)
+AmazonS3 amazonS3 = getS3Client(accessKey, secretKey, region)
+
+// Create Bucket if it does not exist
+createBucketIfNotExists(bucket, amazonS3)
+
+// If the path does not exists, raise an exception.
+if (file.exists()) {
+    if (file.isDirectory()) {
+        uploadDir(localRelativePath, bucket, remoteRelativePath, true, false, amazonS3)
+    } else {
+        uploadFile(localRelativePath, bucket, remoteRelativePath, false, amazonS3)
+    }
+} else {
+    throw new FileNotFoundException("The input file cannot be found at " + localRelativePath)
+}
+
+
+/**
+* Upload a local directory to S3. <br>
+* Requires a bucket name. <br>
+* If recursive is set to true, upload all subdirectories recursively.
+*
+* @param dirPath local directory to upload
+* @param bucket
+* @param keyPrefix
+* @param recursive
+* @param pause
+* @param s3Client
+*/
+def uploadDir(String dirPath, String bucket, String keyPrefix, boolean recursive, boolean pause,
+              AmazonS3 s3Client) {
+    println("directory: " + dirPath + (recursive ? " (recursive)" : "") +(pause ? " (pause)" : ""))
+
+    File folder = new File(dirPath)
+    String keyName = (keyPrefix != null) ? Paths.get(keyPrefix, folder.getName()).toString() : folder.getName()
+    TransferManager transferManager = TransferManagerBuilder.standard().withS3Client(s3Client).build()
+    try {
+        MultipleFileUpload uploader = transferManager.uploadDirectory(bucket, keyName, folder, recursive)
+        // loop with Transfer.isDone()
+        showTransferProgress(uploader)
+        // or block with Transfer.waitForCompletion()
+        waitForCompletion(uploader)
+    } catch (AmazonServiceException e) {
+        throw new Exception(e.getErrorMessage())
+    }
+    transferManager.shutdownNow()
+}
+
+/**
+* Upload a local file to S3. <br>
+* Requires a bucket name. <br>
+*
+* @param filePath
+* @param bucket
+* @param keyPrefix
+* @param pause
+* @param s3Client
+*/
+def uploadFile(String filePath, String bucket, String keyPrefix, boolean pause, AmazonS3 s3Client) {
+    println("file: " + filePath + (pause ? " (pause)" : ""))
+    File file = new File(filePath);
+    String keyName = (keyPrefix != null) ? Paths.get(keyPrefix, file.getName()).toString() : file.getName();
+    TransferManager transferManager = TransferManagerBuilder.standard().withS3Client(s3Client).build();
+    try {
+        Upload uploader = transferManager.upload(bucket, keyName, file);
+        // loop with Transfer.isDone()
+        showTransferProgress(uploader);
+        //  or block with Transfer.waitForCompletion()
+        waitForCompletion(uploader);
+    } catch (AmazonServiceException e) {
+        throw new Exception(e.getErrorMessage());
+    }
+    transferManager.shutdownNow();
+}
+
+/**
+* waits for the transfer to complete, catching any exceptions that occur.
+* @param xfer
+*/
+def waitForCompletion(Transfer xfer) {
+    try {
+        xfer.waitForCompletion();
+    } catch (AmazonServiceException e) {
+        throw new Exception("Amazon service error: " + e.getMessage())
+    } catch (AmazonClientException e) {
+        throw new Exception("Amazon client error: " + e.getMessage())
+    } catch (InterruptedException e) {
+        println("Transfer interrupted: " + e.getMessage())
+        Thread.currentThread().interrupt()
+        throw new IllegalStateException("Transfer interrupted: " + e.getMessage())
+    }
+}
+
+/**
+* Prints progress while waiting for the transfer to finish.
+* @param xfer
+*/
+def showTransferProgress(Transfer xfer) {
+    // print the transfer's human-readable description
+    println(xfer.getDescription())
+    // print an empty progress bar...
+    printProgressBar(0.0)
+    // update the progress bar while the xfer is ongoing.
+    while ({
+        try {
+            Thread.sleep(100)
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt()
+            return;
+        }
+        // Note: so_far and total aren't used, they're just for
+        // documentation purposes.
+        TransferProgress progress = xfer.getProgress()
+        double pct = progress.getPercentTransferred()
+        eraseProgressBar()
+        printProgressBar(pct)
+        !xfer.isDone()
+    }()) continue;
+    // print the final state of the transfer.
+    Transfer.TransferState xferState = xfer.getState()
+    println(": " + xferState)
+}
+
+/**
+ * prints a simple text progressbar: [#####     ]
+ * @param pct
+ */
+def printProgressBar(double pct) {
+    // if bar_size changes, then change erase_bar (in eraseProgressBar) to
+    // match.
+    final int bar_size = 40
+    final String empty_bar = "                                        "
+    final String filled_bar = "########################################"
+    int amtFull = (int) (bar_size * (pct / 100.0))
+    final String logMsg = String.format("  [%s%s]",
+                                        filled_bar.substring(0, amtFull),
+                                        empty_bar.substring(0, bar_size - amtFull))
+    println(logMsg)
+}
+
+/**
+* erases the progress bar.
+*/
+def eraseProgressBar() {
+    // erase_bar is bar_size (from printProgressBar) + 4 chars.
+    final String erase_bar = "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b";
+    println(erase_bar)
+}
+
+/**
+* Get or initialize the S3 client.
+* Note: this method must be synchronized because we're accessing the
+* field and we're calling this method from a worker thread.
+*
+* @return the S3 client
+*/
+def getS3Client(String accessKey, String secretKey, String... args) {
+    BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey)
+    AmazonS3ClientBuilder builder = AmazonS3ClientBuilder.standard().withCredentials(new AWSStaticCredentialsProvider(credentials))
+
+    if (args.length == 1) {
+        builder = builder.withRegion(args[0])
+
+    } else {
+        String endpoint = args[0] + "://" + args[1]
+        String clientRegion = null
+        if (!ServiceUtils.isS3USStandardEndpoint(endpoint) &&
+            (clientRegion = AwsHostNameUtils.parseRegion(args[1], AmazonS3Client.S3_SERVICE_NAME)) == null) {
+            throw new IllegalArgumentException("Invalid region in " + args[1])
+        }
+        builder = builder.withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint,
+                                                                                               clientRegion))
+    }
+    builder = builder.withPathStyleAccessEnabled(true)
+    return builder.build()
+}
+
+/**
+* Check if an S3 bucket exists and returns its name if it does exist or null otherwise.
+*
+* @param bucket
+* @param s3
+* @return bucket name if it exists or null otherwise
+*/
+def getBucket(String bucket, AmazonS3 s3) {
+    s3.listBuckets().stream().each{
+        if(it.getName().equals(bucket)){
+            return it
+        }
+    }
+    /*for (b in s3.listBuckets())
+    {
+        if(b.getName().equals(bucket)){
+            return b
+        }
+    }*/
+    return null
+}
+
+/**
+* Creates an S3 bucket if it does not exist and returns its name.
+*
+* @param bucket
+* @param s3
+* @return
+*/
+def createBucketIfNotExists(String bucket, AmazonS3 s3) {
+    Bucket b
+    if (s3.doesBucketExistV2(bucket)) {
+        b = getBucket(bucket, s3)
+    } else {
+        println("Bucket " + bucket + " does not exist. Creating bucket ...")
+        b = s3.createBucket(bucket)
+        println("Bucket " + bucket + " created successfully!")
+    }
+    return b
+}
+
+/**
+* Checks and initialize parameters
+* returns the S3 secret key using the third party credentials mechanism
+*/
+def checkParametersAndReturnSecretKey() {
+    if (bucket.isEmpty()) {
+        throw new IllegalArgumentException("BUCKET variable is not provided by the user. Empty value is not allowed.")
+    }
+    if (region.isEmpty()) {
+        throw new IllegalArgumentException("REGION variable is not provided by the user. Empty value is not allowed.")
+    }
+    if (localRelativePath.isEmpty()) {
+        //Default value is getLocalSpace() because it will always be writable and moreover can be used to transfer files to another data space (global, user)
+        localRelativePath = localspace
+    }
+    if (accessKey.isEmpty()) {
+        throw new IllegalArgumentException("ACCESS_KEY variable is not provided by the user. Empty value is not allowed.")
+    }
+    def secretKey = credentials.get(accessKey)
+    if (secretKey == null || secretKey.isEmpty()) {
+        throw new IllegalArgumentException("Please add your secret key to 3rd-party credentials under the key :\"" +
+                                           accessKey + "\"")
+    }
+    return secretKey
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"></controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+schedulerapi.connect()
+// Add external endpoint
+ schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "AWS S3", "https://s3.console.aws.amazon.com/s3/buckets/activeeon-demo-s3?region=eu-west-1&prefix=file_trigger/&showversions=false", "/automation-dashboard/styles/patterns/img/wf-icons/aws_s3.png")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            574.00390625
+        </positionTop>
+        <positionLeft>
+            648.505859375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Encrypt_File"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ Encrypt file with password using GPG ]]>
+      </description>
+      <variables>
+        <variable name="PASSPHRASE" value="ENC(Nm1XDRzCweNLwYThD7BT9A==)" inherited="false" model="PA:HIDDEN"   advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/encrypt-file.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <depends>
+        <task ref="Compress_File"/>
+      </depends>
+      <inputFiles>
+        <files  includes="${FILE_TO_PROCESS}-results/**" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+gpg --yes --batch --passphrase="$variables_PASSPHRASE" -c "$variables_ARCHIVE_NAME"
+last_exit_status="$?"
+if [ "$last_exit_status" == "0" ]; then
+	echo "The encryption of the " $variables_ARCHIVE_NAME " is successfully finished"
+    echo $last_exit_status > "encryption_status"
+else
+	echo "The encryption of the " $variables_ARCHIVE_NAME " has failed"
+    echo $last_exit_status > "encryption_status"
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <if target="Create_ServiceNow_Task"
+        else="Export_to_S3">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+println variables.get("ENCRYPTION_STATUS")
+
+if(variables.get("ENCRYPTION_STATUS") != "0"){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def encryptionStatus = new File("encryption_status").text.trim()
+variables.put("ENCRYPTION_STATUS", encryptionStatus)
+]]>
+          </code>
+        </script>
+      </post>
+      <outputFiles>
+        <files  includes="${FILE_TO_PROCESS}-results/**" accessMode="transferToUserSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            445.99609375
+        </positionTop>
+        <positionLeft>
+            567.001953125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Create_ServiceNow_Task"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task performing a rest POST request to create a task on a servicenow instance using a json request body.
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+USER: basic auth user for ServiceNow (inherited from job variable)
+PASSWORD: basic auth password for ServiceNow (inherited from job variable)
+TASK_TYPE: the type of task to create in ServiceNow. It corresponds to a table in ServiceNow. It can be incident, ticket, problem, change_request.
+RETURNED_FIELDS: Fields of the queried table to be returned in the response
+SSL_DISABLE_CHECK: to disable ssl certificate check
+CONTENT_TYPE: content-type of the request, should be "application/json" with eventual encoding.
+REQUEST_BODY: a json parameter containing the request body which is columns and values to be inserted.
+DEBUG: to print the full request and response content in the task output
+RESPONSE_PATH: which data to extract in the json response. It uses the GPath notation (https://groovy-lang.org/processing-xml.html) ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="https://SN_SERVER.com/api/now" inherited="true" model="PA:URL" description="Base URL of the server or service that will be queried."  advanced="false" hidden="false"/>
+        <variable name="USER" value="admin" inherited="true" model="PA:NOT_EMPTY_STRING" description="Basic auth user (if required, inherited from job variable)"   />
+        <variable name="PASSWORD" value="servicenow@${USER}" inherited="true" model="PA:CREDENTIAL" description="Basic auth password default value is empty (Inherited from the WF variables)"  advanced="false" hidden="false"/>
+        <variable name="TASK_TYPE" value="incident" inherited="false" model="PA:LIST(incident,ticket,problem,change_request)" description="Type of task to create in ServiceNow. It corresponds to a table in ServiceNow. It can be incident, ticket, problem, change_request."   />
+        <variable name="PATH" value="/table/${TASK_TYPE}" inherited="false" model="PA:NOT_EMPTY_STRING" description="Path of the request (relative to the base url)"   />
+        <variable name="RETURNED_FIELDS" value="number,sys_created_on,assigned_to,short_description,description,priority,sys_id" inherited="false"  description="Fields of the queried table to be returned in the response"   />
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN" description="If true, disable SSL certificate verification"   />
+        <variable name="CONTENT_TYPE" value="application/json;charset = UTF-8" inherited="false"  description="Content-Type of the request, should be &#39;application/json&#39; with eventual encoding."   />
+        <variable name="REQUEST_BODY" value="{&quot;caller_id&quot;:&quot;caller&quot;,&quot;assigned_to&quot;:&quot;Andrew Och&quot;,&quot;short_description&quot;:&quot;Followup process is interrupted because the file encryption task failed&quot;,&quot;description&quot;:&quot;Please inspect the logs of the job ${PA_JOB_ID}&quot;,&quot;due_date&quot;:&quot;2022-12-21&quot;,&quot;impact&quot;:&quot;2&quot;,&quot;urgency&quot;:&quot;2&quot;}" inherited="false" model="PA:JSON" description="Json parameter containing the request body which is columns and values to be inserted."  advanced="false" hidden="false"/>
+        <variable name="DEBUG" value="false" inherited="false" model="PA:BOOLEAN" description="If true, print the full request and response content in the task output."   />
+        <variable name="RESPONSE_PATH" value="." inherited="false"  description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response"  />
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ServiceNow.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+                  .urlEncodingEnabled(false)
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(credentials.get(variables.get("PASSWORD")))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), credentials.get(variables.get("PASSWORD")))
+}
+
+if (Strings.isNullOrEmpty(variables.get("TASK_TYPE"))) {
+     throw new IllegalArgumentException("Table to query cannot be empty")
+}
+
+// Add fields to be returned in the query response
+restCall = restCall.queryParam("sysparm_fields", variables.get("RETURNED_FIELDS").replaceAll(",","%2C"))
+
+// Add others if they have been added in task variables
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")})
+	.forEach({ entry ->
+        restCall = restCall.queryParam(entry.getKey().replace("PARAM_",""), entry.getValue().replaceAll(",","%2C"))
+    });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+if (variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+}
+result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+// Store Tasks sys id from ServiceNow DB in variables
+variables.put("SYS_ID", result.result.sys_id)
+println result
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+schedulerapi.connect()
+// Add external endpoint
+ schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "ServiceNow", "https://dev79618.service-now.com/now/nav/ui/classic/params/target/incident_list.do", "/automation-dashboard/styles/patterns/img/wf-icons/ServiceNow.png")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            574.0234375
+        </positionTop>
+        <positionLeft>
+            485.498046875
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2686px;
+            height:3577px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-184.990234375px;left:-480.498046875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_93" style="top: 190px; left: 567.002px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load CSV file and retrieve its content."><img src="/automation-dashboard/styles/patterns/img/wf-icons/metadata.png" width="20px">&nbsp;<span class="name">Load_File</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_96" style="top: 318.017px; left: 565.996px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Compress the loaded file into a zip archive"><img src="/automation-dashboard/styles/patterns/img/wf-icons/zip-file.png" width="20px">&nbsp;<span class="name">Compress_File</span></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_99" style="top: 700.019px; left: 648.506px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that will send direct parent tasks results by email.
+Do not forget to specify the sender and the recipient of the email by updating the &quot;EMAIL_FROM&quot; and &quot;EMAIL_TO variable values."><img src="/automation-dashboard/styles/patterns/img/wf-icons/email_notification_red_one.png" width="20px">&nbsp;<span class="name">send_results_by_email</span></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_102" style="top: 574.013px; left: 648.506px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task allows to export data to S3.
+The task requires the following third-party credential: {key: ACCESS_KEY, value: SECRET_KEY} Please refer to the User documentation to learn how to add third-party credentials."><img src="/automation-dashboard/styles/patterns/img/wf-icons/aws_s3.png" width="20px">&nbsp;<span class="name">Export_to_S3</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_105" style="top: 446.006px; left: 567.002px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Encrypt file with password using GPG"><img src="/automation-dashboard/styles/patterns/img/wf-icons/encryped-file.png" width="20px">&nbsp;<span class="name">Encrypt_File</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_108" style="top: 574.033px; left: 485.498px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a rest POST request to create a task on a servicenow instance using a json request body.
+
+It accepts the following parameters:
+ENDPOINT: base url of the request (inherited from job variable)
+USER: basic auth user for ServiceNow (inherited from job variable)
+PASSWORD: basic auth password for ServiceNow (inherited from job variable)
+TASK_TYPE: the type of task to create in ServiceNow. It corresponds to a table in ServiceNow. It can be incident, ticket, problem, change_request.
+RETURNED_FIELDS: Fields of the queried table to be returned in the response
+SSL_DISABLE_CHECK: to disable ssl certificate check
+CONTENT_TYPE: content-type of the request, should be &quot;application/json&quot; with eventual encoding.
+REQUEST_BODY: a json parameter containing the request body which is columns and values to be inserted.
+DEBUG: to print the full request and response content in the task output
+RESPONSE_PATH: which data to extract in the json response. It uses the GPath notation (https://groovy-lang.org/processing-xml.html)"><img src="/automation-dashboard/styles/patterns/img/wf-icons/ServiceNow.png" width="20px">&nbsp;<span class="name">Create_ServiceNow_Task</span></a></div><svg style="position:absolute;left:601.9817132113825px;top:229.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path></svg><svg style="position:absolute;left:688.5px;top:613.5px" width="39.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 18.5 86 C 28.5 36 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.751504,64.474304 L21.048034160685713,43.324386516888346 L15.94379026202017,51.00206157011478 L7.57579173080049,47.13210025486817 L19.751504,64.474304" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.751504,64.474304 L21.048034160685713,43.324386516888346 L15.94379026202017,51.00206157011478 L7.57579173080049,47.13210025486817 L19.751504,64.474304" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:601.9817132113825px;top:357.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#666" fill="#666" transform="translate(15.018286788617468,0.5)"></path></svg><svg style="position:absolute;left:474.5px;top:485.5px" width="103" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 92 50 82 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.2772479999999975,62.682047999999995 L27.290050274464395,55.71873376587322 L18.237559451905582,53.9716190279443 L18.5796213024087,44.758422313967635 L7.2772479999999975,62.682047999999995" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.2772479999999975,62.682047999999995 L27.290050274464395,55.71873376587322 L18.237559451905582,53.9716190279443 L18.5796213024087,44.758422313967635 L7.2772479999999975,62.682047999999995" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_125" style="position: absolute; transform: translate(-50%, -50%); left: 525.5px; top: 529.5px;">if</div><svg style="position:absolute;left:556.5px;top:485.5px" width="103" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 82 88 C 92 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M74.722752,62.682047999999995 L63.420378697591296,44.758422313967635 L63.76244054809442,53.9716190279443 L54.7099497255356,55.71873376587322 L74.722752,62.682047999999995" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M74.722752,62.682047999999995 L63.420378697591296,44.758422313967635 L63.76244054809442,53.9716190279443 L54.7099497255356,55.71873376587322 L74.722752,62.682047999999995" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_129" style="position: absolute; transform: translate(-50%, -50%); left: 607.5px; top: 529.5px;">else</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 607px; top: 220px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 607px; top: 348px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 607px; top: 308px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 707.5px; top: 730px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 707.5px; top: 690px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 689px; top: 604px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 639px; top: 564px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 607px; top: 476px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 607px; top: 436px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 557px; top: 476px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 550px; top: 604px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 475px; top: 564px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
