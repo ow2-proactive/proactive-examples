@@ -40,7 +40,6 @@ If you need to retest the extracting and loading of proactive-examples, please r
 		"name": "Text Analysis",
 		"short_description": "Text analysis with machine learning and deep learning on Docker",
 		"author": "ActiveEon's Team",
-		"tags": ["Samples", "Machine Learning", "Text Analysis", "Big Data", "Analytics", "Deep Learning"],
 		"version": "1.0"
 	},
 	"catalog" : {
@@ -65,7 +64,6 @@ If you need to retest the extracting and loading of proactive-examples, please r
 * * metadata->**slug** - compact name of the package.
 * * metadata->**name** - name of the package.
 * * metadata->**short_description** - short description of the package.
-* * metadata->**tags** - key works of the package.
 
 3.2) Update the `catalog` fields:
 
