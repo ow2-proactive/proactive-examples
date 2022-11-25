@@ -1,5 +1,7 @@
 /*
-#If you want to add more functionalities like a Proxy use
+# This script monitors a specific directory, located in a remote FTP/SFTP server,
+# for the arrival of new files matching a given pattern
+# If you want to add more functionalities like a Proxy use
 # Please refer to Commons Virtual File System doc for more info.
 # https://commons.apache.org/proper/commons-vfs/index.html
 */

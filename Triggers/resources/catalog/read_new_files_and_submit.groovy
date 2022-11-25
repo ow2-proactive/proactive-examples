@@ -1,5 +1,7 @@
 /*
-#If you want to add more functionalities like a Proxy use
+# This script monitors a specific directory, located in a remote FTP/SFTP server,
+# for the arrival of new files matching a given pattern and submit an action workflow for each found file
+# If you want to add more functionalities like a Proxy use
 # Please refer to Commons Virtual File System doc for more info.
 # https://commons.apache.org/proper/commons-vfs/index.html
 */
@@ -27,7 +29,7 @@ host = variables.get("HOST")
 username = variables.get("USERNAME")
 port = variables.get("PORT")
 
-if (signalapi.isReceived("Terminate_Monitoring")) {    
+if (signalapi.isReceived("Terminate_Monitoring")) {
     result = true;
     return;
 }
@@ -73,7 +75,7 @@ void importFiles() {
         children.each { f ->
             String relativePath = File.separator + remoteBasePath.getRelativeName(f.getName());
             if (f.getType() == FileType.FILE) {
-                key = relativePath                
+                key = relativePath
                 value = true // we no need value, so it is always true
                 previousValue = synchronizationapi.putIfAbsent(channelId, key, value)
                 if (previousValue == null) {
@@ -98,7 +100,7 @@ void importFiles() {
 
                     println "Job submitted with job id " + jobid
 
-                }    			
+                }
             }
         }
     } catch (FileSystemException ex) {
@@ -111,7 +113,7 @@ void importFiles() {
  * Release system resources, close connections to the local and remote filesystems.
  */
 void release() {
-    FileSystem fs = null;    
+    FileSystem fs = null;
     if (src != null) {
         src.close()
         fs = src.getFileSystem() // This works even if the src is closed.
