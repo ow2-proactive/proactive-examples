@@ -172,7 +172,7 @@ def submit_workflow_from_catalog(bucket_name, workflow_name, workflow_variables=
 
 
 def submit_web_notification(message, token):
-    return submit_workflow_from_catalog("notification-tools", "Web_Notification", {'MESSAGE': message}, token)
+    return submit_workflow_from_catalog("control-notification", "Web_Notification", {'MESSAGE': message}, token)
 
 
 def auth_token(token):
