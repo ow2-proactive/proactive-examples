@@ -1,0 +1,441 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MaaS_Server_Inference_Test" onTaskError="continueJobExecution" priority="normal" projectName="6. MaaS_Server Examples" tags="Model Inference" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" description="GRPC inference url of the model server (e.g. localhost:8001)." group="Model Server" hidden="false" model="" name="GRPC_INFERENCE_URL" value=""/>
+    <variable advanced="false" description="Name of the model to be tested." group="Model Server" hidden="false" model="PA:LIST(simple,simple_identity,simple_int8,simple_sequence,simple_string,densenet_onnx,inception_graphdef)" name="MODEL_NAME" value="simple"/>
+    <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
+    <variable advanced="true" description="Name of the container image being used to run the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(,nvcr.io/nvidia/tritonserver:22.10-py3-sdk)" name="CONTAINER_IMAGE" value="nvcr.io/nvidia/tritonserver:22.10-py3-sdk"/>
+  </variables>
+  <description>
+    <![CDATA[ Simple workflow for MaaS Server inference test. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="ai-model-as-a-service"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png"/>
+<info name="Documentation" value="PAIO/PAIOUserGuide.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="MaaS_Server_Inference_Test" preciousResult="true" runAsMe="true">
+      <description>
+        <![CDATA[ Simple task for MaaS Server inference test. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" hidden="false" inherited="false" name="TASK_FILE_PATH" value="main.py"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png"/>
+        <info name="task.documentation" value="PAIO/PAIOUserGuide.html"/>
+        <info name="PRE_SCRIPT_AS_FILE" value="$TASK_FILE_PATH"/>
+      </genericInformation>
+      <selection>
+        <script type="static">
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_node_source_name/raw"/>
+        </script>
+      </selection>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import sys
+import argparse
+import uuid
+import queue
+import gevent.ssl
+import numpy as np
+
+import tritonclient.http as httpclient
+import tritonclient.grpc as grpcclient
+import grpc
+
+from tritonclient.grpc import service_pb2, service_pb2_grpc
+from tritonclient.utils import InferenceServerException
+from tritonclient import utils
+
+
+def test_model_simple(args, triton_client):
+    # Infer
+    inputs = []
+    outputs = []
+    inputs.append(grpcclient.InferInput('INPUT0', [1, 16], "INT32"))
+    inputs.append(grpcclient.InferInput('INPUT1', [1, 16], "INT32"))
+    # Create the data for the two input tensors. Initialize the first
+    # to unique integers and the second to all ones.
+    input0_data = np.arange(start=0, stop=16, dtype=np.int32)
+    input0_data = np.expand_dims(input0_data, axis=0)
+    input1_data = np.ones(shape=(1, 16), dtype=np.int32)
+    # Initialize the data
+    inputs[0].set_data_from_numpy(input0_data)
+    inputs[1].set_data_from_numpy(input1_data)
+    outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
+    outputs.append(grpcclient.InferRequestedOutput('OUTPUT1'))
+    # Test with outputs
+    results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
+    # print("response:\n", results.get_response())
+    statistics = triton_client.get_inference_statistics(model_name=args.model_name)
+    # print("statistics:\n", statistics)
+    if len(statistics.model_stats) != 1:
+        print("FAILED: Inference Statistics")
+        sys.exit(1)
+    # Get the output arrays from the results
+    output0_data = results.as_numpy('OUTPUT0')
+    output1_data = results.as_numpy('OUTPUT1')
+    print("model-outputs:")
+    for i in range(16):
+        print(str(input0_data[0][i]) + " + " + str(input1_data[0][i]) + " = " + str(output0_data[0][i]))
+        print(str(input0_data[0][i]) + " - " + str(input1_data[0][i]) + " = " + str(output1_data[0][i]))
+        if (input0_data[0][i] + input1_data[0][i]) != output0_data[0][i]:
+            print("sync infer error: incorrect sum")
+            sys.exit(1)
+        if (input0_data[0][i] - input1_data[0][i]) != output1_data[0][i]:
+            print("sync infer error: incorrect difference")
+            sys.exit(1)
+    print('PASS: simple')
+
+
+def test_model_simple_identity(args, triton_client):
+    # Example using BYTES input tensor with utf-8 encoded string that
+    # has an embedded null character.
+    # null_chars_array = np.array(["he\x00llo".encode('utf-8') for i in range(16)], dtype=np.object_)
+    # null_char_data = null_chars_array.reshape([1, 16])
+    null_chars_array = np.array(["he\x00llo".encode('utf-8') for i in range(1)], dtype=np.object_)
+    null_char_data = null_chars_array.reshape([1, 1])
+    # Example using BYTES input tensor with 16 elements, where each
+    # element is a 4-byte binary blob with value 0x00010203. Can use dtype=np.bytes_ in this case.
+    # bytes_data = [b'\x00\x01\x02\x03' for i in range(16)]
+    # np_bytes_data = np.array(bytes_data, dtype=np.bytes_)
+    # np_bytes_data = np_bytes_data.reshape([1, 16])
+    np_array = null_char_data
+    # np_array = np_bytes_data
+    inputs = []
+    outputs = []
+    inputs.append(grpcclient.InferInput('INPUT0', np_array.shape, "BYTES"))
+    inputs[0].set_data_from_numpy(np_array)
+    outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
+    results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
+    if (np_array.dtype == np.object_):
+        print(results.as_numpy('OUTPUT0'))
+        if not np.array_equal(np_array, results.as_numpy('OUTPUT0')):
+            print(results.as_numpy('OUTPUT0'))
+            print("error: incorrect output")
+            sys.exit(1)
+    else:
+        encoded_results = np.char.encode(results.as_numpy('OUTPUT0').astype(str))
+        print(encoded_results)
+        if not np.array_equal(np_array, encoded_results):
+            print("error: incorrect output")
+            sys.exit(1)
+    print('PASS: simple_identity')
+
+
+def test_model_simple_int8(args, triton_client):
+    # We use a simple model that takes 2 input tensors of 16 integers
+    # each and returns 2 output tensors of 16 integers each. One
+    # output tensor is the element-wise sum of the inputs and one
+    # output is the element-wise difference.
+    # model_name = "simple_int8"
+    model_version = ""
+    batch_size = 1
+    # Create gRPC stub for communicating with the server
+    channel = grpc.insecure_channel(args.model_server)
+    grpc_stub = service_pb2_grpc.GRPCInferenceServiceStub(channel)
+    # Generate the request
+    request = service_pb2.ModelInferRequest()
+    request.model_name = args.model_name
+    request.model_version = model_version
+    # Input data
+    input0_data = [i for i in range(16)]
+    input1_data = [1 for i in range(16)]
+    # Populate the inputs in inference request
+    input0 = service_pb2.ModelInferRequest().InferInputTensor()
+    input0.name = "INPUT0"
+    input0.datatype = "INT8"
+    input0.shape.extend([1, 16])
+    input0.contents.int_contents[:] = input0_data
+    input1 = service_pb2.ModelInferRequest().InferInputTensor()
+    input1.name = "INPUT1"
+    input1.datatype = "INT8"
+    input1.shape.extend([1, 16])
+    input1.contents.int_contents[:] = input1_data
+    request.inputs.extend([input0, input1])
+    # Populate the outputs in the inference request
+    output0 = service_pb2.ModelInferRequest().InferRequestedOutputTensor()
+    output0.name = "OUTPUT0"
+    output1 = service_pb2.ModelInferRequest().InferRequestedOutputTensor()
+    output1.name = "OUTPUT1"
+    request.outputs.extend([output0, output1])
+    response = grpc_stub.ModelInfer(request)
+    output_results = []
+    index = 0
+    for output in response.outputs:
+        shape = []
+        for value in output.shape:
+            shape.append(value)
+        output_results.append(
+            np.frombuffer(response.raw_output_contents[index], dtype=np.int8))
+        output_results[-1] = np.resize(output_results[-1], shape)
+        index += 1
+    if len(output_results) != 2:
+        print("expected two output results")
+        sys.exit(1)
+    for i in range(16):
+        print(str(input0_data[i]) + " + " + str(input1_data[i]) + " = " + str(output_results[0][0][i]))
+        print(str(input0_data[i]) + " - " + str(input1_data[i]) + " = " + str(output_results[1][0][i]))
+        if (input0_data[i] + input1_data[i]) != output_results[0][0][i]:
+            print("sync infer error: incorrect sum")
+            sys.exit(1)
+        if (input0_data[i] - input1_data[i]) != output_results[1][0][i]:
+            print("sync infer error: incorrect difference")
+            sys.exit(1)
+    print('PASS: simple_int8')
+
+
+def test_model_simple_sequence(args, triton_client):
+    # UserData class
+    class UserData:
+        def __init__(self):
+            self._completed_requests = queue.Queue()
+    # sync_send function
+    def sync_send(triton_client, result_list, values, batch_size, sequence_id, model_name, model_version):
+        count = 1
+        for value in values:
+            # Create the tensor for INPUT
+            value_data = np.full(shape=[batch_size, 1], fill_value=value, dtype=np.int32)
+            inputs = []
+            inputs.append(grpcclient.InferInput('INPUT', value_data.shape, "INT32"))
+            # Initialize the data
+            inputs[0].set_data_from_numpy(value_data)
+            outputs = []
+            outputs.append(grpcclient.InferRequestedOutput('OUTPUT'))
+            # Issue the synchronous sequence inference.
+            result = triton_client.infer(model_name=model_name,
+                                        inputs=inputs,
+                                        outputs=outputs,
+                                        sequence_id=sequence_id,
+                                        sequence_start=(count == 1),
+                                        sequence_end=(count == len(values)))
+            result_list.append(result.as_numpy('OUTPUT'))
+            count = count + 1
+    # We use custom "sequence" models which take 1 input
+    # value. The output is the accumulated value of the inputs. See
+    # src/custom/sequence.
+    offset = 0
+    dyna = False
+    int_sequence_model_name = "simple_dyna_sequence" if dyna else "simple_sequence"
+    string_sequence_model_name = "simple_string_dyna_sequence" if dyna else "simple_sequence"
+    model_version = ""
+    batch_size = 1
+    # values = [11, 7, 5, 3, 2, 0, 1]
+    values = [11] # 6 inferences
+    # Will use two sequences and send them synchronously. Note the
+    # sequence IDs should be non-zero because zero is reserved for
+    # non-sequence requests.
+    int_sequence_id0 = 1000 + offset * 2
+    int_sequence_id1 = 1001 + offset * 2
+    # For string sequence IDs, the dyna backend requires that the
+    # sequence id be decodable into an integer, otherwise we'll use
+    # a UUID4 sequence id and a model that doesn't require corrid
+    # control.
+    string_sequence_id0 = str(1002) if dyna else str(uuid.uuid4())
+    int_result0_list = []
+    int_result1_list = []
+    string_result0_list = []
+    user_data = UserData()
+    try:
+        sync_send(triton_client, int_result0_list, 
+                  values, batch_size,
+                  int_sequence_id0, int_sequence_model_name, model_version)
+        # sync_send(triton_client, int_result0_list, 
+        #           [0] + values, batch_size,
+        #           int_sequence_id0, int_sequence_model_name, model_version)
+        # sync_send(triton_client, int_result1_list,
+        #           [100] + [-1 * val for val in values], batch_size,
+        #           int_sequence_id1, int_sequence_model_name, model_version)
+        # sync_send(triton_client, string_result0_list,
+        #           [20] + [-1 * val for val in values], batch_size,
+        #           string_sequence_id0, string_sequence_model_name,
+        #           model_version)
+    except InferenceServerException as error:
+        print(error)
+        sys.exit(1)
+    for i in range(len(int_result0_list)):
+        int_seq0_expected = 1 if (i == 0) else values[i - 1]
+        int_seq1_expected = 101 if (i == 0) else values[i - 1] * -1
+        # For string sequence ID we are testing two different backends
+        if i == 0 and dyna:
+            string_seq0_expected = 20
+        elif i == 0 and not dyna:
+            string_seq0_expected = 21
+        elif i != 0 and dyna:
+            string_seq0_expected = values[i - 1] * -1 + int(
+                string_result0_list[i - 1][0][0])
+        else:
+            string_seq0_expected = values[i - 1] * -1
+        # The dyna_sequence custom backend adds the correlation ID
+        # to the last request in a sequence.
+        if dyna and (i != 0) and (values[i - 1] == 1):
+            int_seq0_expected += int_sequence_id0
+            # int_seq1_expected += int_sequence_id1
+            # string_seq0_expected += int(string_sequence_id0)
+        # print("[" + str(i) + "] " + str(int_result0_list[i][0][0]) + " : " +
+        #       str(int_result1_list[i][0][0]) + " : " +
+        #       str(string_result0_list[i][0][0]))
+        print("[" + str(i) + "] " + str(int_result0_list[i][0][0]))
+        # if ((int_seq0_expected != int_result0_list[i][0][0]) or
+        #     (int_seq1_expected != int_result1_list[i][0][0]) or
+        #     (string_seq0_expected != string_result0_list[i][0][0])):
+        # if ((int_seq0_expected != int_result0_list[i][0][0])):
+        #     print("[ expected ] " + str(int_seq0_expected) + " : " +
+        #           str(int_seq1_expected) + " : " + str(string_seq0_expected))
+        #     sys.exit(1)
+    print("PASS: simple_sequence")
+
+
+def test_model_simple_string(args, triton_client):
+    inputs = []
+    outputs = []
+    inputs.append(grpcclient.InferInput('INPUT0', [1, 16], "BYTES"))
+    inputs.append(grpcclient.InferInput('INPUT1', [1, 16], "BYTES"))
+    # Create the data for the two input tensors. Initialize the first
+    # to unique integers and the second to all ones.
+    in0 = np.arange(start=0, stop=16, dtype=np.int32)
+    in0 = np.expand_dims(in0, axis=0)
+    in1 = np.ones(shape=(1, 16), dtype=np.int32)
+    expected_sum = np.add(in0, in1)
+    expected_diff = np.subtract(in0, in1)
+    # The 'simple_string' model expects 2 BYTES tensors where each
+    # element in those tensors is the utf-8 string representation of
+    # an integer. The BYTES tensors must be represented by a numpy
+    # array with dtype=np.object_.
+    in0n = np.array([str(x).encode('utf-8') for x in in0.reshape(in0.size)], dtype=np.object_)
+    input0_data = in0n.reshape(in0.shape)
+    in1n = np.array([str(x).encode('utf-8') for x in in1.reshape(in1.size)], dtype=np.object_)
+    input1_data = in1n.reshape(in1.shape)
+    # Initialize the data
+    inputs[0].set_data_from_numpy(input0_data)
+    inputs[1].set_data_from_numpy(input1_data)
+    outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
+    outputs.append(grpcclient.InferRequestedOutput('OUTPUT1'))
+    # Make inference
+    results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
+    # Get the output arrays from the results
+    output0_data = results.as_numpy('OUTPUT0')
+    output1_data = results.as_numpy('OUTPUT1')
+    for i in range(16):
+        print(str(input0_data[0][i]) + " + " + str(input1_data[0][i]) + " = " + str(output0_data[0][i]))
+        print(str(input0_data[0][i]) + " - " + str(input1_data[0][i]) + " = " + str(output1_data[0][i]))
+        # Convert result from string to int to check result
+        r0 = int(output0_data[0][i])
+        r1 = int(output1_data[0][i])
+        if expected_sum[0][i] != r0:
+            print("error: incorrect sum")
+            sys.exit(1)
+        if expected_diff[0][i] != r1:
+            print("error: incorrect difference")
+            sys.exit(1)
+    print("PASS: simple_string")
+
+
+def main(args):
+    print("model-server: ", args.model_server)
+    print("model-name:   ", args.model_name)
+    try:
+        # triton_client = httpclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
+        triton_client = grpcclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
+    except Exception as e:
+        print("channel creation failed: " + str(e))
+        sys.exit(1)
+    if args.model_name == "simple":
+        test_model_simple(args, triton_client)
+    elif args.model_name == "simple_identity":
+        test_model_simple_identity(args, triton_client)
+    elif args.model_name == "simple_int8":
+        test_model_simple_int8(args, triton_client)
+    elif args.model_name == "simple_sequence":
+        test_model_simple_sequence(args, triton_client)
+    elif args.model_name == "simple_string":
+        test_model_simple_string(args, triton_client)
+    else:
+        print("Invalid model name: " + args.model_name)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s',
+                        '--model-server',
+                        type=str,
+                        required=True,
+                        help='Name of the model server.')
+    parser.add_argument('-n',
+                        '--model-name',
+                        type=str,
+                        required=True,
+                        help='Name of the deployed model to be tested.')
+    parser.add_argument('-v',
+                        '--verbose',
+                        action="store_true",
+                        required=False,
+                        default=False,
+                        help='Enable verbose output')
+    args = parser.parse_args()
+    main(args)
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "---"
+echo "Debugging info"
+python -V
+which python
+pip -V
+echo "---"
+python $variables_TASK_FILE_PATH -s $variables_GRPC_INFERENCE_URL -n $variables_MODEL_NAME
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            119.05000305175781
+        </positionTop>
+        <positionLeft>
+            135.4000244140625
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2836px;
+            height:3920px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-114.05000305175781px;left:-130.4000244140625px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 119.05px; left: 135.4px;" id="jsPlumb_1_106"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Simple task for MaaS Server inference test."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png" width="20px">&nbsp;<span class="name">MaaS_Server_Inference_Test</span></a></div><div style="position: absolute; height: 20px; width: 20px; left: 208.5px; top: 149px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
