@@ -66,42 +66,35 @@ if (binding.variables["args"]) {
 if (!Strings.isNullOrEmpty(serviceId)) {
     // Get the service workflow
     // Check that the provided serviceId belongs to the existing Service Activation list
-    Map<String, List<CloudAutomationWorkflow>> listStartingWorkflowsByServiceId = catalogRestApi.listStartingWorkflowsByServiceIdUsingGET(sessionId)
-    for(String serviceIdIterator : listStartingWorkflowsByServiceId.keySet()){
-        if (serviceIdIterator.equals(serviceId)){
-            // Check when SERVICE_ID and SERVICE_ACTIVATION_WORKFLOW are provided the specific service activation workflow
-            if (serviceActivationWorkflow != null) {
-                for (CloudAutomationWorkflow cloudAutomationWorkflow : listStartingWorkflowsByServiceId.get(serviceIdIterator)) {
-                    if (cloudAutomationWorkflow.getName().equals(startingWorkflowName) && cloudAutomationWorkflow.getBucket().equals(bucketName)) {
-                        serviceVariables = cloudAutomationWorkflow.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
-                        println("The provided SERVICE_ID and SERVICE_ACTIVATION_WORKFLOW are compatible.")
-                        break
-                    }
-                }
-                if (serviceVariables == null) {
-                    throw new IllegalArgumentException("The provided SERVICE_ID and SERVICE_ACTIVATION_WORKFLOW does not belong to the same PSA Service.")
-                }
-            } else {
-                // Get the first valid activation workflow
-                startingWorkflowName = listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getName()
-                bucketName = listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getBucket()
-                serviceVariables = listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+    List<CloudAutomationWorkflow> listStartingWorkflows = catalogRestApi.getWorkflowsByServiceIdUsingGET(sessionId, serviceId)
+    if (!listStartingWorkflows) {
+        throw new IllegalArgumentException("The provided SERVICE_ID is not valid.")
+    }
+    // Check when SERVICE_ID and SERVICE_ACTIVATION_WORKFLOW are provided the specific service activation workflow
+    if (serviceActivationWorkflow != null) {
+        for (CloudAutomationWorkflow cloudAutomationWorkflow : listStartingWorkflows) {
+            if (cloudAutomationWorkflow.getName().equals(startingWorkflowName) && cloudAutomationWorkflow.getBucket().equals(bucketName)) {
+                serviceVariables = cloudAutomationWorkflow.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+                println("The provided SERVICE_ID and SERVICE_ACTIVATION_WORKFLOW are compatible.")
                 break
             }
         }
+        if (serviceVariables == null) {
+            throw new IllegalArgumentException("The provided SERVICE_ID and SERVICE_ACTIVATION_WORKFLOW does not belong to the same PSA Service.")
+        }
+    } else {
+        // Get the first valid activation workflow
+        startingWorkflowName = listStartingWorkflows[0].getName()
+        bucketName = listStartingWorkflows[0].getBucket()
+        serviceVariables = listStartingWorkflows[0].getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
     }
 } else if (serviceActivationWorkflow != null) {
     //Identifying the starting workflow, the service ID and the default variables inside the catalog
-    def cloudAutomationWorkflow
-    Map<String, List<CloudAutomationWorkflow>> listStartingWorkflowsByServiceId = catalogRestApi.listStartingWorkflowsByServiceIdUsingGET(sessionId)
-    for(String serviceIdIterator : listStartingWorkflowsByServiceId.keySet()){
-        if (listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getBucket().equals(bucketName) && listStartingWorkflowsByServiceId.get(serviceIdIterator)[0].getName().equals(startingWorkflowName)){
-            serviceId = serviceIdIterator
-            cloudAutomationWorkflow = listStartingWorkflowsByServiceId.get(serviceIdIterator)[0]
-            serviceVariables = cloudAutomationWorkflow.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
-            println("Found Service_id : " + serviceId)
-            break
-        }
+    def cloudAutomationWorkflow = catalogRestApi.getWorkflowByCatalogObjectUsingGET(sessionId, bucketName, startingWorkflowName)
+    if (cloudAutomationWorkflow != null) {
+        serviceId = cloudAutomationWorkflow.getGenericInformation().getServiceId()
+        serviceVariables = cloudAutomationWorkflow.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+        println("Found Service_id : " + serviceId)
     }
 } else {
     throw new IllegalArgumentException("The provided SERVICE_ID or SERVICE_ACTIVATION_WORKFLOW does not belong to the existing Service Activation list. You have to specify an existing service ID or service activation workflow.")
