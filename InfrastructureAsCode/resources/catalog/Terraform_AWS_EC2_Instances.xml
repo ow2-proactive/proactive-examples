@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Terraform_AWS_EC2_Instances" projectName="Terraform"  priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
+  <variables>
+    <variable name="AWS_CREDENTIALS" value="AKIAXDWXS44FJZMSTNEW" model="PA:CREDENTIAL" description="Credentials (access key and secret) of a AWS user that will be used by terraform to deploy AWS resources. Must be added to the third-party credentials vault." group="AWS" advanced="false" hidden="false"/>
+    <variable name="AWS_AMI" value="ami-054e881150baee51a" model="PA:NOT_EMPTY_STRING" description="AWS Image for EC2 instances to be deployed" group="AWS" advanced="false" hidden="false"/>
+    <variable name="AWS_INSTANCE_TYPE" value="t2.micro" model="PA:NOT_EMPTY_STRING" description="Instance size for the EC2 instances to be deployed" group="AWS" advanced="false" hidden="false"/>
+    <variable name="AWS_INSTANCES_NUMBER" value="2" model="PA:INTEGER" description="Number of AWS EC2 instances to be deployed" group="AWS" advanced="false" hidden="false"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that uses the Terraform IaC tool to deploy AWS EC2 instances ]]>
+  </description>
+  <genericInformation>
+    <info name="documentation" value="https://www.terraform.io/"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/terraform.png"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="deploy-ec2-instances" 
+    
+    
+    
+    
+    fork="true">
+      <inputFiles>
+        <files  includes="terraform/aws/terraform.tf" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def access_key = variables.get("AWS_CREDENTIALS")
+def access_secret = credentials.get(access_key)
+
+//println(access_key)
+//println(access_secret)
+
+variables.put("AWS_ACCESS_KEY",access_key)              
+variables.put("AWS_ACCESS_SECRET",access_secret)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+workDir="/tmp/terraform-aws/$variables_PA_JOB_ID"
+mkdir -p $workDir
+cp terraform/aws/terraform.tf $workDir
+cd  $workDir
+
+terraformBaseCommand="terraform"
+docker version
+if [ $? -eq 0 ] 
+then
+ echo "The Docker container for Terraform will be used" 
+ terraformBaseCommand="docker run --rm -i -v `pwd`:/workdir hashicorp/terraform:latest -chdir=/workdir"
+else 
+ terraform -version
+ if [ $? -ne 0 ] 
+ then
+   echo "Error: Docker and Terraform are not installed."
+   exit 1
+ fi
+fi
+
+echo "aws_access_key_id     = \"$variables_AWS_ACCESS_KEY\"" > $workDir/terraform.tfvars
+echo "aws_secret_access_key = \"$variables_AWS_ACCESS_SECRET\"" >> $workDir/terraform.tfvars
+echo "aws_private_key  = \"activeeon_tf_aws_private_key_$variables_PA_JOB_ID\"" >> $workDir/terraform.tfvars
+echo "aws_keypair_name = \"activeeon_tf_aws_keypair_$variables_PA_JOB_ID\"" >> $workDir/terraform.tfvars
+echo "aws_instances_count = \"$variables_AWS_INSTANCES_NUMBER\"" >> $workDir/terraform.tfvars
+echo "aws_ami = \"$variables_AWS_AMI\"" >> $workDir/terraform.tfvars
+echo "aws_instance_type = \"$variables_AWS_INSTANCE_TYPE\"" >> $workDir/terraform.tfvars
+
+echo "======= terraform.tf ========="
+cat terraform.tf
+
+echo "======= terraform.tfvars ========="
+cat terraform.tfvars
+
+$terraformBaseCommand init
+$terraformBaseCommand fmt
+$terraformBaseCommand validate
+$terraformBaseCommand plan -out "aws_tf_plan_$variables_PA_JOB_ID"
+$terraformBaseCommand apply "aws_tf_plan_$variables_PA_JOB_ID"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import com.google.common.net.MediaType
+
+def jobID=variables.get("PA_JOB_ID")
+def token="activeeon_tf_aws_${jobID}"
+
+rmapi.connect()
+rmapi.addNodeToken(variables.get("PA_NODE_URL"),token)
+variables.put("NODE_TOKEN",token)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            250.3125
+        </positionTop>
+        <positionLeft>
+            601.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="undeploy_ec2_instances" 
+    
+    
+    
+    
+    fork="true">
+      <genericInformation>
+        <info name="NODE_ACCESS_TOKEN" value="${NODE_TOKEN}"/>
+      </genericInformation>
+      <depends>
+        <task ref="wait_for_action"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+workDir="/tmp/terraform-aws/$variables_PA_JOB_ID"
+cd  $workDir
+
+terraformBaseCommand="terraform"
+docker version
+if [ $? -eq 0 ] 
+then
+ echo "The Docker container for Terraform will be used" 
+ terraformBaseCommand="docker run --rm -i -v `pwd`:/workdir hashicorp/terraform:latest -chdir=/workdir"
+else 
+ terraform -version
+ if [ $? -ne 0 ] 
+ then
+   echo "Error: Docker and Terraform are not installed."
+   exit 1
+ fi
+fi
+
+$terraformBaseCommand destroy --auto-approve
+
+rm -rf $workDir/*
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+rmapi.connect()
+rmapi.removeNodeToken(variables.get("PA_NODE_URL"), variables.get("NODE_TOKEN"))
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            632.3125
+        </positionTop>
+        <positionLeft>
+            601.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="wait_for_action" 
+    
+    
+    
+    
+    fork="true">
+      <depends>
+        <task ref="download_private_key"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+signal = "Undeploy_EC2_Instances"
+signalapi.readyForSignal(signal)
+println("Waiting for signal reception ... ")
+receivedSignal = signalapi.waitFor(signal)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            504.3125
+        </positionTop>
+        <positionLeft>
+            601.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="download_private_key" 
+    
+    
+    
+    preciousResult="true" 
+    fork="true">
+      <genericInformation>
+        <info name="NODE_ACCESS_TOKEN" value="${NODE_TOKEN}"/>
+      </genericInformation>
+      <depends>
+        <task ref="deploy-ec2-instances"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.io.FileType
+
+def jobID=variables.get("PA_JOB_ID")
+def workDir="/tmp/terraform-aws/${jobID}"
+
+schedulerapi.connect()
+schedulerapi.addExternalEndpointUrl(jobID, "AWS EC2", "https://aws.amazon.com/ec2/?nc2=h_ql_prod_cp_ec2" , "/automation-dashboard/styles/patterns/img/wf-icons/amazon.png")
+
+fileName="activeeon_tf_aws_private_key_${jobID}"
+file = new File("${workDir}/artefacts/${fileName}")
+result = file.getBytes()
+resultMetadata.put("file.name", fileName.toString())
+
+numberOfInstances=variables.get("AWS_INSTANCES_NUMBER")
+def artefactsDir = new File(workDir+"/artefacts")
+artefactsDir.eachFileRecurse (FileType.FILES) { file ->
+  println(file.name)
+    if (file.name.startsWith("aws_instance_dns_")){
+        println(file.name +" - "+ file.getText())
+        resultMap.put(file.name,file.getText())
+    }
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            377.3125
+        </positionTop>
+        <positionLeft>
+            601.75
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2736px;
+            height:3260px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-245.3125px;left:-596.75px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1" style="top: 250.328px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">deploy-ec2-instances</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4" style="top: 632.328px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">undeploy_ec2_instances</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_7" style="top: 504.328px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">wait_for_action</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_10" style="top: 377.328px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">download_private_key</span></a></div><svg style="position:absolute;left:642.5px;top:543.5px" width="42.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 21.5 88 C 31.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.494896,66.303232 L23.16866373995708,45.12432652703957 L18.292495623246907,52.94883830079128 L9.814270040748365,49.32672690379266 L22.494896,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.494896,66.303232 L23.16866373995708,45.12432652703957 L18.292495623246907,52.94883830079128 L9.814270040748365,49.32672690379266 L22.494896,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:642.5px;top:416.5px" width="37" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 87 C -10 37 26 50 16 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,65.388768 L10.101479518328606,47.63465316157902 L1.8727569598368665,51.79255227716241 L-3.494736204508987,44.29655220174215 L-1.4653440000000006,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,65.388768 L10.101479518328606,47.63465316157902 L1.8727569598368665,51.79255227716241 L-3.494736204508987,44.29655220174215 L-1.4653440000000006,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:656px;top:289.5px" width="23.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 2.5 87 C 12.5 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.112421874999999,65.86284375000001 L10.868076105431243,45.469892899774365 L4.250671320876691,51.88939084878521 L-3.1053767957835525,46.33164345389767 L5.112421874999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.112421874999999,65.86284375000001 L10.868076105431243,45.469892899774365 L4.250671320876691,51.88939084878521 L-3.1053767957835525,46.33164345389767 L5.112421874999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 656.5px; top: 280px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 664.5px; top: 662px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 664.5px; top: 622px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 643px; top: 534px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 643px; top: 494px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 659px; top: 407px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 659px; top: 367px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
