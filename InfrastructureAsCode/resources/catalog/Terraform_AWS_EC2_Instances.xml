@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Terraform_AWS_EC2_Instances" projectName="Terraform" tags="Infrastructure as Code,IaC,Terraform,AWS" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
+  xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Terraform_AWS_EC2_Instances" projectName="Terraform workflows" tags="Infrastructure as Code,IaC,Terraform,AWS" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
   <variables>
     <variable name="AWS_ACCESS_KEY" value="my_aws_access_key" model="PA:NOT_EMPTY_STRING" description="AWS access key used by Terraform to connect to AWS EC2 services." group="AWS" advanced="false" hidden="false"/>
     <variable name="AWS_SECRET_KEY" value="$AWS_ACCESS_KEY" model="PA:CREDENTIAL" description="AWS secret key used by Terraform to connect to AWS EC2 services. Must be added to the third-party credentials vault." group="AWS" advanced="false" hidden="false"/>
@@ -10,11 +10,13 @@
     <variable name="AWS_INSTANCES_NUMBER" value="2" model="PA:INTEGER" description="Number of AWS EC2 instances to be deployed" group="AWS" advanced="false" hidden="false"/>
   </variables>
   <description>
-    <![CDATA[ A workflow that uses the Terraform IaC tool to deploy AWS EC2 instances. The workflow requires Docker or Terraform to be installed in the underlying host (where it will be executed). The workflow deploys a number of AWS EC2 instances given as input, then waits for an action from the user to remove the deployed instances. ]]>
+    <![CDATA[ A workflow that uses the Terraform IaC tool to deploy AWS EC2 instances. The workflow requires Docker or Terraform to be installed in the underlying host (where it will be executed). The workflow takes as input the Terraform file 'terraform_aws_ec2_instances.tf' stored in the bucket 'it-infrastructure-as-code'. The workflow deploys a number of AWS EC2 instances given as input, then waits for an action from the user to remove the deployed instances. ]]>
   </description>
   <genericInformation>
-    <info name="documentation" value="https://www.terraform.io/"/>
+    <info name="bucketName" value="it-infrastructure-as-code"/>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/terraform.png"/>
+    <info name="documentation" value="https://www.terraform.io/"/>
+    <info name="group" value="public-objects"/>
   </genericInformation>
   <taskFlow>
     <task name="deploy-ec2-instances" 
@@ -26,14 +28,68 @@
       <description>
         <![CDATA[ A bash task that prepares Terraform setup and files for the deployment of AWS EC2 instances, then executes Terraform commands to perform the deployment. ]]>
       </description>
+      <genericInformation>
+        <info name="PRE_SCRIPT_AS_FILE" value="terraform_aws_ec2_instances.tf"/>
+      </genericInformation>
+      <depends>
+        <task ref="read_aws_access_credentials"/>
+      </depends>
       <inputFiles>
         <files  includes="terraform/aws/terraform.tf" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
       <pre>
         <script>
-          <code language="groovy">
+          <code language="bash">
             <![CDATA[
-variables.put("AWS_ACCESS_SECRET",credentials.get(variables.get("AWS_ACCESS_KEY")))
+# Configure the AWS Provider
+provider "aws" {
+  region     = "eu-west-3"
+  access_key = var.aws_access_key_id
+  secret_key = var.aws_secret_access_key
+}
+
+variable "aws_access_key_id" {}
+variable "aws_secret_access_key" {}
+variable "aws_private_key" {}
+variable "aws_keypair_name" {}
+variable "aws_instances_count" {}
+variable "aws_ami" {}
+variable "aws_instance_type" {}
+
+
+resource "tls_private_key" "activeeon_private_key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "activeeon_keypair" {
+  key_name   = var.aws_keypair_name
+  public_key = tls_private_key.activeeon_private_key.public_key_openssh
+}
+
+resource "aws_instance" "activeeon_aws_ec2_instances" {
+  count         = var.aws_instances_count
+  ami           = var.aws_ami
+  instance_type = var.aws_instance_type
+  key_name      = aws_key_pair.activeeon_keypair.key_name
+}
+
+resource "local_file" "private_key" {
+  filename        = "${path.module}/artefacts/${var.aws_private_key}"
+  content         = tls_private_key.activeeon_private_key.private_key_pem
+  file_permission = "0777"
+}
+
+resource "local_file" "activeeon_aws_ec2_instance_dns" {
+  count           = var.aws_instances_count
+  filename        = "${path.module}/artefacts/aws_instance_dns_${count.index}"
+  file_permission = "0777"
+  content         = <<EOF
+${aws_instance.activeeon_aws_ec2_instances[count.index].public_dns}
+  EOF
+}
+
+
 ]]>
           </code>
         </script>
@@ -44,7 +100,7 @@ variables.put("AWS_ACCESS_SECRET",credentials.get(variables.get("AWS_ACCESS_KEY"
             <![CDATA[
 workDir="/tmp/terraform-aws/$variables_PA_JOB_ID"
 mkdir -p $workDir
-cp terraform/aws/terraform.tf $workDir
+cp terraform_aws_ec2_instances.tf $workDir
 cd  $workDir
 
 terraformBaseCommand="terraform"
@@ -97,10 +153,10 @@ variables.put("NODE_TOKEN",token)
       </post>
       <metadata>
         <positionTop>
-            280.265625
+            310.328125
         </positionTop>
         <positionLeft>
-            601.75
+            569
         </positionLeft>
       </metadata>
     </task>
@@ -152,18 +208,26 @@ rm -rf $workDir/*
         <script>
           <code language="groovy">
             <![CDATA[
+//Remove the token added to ProActive node
 rmapi.connect()
 rmapi.removeNodeToken(variables.get("PA_NODE_URL"), variables.get("NODE_TOKEN"))
+
+//Remove External Endpoint Url
+schedulerapi.connect()
+schedulerapi.removeExternalEndpointUrl(variables.get("PA_JOB_ID"), "AWS EC2")
+
+
+
 ]]>
           </code>
         </script>
       </post>
       <metadata>
         <positionTop>
-            663.265625
+            695.328125
         </positionTop>
         <positionLeft>
-            601.75
+            570
         </positionLeft>
       </metadata>
     </task>
@@ -193,10 +257,10 @@ receivedSignal = signalapi.waitFor(signal)
       </scriptExecutable>
       <metadata>
         <positionTop>
-            536.265625
+            568.328125
         </positionTop>
         <positionLeft>
-            601.75
+            569
         </positionLeft>
       </metadata>
     </task>
@@ -247,10 +311,37 @@ artefactsDir.eachFileRecurse (FileType.FILES) { file ->
       </scriptExecutable>
       <metadata>
         <positionTop>
-            408.265625
+            440.328125
         </positionTop>
         <positionLeft>
-            601.75
+            569
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="read_aws_access_credentials" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A groovy task that reads the AWS access credentials from the ProActive buit-in vault (called 3rd Party Credentials) ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("AWS_ACCESS_SECRET",credentials.get(variables.get("AWS_ACCESS_KEY")))
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            185.328125
+        </positionTop>
+        <positionLeft>
+            569
         </positionLeft>
       </metadata>
     </task>
@@ -265,12 +356,12 @@ artefactsDir.eachFileRecurse (FileType.FILES) { file ->
             left:0 !important;
             top:0 !important;
             width:2736px;
-            height:3504px;
+            height:3260px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-275.265625px;left:-596.75px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1" style="top: 280.281px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that prepares Terraform setup and files for the deployment of AWS EC2 instances, then executes Terraform commands to perform the deployment."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">deploy-ec2-instances</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4" style="top: 663.281px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that executes Terraform commands to remove the deployed AWS EC2 instances."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">undeploy_ec2_instances</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_7" style="top: 536.281px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that waits for a user action to trigger the removal of the deployed AWS EC2 instances"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">wait_for_action</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_10" style="top: 408.281px; left: 601.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that: (i) displays the public DNS of each of the deployed AWS EC2 instances, and (ii) allows to download the SSH private key needed for accessing these instances"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">download_private_key</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><svg style="position:absolute;left:645px;top:575.5px" width="42.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 21.5 87 C 31.5 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.494896,65.388768 L23.08786802732072,44.207446412931475 L18.241583421196182,52.050502291633364 L9.749602318954086,48.46075899173529 L22.494896,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.494896,65.388768 L23.08786802732072,44.207446412931475 L18.241583421196182,52.050502291633364 L9.749602318954086,48.46075899173529 L22.494896,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:645px;top:447.5px" width="37.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 26.5 50 16.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4225760000000007,66.303232 L10.200238136178823,48.58572112640825 L1.9584304421338072,52.71762213373894 L-3.385371730082231,45.20471468427444 L-1.4225760000000007,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4225760000000007,66.303232 L10.200238136178823,48.58572112640825 L1.9584304421338072,52.71762213373894 L-3.385371730082231,45.20471468427444 L-1.4225760000000007,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:659px;top:319.5px" width="23.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 2.5 88 C 12.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.112421874999999,66.78168750000002 L10.884335710384326,46.39333271897615 L4.261814091853611,52.80755187738454 L-3.0897999122311486,47.243940502122534 L5.112421874999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.112421874999999,66.78168750000002 L10.884335710384326,46.39333271897615 L4.261814091853611,52.80755187738454 L-3.0897999122311486,47.243940502122534 L5.112421874999999,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 659.5px; top: 310px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 693px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667px; top: 653px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 645.5px; top: 566px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 645.5px; top: 526px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 662px; top: 438px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 662px; top: 398px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-180.328125px;left:-564px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_73" style="top: 310.344px; left: 569px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that prepares Terraform setup and files for the deployment of AWS EC2 instances, then executes Terraform commands to perform the deployment."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">deploy-ec2-instances</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_76" style="top: 695.328px; left: 570px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that executes Terraform commands to remove the deployed AWS EC2 instances."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">undeploy_ec2_instances</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_79" style="top: 568.344px; left: 569px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that waits for a user action to trigger the removal of the deployed AWS EC2 instances"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">wait_for_action</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_82" style="top: 440.344px; left: 569px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that: (i) displays the public DNS of each of the deployed AWS EC2 instances, and (ii) allows to download the SSH private key needed for accessing these instances"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">download_private_key</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_85" style="top: 185.344px; left: 569px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that reads the AWS access credentials from the ProActive buit-in vault (called 3rd Party Credentials)"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">read_aws_access_credentials</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><svg style="position:absolute;left:626px;top:224.5px" width="40.5" height="86" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 85 C -10 35 29.5 50 19.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.232765625000001,64.02515625000001 L11.10699569861097,46.799295154649364 L2.702643691852356,50.58966022235623 L-2.3285003290328072,42.86388583779701 L-1.232765625000001,64.02515625000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.232765625000001,64.02515625000001 L11.10699569861097,46.799295154649364 L2.702643691852356,50.58966022235623 L-2.3285003290328072,42.86388583779701 L-1.232765625000001,64.02515625000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:612.5px;top:607.5px" width="43" height="88.328125" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 22 87.328125 C 32 37.328125 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.952128,65.6888265 L23.444295038594134,44.50492290302049 L18.635389065261393,52.37095260927286 L10.126421147866987,48.8216618377591 L22.952128,65.6888265" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.952128,65.6888265 L23.444295038594134,44.50492290302049 L18.635389065261393,52.37095260927286 L10.126421147866987,48.8216618377591 L22.952128,65.6888265" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:612.5px;top:479.5px" width="37" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 26 50 16 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,66.303232 L10.047269700939381,48.51391706735172 L1.8312684117227083,52.69689720304326 L-3.559065096017358,45.217304655629015 L-1.4653440000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,66.303232 L10.047269700939381,48.51391706735172 L1.8312684117227083,52.69689720304326 L-3.559065096017358,45.217304655629015 L-1.4653440000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:626px;top:349.5px" width="23.5" height="91" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 2.5 90 C 12.5 40 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.12008,68.13216 L10.850253078902849,47.7320345963213 L4.240873257310212,54.159794577366334 L-3.122112343730814,48.61124133901109 L5.12008,68.13216" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.12008,68.13216 L10.850253078902849,47.7320345963213 L4.240873257310212,54.159794577366334 L-3.122112343730814,48.61124133901109 L5.12008,68.13216" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 626.5px; top: 340px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 626.5px; top: 300px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 635px; top: 725.328px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 635px; top: 685.328px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 613px; top: 598px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 613px; top: 558px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 629px; top: 470px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 629px; top: 430px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 646px; top: 215px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
