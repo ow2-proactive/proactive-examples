@@ -4,6 +4,7 @@ import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
 import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
 import org.ow2.proactive.pca.service.client.model.ServiceDescription
 import java.util.concurrent.TimeoutException
+import com.google.common.base.Strings
 
 println("BEGIN " + variables.get("PA_TASK_NAME"))
 
@@ -29,26 +30,41 @@ if (!instanceId && !instanceName){
 
 println("INSTANCE_ID: " + instanceId)
 
-def action = variables.get("ACTION")
-if (action.isEmpty()) {
-    throw new IllegalArgumentException("You have to provide an ACTION value. Empty value is not allowed.");
-}
-
 def bucketName
 def isActionExists = false
 def catalogRestApi = new CatalogRestApi(apiClient)
 def actionVariables = new HashMap()
 
-List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceIdUsingGET(sessionId, instanceId.toString()).get(instanceId.toString())
-for (CloudAutomationWorkflow actionIterator : listExecutableActions) {
-    if (actionIterator.getName().equals(action)){
-        bucketName = actionIterator.getBucket()
-        //retrieve default action variables
-        actionVariables = actionIterator.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+def action = variables.get("ACTION")
+def serviceActionWorkflow = variables.get("SERVICE_ACTION_WORKFLOW")
+
+if (Strings.isNullOrEmpty(action) && Strings.isNullOrEmpty(serviceActionWorkflow)) {
+    throw new IllegalArgumentException("You have to provide an ACTION value or a SERVICE_ACTION_WORKFLOW. Empty value is not allowed.");
+}
+
+if (!Strings.isNullOrEmpty(action)) {
+    List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceIdUsingGET(sessionId, instanceId.toString()).get(instanceId.toString())
+    for (CloudAutomationWorkflow actionIterator : listExecutableActions) {
+        if (actionIterator.getName().equals(action)){
+            bucketName = actionIterator.getBucket()
+            //retrieve default action variables
+            actionVariables = actionIterator.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+            isActionExists = true
+            break
+        }
+    }
+} else if (!Strings.isNullOrEmpty(serviceActionWorkflow)) {
+    def serviceActionWorkflowSplits = serviceActionWorkflow.split('/')
+    bucketName = serviceActionWorkflowSplits[0]
+    action = serviceActionWorkflowSplits[1]
+    CloudAutomationWorkflow executableAction = catalogRestApi.getExecutableActionByCatalogObjectUsingGET(sessionId, instanceId, bucketName, action)
+    println("Action Bucket_name: " + bucketName + ", Action_workflow_name: " + action)
+    if (executableAction != null) {
+        actionVariables = executableAction.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
         isActionExists = true
-        break
     }
 }
+
 if(!isActionExists){
     throw new IllegalArgumentException("The provided ACTION: " + action + " does not belong to the existing possible actions that can be applied to the current state of the service. You have to specify a valid action.")
 }
