@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Mark_To_Future_Cube_Stats" onTaskError="continueJobExecution" priority="normal" tags="QuantLib,Cpp,Finance,Pricing,Bale,Risk,Solvency,Black-Scholes" projectName="Risk Valuation Workflows" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
   <variables>
-    <variable description="The start date of the evalution." model="PA:DATETIME(dd/mm/yyyy)" name="evaluation_date_start" value="01/12/2018"/>
-    <variable description="The end date of the evalution." model="PA:DATETIME(dd/mm/yyyy)" name="evaluation_date_end" value="20/12/2021"/>
-    <variable description="The time discretization." model="PA:LIST(monthly,biweekly)" name="evaluation_frequency" value="biweekly"/>
-    <variable description="The start of the shocked yield range." name="shocked_yield_start" value="0"/>
-    <variable description="The end of the shocked yield range." name="shocked_yield_end" value="0.1"/>
-    <variable description="The yield step of the shocked yield range." name="shocked_yield_delta" value="0.005"/>
-    <variable description="The relative path from the dataspace of the bond params file following the tsv format." name="bonds_params_file_path_from_dataspace" value="bonds.txt"/>
-    <variable description="Exclusive usage or not of the targeted node sources." model="PA:Boolean" name="node_source_compute_memory_intensive_exclusive" value="False"/>
-    <variable description="Name of the targeted node source dedicated to compute intensive tasks." name="node_source_compute_intensive" value=""/>
-    <variable description="Name of the targeted node source dedicated to memory intensive tasks." name="node_source_memory_intensive" value=""/>
-    <variable description="The path of the output files." name="data_dir_path" value="/tmp"/>
-    <variable description="The number of ProActive replicated tasks, each having in charge a cubelet, i.e. a subset of the senarios." name="nb_replicated_tasks" value="2"/>
-    <variable description="The number of ProActive replicated tasks, each having in charge a cubelet, i.e. a subset of the instruments." name="nb_replicated_tasks_per_cubelet" value="2"/>
-  </variables>
+    <variable description="The start date of the evalution." model="PA:DATETIME(dd/mm/yyyy)" name="evaluation_date_start" group="Simulation" value="01/12/2018"/>
+    <variable description="The end date of the evalution." model="PA:DATETIME(dd/mm/yyyy)" name="evaluation_date_end" group="Simulation" value="20/12/2021"/>
+    <variable description="The time discretization." model="PA:LIST(monthly,biweekly)" name="evaluation_frequency" group="Simulation" value="biweekly"/>
+    <variable description="The start of the shocked yield range." name="shocked_yield_start" group="Simulation" value="0"/>
+    <variable description="The end of the shocked yield range." name="shocked_yield_end" group="Simulation" value="0.1"/>
+    <variable description="The yield step of the shocked yield range." name="shocked_yield_delta" group="Simulation" value="0.005"/>
+    <variable description="The relative path from the dataspace of the bond params file following the tsv format." name="bonds_params_file_path_from_dataspace" group="Simulation" value="bonds.txt"/>
+    <variable description="The number of ProActive replicated tasks, each having in charge a cubelet, i.e. a subset of the senarios." name="nb_replicated_tasks" group="Parallelization" value="2"/>
+    <variable description="The number of ProActive replicated tasks, each having in charge a cubelet, i.e. a subset of the instruments." name="nb_replicated_tasks_per_cubelet" group="Parallelization" value="2"/>
+    <variable description="Exclusive usage or not of the targeted node sources." model="PA:Boolean" name="node_source_compute_memory_intensive_exclusive" group="Hardware Resources" value="False"/>
+    <variable description="Name of the targeted node source dedicated to compute intensive tasks." name="node_source_compute_intensive" group="Hardware Resources" value=""/>
+    <variable description="Name of the targeted node source dedicated to memory intensive tasks." name="node_source_memory_intensive" group="Hardware Resources" value=""/>
+    <variable description="The path of the output files." name="data_dir_path" group="Others" value="/tmp"/>
+   </variables>
   <description>
     <![CDATA[ Estimates a Mark-to-Future cube for bond portfolios. The pricing engine relies on the C++ Quantlib library. ]]>
   </description>
@@ -56,6 +56,7 @@ else {
 println "split ..."
 
 // Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
 def shocked_yield_start = variables.get("shocked_yield_start") as double
 def shocked_yield_end = variables.get("shocked_yield_end") as double
 def shocked_yield_delta = variables.get("shocked_yield_delta") as double
@@ -118,14 +119,14 @@ def header = list_lines.remove(0)
 def bonds_params_file_name = bonds_params_file.name
 variables.put("bonds_params_file_name", bonds_params_file_name)
 (0..nb_replicated_tasks_per_cubelet-1).each {
-    new File(localspace, it + "_" + bonds_params_file_name).text = header
+    new File(localspace, "job_" + job_id + "_task_" + it + "_" + bonds_params_file_name).text = header
 }
 
 // Now fill each bonds file
 task_id_tmp = 0
 list_lines.each { String line ->
 
-    new File(localspace, task_id_tmp + "_" + bonds_params_file_name).append(System.getProperty("line.separator") + line)
+    new File(localspace, "job_" + job_id + "_task_" + task_id_tmp + "_" + bonds_params_file_name).append(System.getProperty("line.separator") + line)
     task_id_tmp = (task_id_tmp + 1) % nb_replicated_tasks_per_cubelet
 }
 
@@ -146,7 +147,7 @@ runs=variables.get("nb_replicated_tasks")
         </replicate>
       </controlFlow>
       <outputFiles>
-        <files accessMode="transferToGlobalSpace" includes="*_${bonds_params_file_name}"/>
+        <files accessMode="transferToGlobalSpace" includes="job_${PA_JOB_ID}_task_*_${bonds_params_file_name}"/>
       </outputFiles>
       <metadata>
         <positionTop>
@@ -261,9 +262,6 @@ println "... simulate_MtF_cubelet"
       <depends>
         <task ref="simulate_MtF_cubelet"/>
       </depends>
-      <inputFiles>
-        <files accessMode="transferFromGlobalSpace" includes="MtF-cubelet_${PA_TASK_REPLICATION}.csv"/>
-      </inputFiles>
       <selection>
         <script type="dynamic">
           <code language="groovy">
@@ -291,11 +289,12 @@ if (variables.get("node_source_memory_intensive") == null || variables.get("node
 print("stats_cubelet ...")
 
 # Retrieve variables
+job_id <- variables["PA_JOB_ID"]
 task_id <- variables["PA_TASK_REPLICATION"]
 data_dir_path <- variables["data_dir_path"]
 
 # Read the cubelet csv file
-MtF_cubelet_file_path <- file.path("/tmp/data", paste("MtF-cubelet_submitter_task_id_", task_id, ".csv", sep=''))
+MtF_cubelet_file_path <- file.path(data_dir_path, paste("MtF-cubelet_parentjob_", job_id, "_submitter_task_id_", task_id, ".csv", sep=''))
 MtF_cubelet <- read.table(file=MtF_cubelet_file_path, header=TRUE, sep="\t")
 
 # Compute the portfolios clean prices
@@ -305,7 +304,7 @@ names(MtF_cubelet_stats) <- c("evaluationDate", "shockedYield", "portfolioCleanP
 print(MtF_cubelet_stats)
 
 # Save the results
-MtF_cubelet_stats_file_path <- file.path(localspace, paste("MtF_cubelet_stats_", task_id, ".csv", sep=''))
+MtF_cubelet_stats_file_path <- file.path(localspace, paste("MtF_cubelet_stats_job_", job_id, "_task_", task_id, ".csv", sep=''))
 write.table(MtF_cubelet_stats, file = MtF_cubelet_stats_file_path, row.names=FALSE, sep="\t", append = FALSE)
 
 print("... stats_cubelet")
@@ -315,7 +314,7 @@ print("... stats_cubelet")
       </scriptExecutable>
       <controlFlow block="end"/>
       <outputFiles>
-        <files accessMode="transferToGlobalSpace" includes="MtF_cubelet_stats_${PA_TASK_REPLICATION}.csv"/>
+        <files accessMode="transferToGlobalSpace" includes="MtF_cubelet_stats_job_${PA_JOB_ID}_task_${PA_TASK_REPLICATION}.csv"/>
       </outputFiles>
       <metadata>
         <positionTop>
@@ -335,7 +334,7 @@ print("... stats_cubelet")
         <task ref="stats_cubelet"/>
       </depends>
       <inputFiles>
-        <files accessMode="transferFromGlobalSpace" includes="MtF_cubelet_stats_*.csv"/>
+        <files accessMode="transferFromGlobalSpace" includes="MtF_cubelet_stats_job_${PA_JOB_ID}_task_*.csv"/>
       </inputFiles>
       <selection>
         <script type="dynamic">
@@ -372,11 +371,12 @@ library("corrplot")
 print("stats_cube ...")
 
 # Retrieve variables
+job_id <- variables["PA_JOB_ID"]
 nb_replicated_tasks <- as.integer(variables["nb_replicated_tasks"])
 
 # Gather the first cubelet stats and write it to the csv cube file
-MtF_cubelet_stats <- read.table(file=file.path(localspace, "MtF_cubelet_stats_0.csv"), header=TRUE, sep="\t")
-MtF_cube_stats_file_path <- file.path(localspace, "MtF_cube_stats.csv")
+MtF_cubelet_stats <- read.table(file=file.path(localspace, paste("MtF_cubelet_stats_job_", job_id, "_task_0.csv", sep='')), header=TRUE, sep="\t")
+MtF_cube_stats_file_path <- file.path(localspace, paste("MtF_cube_stats_job_", job_id, ".csv", sep=''))
 write.table(MtF_cubelet_stats, file = MtF_cube_stats_file_path, row.names=FALSE, sep="\t", append = FALSE)
 
 # Merge with the other cubelets stats
@@ -384,7 +384,7 @@ i <- 1
 while (i < nb_replicated_tasks) {
 
     # Read the current csv cubelet file
-    MtF_cubelet_stats_file_path <- file.path(localspace, paste("MtF_cubelet_stats_", i, ".csv", sep=''))
+    MtF_cubelet_stats_file_path <- file.path(localspace, paste("MtF_cubelet_stats_job_", job_id, "_task_", i, ".csv", sep=''))
     MtF_cubelet_stats <- read.table(file=MtF_cubelet_stats_file_path, header=TRUE, sep="\t")
 
     # Append it to the csv cube file
@@ -411,7 +411,7 @@ print(ptf_values_time_series)
 print("===============")
 
 # Save the results
-ptf_values_time_series_file_path <- file.path(localspace, "ptf_values_time_series.csv")
+ptf_values_time_series_file_path <- file.path(localspace, paste("ptf_values_time_series_job_", job_id, ".csv", sep=''))
 write.table(ptf_values_time_series, file = ptf_values_time_series_file_path, row.names=FALSE, sep="\t", append = FALSE)
 
 # Compute correlations
@@ -422,11 +422,11 @@ print(ptf_values_time_series_corr)
 print("===============")
 
 # Save the results
-ptf_values_time_series_corr_file_path <- file.path(localspace, "ptf_values_time_series_corr.csv")
+ptf_values_time_series_corr_file_path <- file.path(localspace, paste("ptf_values_time_series_corr_job_", job_id, ".csv", sep=''))
 write.table(ptf_values_time_series_corr, file = ptf_values_time_series_corr_file_path, row.names=FALSE, sep="\t", append = FALSE)
 
 # Plot and Save as png
-ptf_values_time_series_corr_png_file_path <- file.path(localspace, "ptf_values_time_series_corr.png")
+ptf_values_time_series_corr_png_file_path <- file.path(localspace, paste("ptf_values_time_series_corr_job_", job_id, ".png", sep=''))
 png(height=1200, width=1200, file=ptf_values_time_series_corr_png_file_path)
 corrplot(ptf_values_time_series_corr, type="upper", order="hclust", tl.col="black", tl.srt=45, is.corr = FALSE)
 dev.off()
@@ -437,10 +437,10 @@ print("... stats_cube")
         </script>
       </scriptExecutable>
       <outputFiles>
-        <files accessMode="transferToGlobalSpace" includes="MtF_cube_stats.csv"/>
-        <files accessMode="transferToGlobalSpace" includes="ptf_values_time_series.csv"/>
-        <files accessMode="transferToGlobalSpace" includes="ptf_values_time_series_corr.csv"/>
-        <files accessMode="transferToGlobalSpace" includes="ptf_values_time_series_corr.png"/>
+        <files accessMode="transferToGlobalSpace" includes="MtF_cube_stats_job_${PA_JOB_ID}.csv"/>
+        <files accessMode="transferToGlobalSpace" includes="ptf_values_time_series_job_${PA_JOB_ID}.csv"/>
+        <files accessMode="transferToGlobalSpace" includes="ptf_values_time_series_corr_job_${PA_JOB_ID}.csv"/>
+        <files accessMode="transferToGlobalSpace" includes="ptf_values_time_series_corr_job_${PA_JOB_ID}.png"/>
       </outputFiles>
       <metadata>
         <positionTop>
@@ -451,14 +451,16 @@ print("... stats_cube")
         </positionLeft>
       </metadata>
     </task>
-    <task name="expose_csv_zip">
+    <task name="expose_csv_zip"
+          preciousResult="true"
+          fork="true">
       <depends>
         <task ref="stats_cube"/>
       </depends>
       <inputFiles>
-        <files accessMode="transferFromGlobalSpace" includes="MtF_cube_stats.csv"/>
-        <files accessMode="transferFromGlobalSpace" includes="ptf_values_time_series.csv"/>
-        <files accessMode="transferFromGlobalSpace" includes="ptf_values_time_series_corr.csv"/>
+        <files accessMode="transferFromGlobalSpace" includes="MtF_cube_stats_job_${PA_JOB_ID}.csv"/>
+        <files accessMode="transferFromGlobalSpace" includes="ptf_values_time_series_job_${PA_JOB_ID}.csv"/>
+        <files accessMode="transferFromGlobalSpace" includes="ptf_values_time_series_corr_job_${PA_JOB_ID}.csv"/>
       </inputFiles>
       <scriptExecutable>
         <script>
@@ -491,10 +493,13 @@ void create_archive (files_list, archive_file) {
 
 // M A I N ///////////////////////////////////////
 
+// Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
+
 // List the files to zip
-def MtF_cube_stats_file = new File(localspace, "MtF_cube_stats.csv")
-def ptf_values_time_series_file = new File(localspace, "ptf_values_time_series.csv")
-def ptf_values_time_series_corr_file = new File(localspace, "ptf_values_time_series_corr.csv")
+def MtF_cube_stats_file = new File(localspace, "MtF_cube_stats_job_" + job_id + ".csv")
+def ptf_values_time_series_file = new File(localspace, "ptf_values_time_series_job_" + job_id + ".csv")
+def ptf_values_time_series_corr_file = new File(localspace, "ptf_values_time_series_corr_job_" + job_id + ".csv")
 def files_list = [MtF_cube_stats_file, ptf_values_time_series_file, ptf_values_time_series_corr_file]
 
 // Create the zip
@@ -520,12 +525,14 @@ println "... expose_csv_zip"
         </positionLeft>
       </metadata>
     </task>
-    <task name="expose_png_correl">
+    <task name="expose_png_correl"
+          preciousResult="true"
+          fork="true">
       <depends>
         <task ref="stats_cube"/>
       </depends>
       <inputFiles>
-        <files accessMode="transferFromGlobalSpace" includes="ptf_values_time_series_corr.png"/>
+        <files accessMode="transferFromGlobalSpace" includes="ptf_values_time_series_corr_job_${PA_JOB_ID}.png"/>
       </inputFiles>
       <scriptExecutable>
         <script>
@@ -533,8 +540,11 @@ println "... expose_csv_zip"
             <![CDATA[
 println "expose_png_correl ..."
 
+// Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
+
 // Expose the png file
-def ptf_values_time_series_corr_png_file = new File(localspace, "ptf_values_time_series_corr.png")
+def ptf_values_time_series_corr_png_file = new File(localspace, "ptf_values_time_series_corr_job_" + job_id + ".png")
 result = ptf_values_time_series_corr_png_file.getBytes()
 resultMetadata.put("file.name", ptf_values_time_series_corr_png_file.name)
 resultMetadata.put("content.type", "image/png")

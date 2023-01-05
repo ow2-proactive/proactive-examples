@@ -3,15 +3,15 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Stress_Testing_Monte_Carlo_Value_Portfolio" tags="QuantLib,Cpp,Finance,Pricing,Bale,Risk,Solvency,Black-Scholes" projectName="Risk Valuation Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <variables>
-    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean" description="If true, the workflow tasks will be executed inside a docker container"/>
-    <variable name="nb_MC_per_ptf_value" value="1000" description="The number of Monte Carlo simulations per portfolio estimation."/>
-    <variable name="nb_time_steps" value="255" description="The number of time steps to the horizon."/>
-    <variable name="stress_horizon" value="1" description="The stress horizon in year fraction."/>
-    <variable name="assets_params_file_path_from_dataspace" value="assets.txt" description="The relative path from the dataspace of the asset params file following the csv format."/>
-    <variable name="assets_correlations_file_path_from_dataspace" value="assets_correlations.txt" description="The relative path from the dataspace of the asset correlations file."/>
-    <variable name="stressed_risk_free_rate_min_max_in_percent_and_steps" value="-10%,+10%,8" description="The min, max, step of the stressed risk free rate range."/>
-    <variable name="stressed_volatility_min_max_in_percent_and_steps" value="-5%,+5%,8" description="The min, max, step of the stressed volatility rate range."/>
-    <variable name="nb_replicated_tasks" value="4" description="The number of ProActive replicated tasks."/>
+    <variable name="nb_MC_per_ptf_value" group="Simulation" value="1000" description="The number of Monte Carlo simulations per portfolio estimation."/>
+    <variable name="nb_time_steps" group="Simulation" value="255" description="The number of time steps to the horizon."/>
+    <variable name="stress_horizon" group="Simulation" value="1" description="The stress horizon in year fraction."/>
+    <variable name="assets_params_file_path_from_dataspace" group="Simulation" value="assets.txt" description="The relative path from the dataspace of the asset params file following the csv format."/>
+    <variable name="assets_correlations_file_path_from_dataspace" group="Simulation" value="assets_correlations.txt" description="The relative path from the dataspace of the asset correlations file."/>
+    <variable name="stressed_risk_free_rate_min_max_in_percent_and_steps" group="Simulation" value="-10%,+10%,8" description="The min, max, step of the stressed risk free rate range."/>
+    <variable name="stressed_volatility_min_max_in_percent_and_steps" group="Simulation" value="-5%,+5%,8" description="The min, max, step of the stressed volatility rate range."/>
+    <variable name="nb_replicated_tasks" group="Parallelization" value="4" description="The number of ProActive replicated tasks which must divide the risk free rate step number x the volatility step number. These latter are deduced from stressed_risk_free_rate_min_max_in_percent_and_steps and stressed_volatility_min_max_in_percent_and_steps respectively."/>
+    <variable name="DOCKER_ENABLED" group="Others" value="True" model="PA:Boolean" description="If true, the workflow tasks will be executed inside a docker container"/>
   </variables>
   <description>
     <![CDATA[ Portfolio Stress-Testing  according to user ranges of values. ]]>
@@ -35,7 +35,7 @@
         <task ref="merge_to_csv"/>
       </depends>
       <inputFiles>
-        <files  includes="stressed_PnLs.csv" accessMode="transferFromGlobalSpace"/>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}.csv" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
       <forkEnvironment javaHome="/usr" >
         <envScript>
@@ -62,7 +62,8 @@ Y_label = 'stressed_volatility_in_percent'
 Z_label = 'expected_PnL'
 
 # Read data
-df = pd.read_csv('stressed_PnLs.csv', sep=' ')
+job_id = variables.get("PA_JOB_ID")
+df = pd.read_csv('stressed_PnLs_job_' + job_id + '.csv', sep=' ')
 X = df[X_label]
 Y = df[Y_label]
 Z = df[Z_label]
@@ -264,6 +265,7 @@ void generate_stressed_assets_params_file(stressed_assets_params_file_name, asse
 println "simulate_ptf_PnLs ..."
 
 // Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
 def task_id = variables.get("PA_TASK_REPLICATION")
 def steps_to_consider = variables.get("steps_for_task_" + task_id)
 def nb_MC_per_ptf_value = variables.get("nb_MC_per_ptf_value")
@@ -298,7 +300,7 @@ def assets_params_file_name = new File(localspace, assets_params_file_path_from_
     generate_stressed_assets_params_file(stressed_assets_params_file_name, assets_params_list, stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
 
     // Build the command and execute it
-    def cmd = ['/bin/sh', '-c', "docker run --rm -v " + new File('.').absolutePath + ":/defaultglobal activeeon/quantlib:1.19 /bin/bash -c 'cd defaultglobal; ./ptfPnLSimulations " + nb_MC_per_ptf_value + " " + nb_time_steps + " " + stress_horizon + " " + nb_assets + " " + stressed_assets_params_file_name + " " +  assets_correlations_file_path_from_dataspace + " " + task_id + "'"]
+    def cmd = ['/bin/sh', '-c', "docker run --rm -v " + localspace + ":" + localspace + " -w " + localspace + " activeeon/quantlib:1.19 /bin/bash -c './ptfPnLSimulations " + nb_MC_per_ptf_value + " " + nb_time_steps + " " + stress_horizon + " " + nb_assets + " " + stressed_assets_params_file_name + " " +  assets_correlations_file_path_from_dataspace + " " + task_id + "'"]
     println cmd
     def sout = new StringBuilder()
     cmd.execute().waitForProcessOutput(sout, System.err)
@@ -314,7 +316,7 @@ def assets_params_file_name = new File(localspace, assets_params_file_path_from_
 stressed_PnLs = stressed_PnLs.substring(0, stressed_PnLs.length() - 1)
 
 // Write results into a file
-def file_name = "stressed_PnLs_" + task_id + ".txt"
+def file_name = "stressed_PnLs_job_" + job_id + "_task_" + task_id + ".txt"
 new File(localspace, file_name).text = stressed_PnLs
 result = file_name
 
@@ -324,7 +326,7 @@ println "... simulate_ptf_PnLs"
         </script>
       </scriptExecutable>
       <outputFiles>
-        <files  includes="stressed_PnLs_${PA_TASK_REPLICATION}.txt" accessMode="transferToGlobalSpace"/>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}_task_${PA_TASK_REPLICATION}.txt" accessMode="transferToGlobalSpace"/>
       </outputFiles>
       <metadata>
         <positionTop>
@@ -340,30 +342,31 @@ println "... simulate_ptf_PnLs"
         <task ref="simulate_ptf_PnLs"/>
       </depends>
       <inputFiles>
-        <files  includes="stressed_PnLs_*.txt" accessMode="transferFromGlobalSpace"/>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}_task_*.txt" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
       <scriptExecutable>
         <script>
           <code language="groovy">
             <![CDATA[
+def job_id = variables.get("PA_JOB_ID")
 def nb_replicated_tasks = variables.get("nb_replicated_tasks") as Integer
 def csv_content = "stressed_risk_free_rate_in_percent stressed_volatility_in_percent expected_PnL" + System.getProperty("line.separator")
 
 // Gather all stressed PnLs
 for (i=0; i<nb_replicated_tasks-1; i++)
 {
-    csv_content += new File(localspace, "stressed_PnLs_" + i + ".txt").text + System.getProperty("line.separator")
+    csv_content += new File(localspace, "stressed_PnLs_job_" + job_id + "_task_" + i + ".txt").text + System.getProperty("line.separator")
 }
-csv_content += new File(localspace, "stressed_PnLs_" + i + ".txt").text
+csv_content += new File(localspace, "stressed_PnLs_job_" + job_id + "_task_" + i + ".txt").text
 
 // Write them into the csv file
-new File(localspace, "stressed_PnLs.csv").text = csv_content
+new File(localspace, "stressed_PnLs_job_" + job_id + ".csv").text = csv_content
 ]]>
           </code>
         </script>
       </scriptExecutable>
       <outputFiles>
-        <files  includes="stressed_PnLs.csv" accessMode="transferToGlobalSpace"/>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}.csv" accessMode="transferToGlobalSpace"/>
       </outputFiles>
       <metadata>
         <positionTop>

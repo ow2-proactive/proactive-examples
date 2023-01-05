@@ -74,11 +74,10 @@ if (cachespaceHostFile.exists() && cachespaceHostFile.canRead()) {
     println cachespaceHost + " does not exist or is not readable, access to cache space will be disabled in the container"
 }
 
-dataDirHost = variables.get("data_dir_path")
-dataDirContainer = "/tmp/data"
+dataDirPath = variables.get("data_dir_path")
 if (!isPANodeInContainer) {
     cmd.add("-v")
-    cmd.add(dataDirHost + ":" + dataDirContainer)
+    cmd.add(dataDirPath + ":" + dataDirPath)
 }
 
 if (!isWindows && !isMac) {

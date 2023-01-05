@@ -3,16 +3,16 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Monte_Carlo_VaR_Portfolio" tags="QuantLib,Cpp,Finance,VaR,Pricing,Bale,Risk,Solvency,Black-Scholes" projectName="Risk Valuation Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <variables>
-    <variable name="nbMC" value="10000" description="The number of Monte Carlo simulations."/>
-    <variable name="nbTimeSteps" value="255" description="The number of time steps to the horizon."/>
-    <variable name="horizon" value="1" description="The horizon in year fraction."/>
-    <variable name="confidenceRate" value="0.99" description="The confidence level rate."/>
-    <variable name="nbBins" value="50" description="The number of bins for the portfolio estimation distributions."/>
-    <variable name="assets_params_file_path_from_dataspace" value="assets.txt" description="The relative path from the dataspace of the asset params file following the csv format."/>
-    <variable name="assets_correlations_file_path_from_dataspace" value="assets_correlations.txt" description="The relative path from the dataspace of the asset correlations file."/>
-    <variable name="nbTasks" value="5" description="The number of ProActive replicated tasks."/>
-    <variable name="width_chart" value="1000" description="The width of the chart in pixels."/>
-    <variable name="height_chart" value="500" description="The height of the chart in pixels."/>
+    <variable name="nbMC" group="Simulation" value="10000" description="The number of Monte Carlo simulations."/>
+    <variable name="nbTimeSteps" group="Simulation" value="255" description="The number of time steps to the horizon."/>
+    <variable name="horizon" group="Simulation" value="1" description="The horizon in year fraction."/>
+    <variable name="assets_params_file_path_from_dataspace" group="Simulation" value="assets.txt" description="The relative path from the dataspace of the asset params file following the csv format."/>
+    <variable name="assets_correlations_file_path_from_dataspace" group="Simulation" value="assets_correlations.txt" description="The relative path from the dataspace of the asset correlations file."/>
+    <variable name="confidenceRate" group="VaR" value="0.99" description="The confidence level rate."/>
+    <variable name="nbBins" group="VaR" value="50" description="The number of bins for the portfolio estimation distributions."/>
+    <variable name="nbTasks" group="Parallelization" value="5" description="The number of ProActive replicated tasks."/>
+    <variable name="width_chart" group="Display" value="1000" description="The width of the chart in pixels."/>
+    <variable name="height_chart" group="Display" value="500" description="The height of the chart in pixels."/>
   </variables>
   <description>
     <![CDATA[ Estimates the Monte Carlo Value at Risk (MC VaR) of a portfolio. We use the Geometric Brownian motion (GBM) method to simulate stock price paths, but more advanced assets can be integrated thanks to the C++ Quantlib lib. ]]>
@@ -108,6 +108,7 @@ runs=variables.get("nbTasks")
 println "simulate_ptf_PnLs ..."
 
 // Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
 def task_id = variables.get("PA_TASK_REPLICATION")
 def nbMC_task = variables.get("nbMC_task_" + task_id)
 def nbTimeSteps = variables.get("nbTimeSteps")
@@ -121,7 +122,7 @@ def executable_file_path = new File(localspace, "ptfPnLSimulations").absolutePat
 ["chmod","+x", executable_file_path].execute().waitForProcessOutput(System.out, System.err)
 
 // Build the command
-def cmd = ['/bin/sh', '-c', "docker run --rm -v " + new File('.').absolutePath + ":/defaultglobal activeeon/quantlib:1.19 /bin/bash -c 'cd defaultglobal; ./ptfPnLSimulations " + nbMC_task + " " + nbTimeSteps + " " + horizon + " " + nbAssets + " " + assets_params_file_path_from_dataspace + " " +  assets_correlations_file_path_from_dataspace + " " + task_id + "'"]
+def cmd = ['/bin/sh', '-c', "docker run --rm -v " + localspace + ":" + localspace + " -w " + localspace + " activeeon/quantlib:1.19 /bin/bash -c './ptfPnLSimulations " + nbMC_task + " " + nbTimeSteps + " " + horizon + " " + nbAssets + " " + assets_params_file_path_from_dataspace + " " +  assets_correlations_file_path_from_dataspace + " " + task_id + "'"]
 println cmd
 
 // Execute the command
@@ -129,7 +130,7 @@ def sout = new StringBuilder()
 cmd.execute().waitForProcessOutput(sout, System.err)
 
 // Store ptf PnLs at horizon
-def file_name = "outputs_" + task_id + ".txt"
+def file_name = "outputs_job_" + job_id + "_task_" + task_id + ".txt"
 new File(localspace, file_name).text = sout
 result = file_name
 
@@ -139,7 +140,7 @@ println "... simulate_ptf_PnLs"
         </script>
       </scriptExecutable>
       <outputFiles>
-        <files  includes="outputs_${PA_TASK_REPLICATION}.txt" accessMode="transferToGlobalSpace"/>
+        <files  includes="outputs_job_${PA_JOB_ID}_task_${PA_TASK_REPLICATION}.txt" accessMode="transferToGlobalSpace"/>
       </outputFiles>
       <metadata>
         <positionTop>
@@ -161,7 +162,7 @@ println "... simulate_ptf_PnLs"
         <files  includes="DualAxisChart.jar" accessMode="transferFromGlobalSpace"/>
         <files  includes="jcommon-1.0.6.jar" accessMode="transferFromGlobalSpace"/>
         <files  includes="jfreechart-1.0.2.jar" accessMode="transferFromGlobalSpace"/>
-        <files  includes="outputs_*.txt" accessMode="transferFromGlobalSpace"/>
+        <files  includes="outputs_job_${PA_JOB_ID}_task_*.txt" accessMode="transferFromGlobalSpace"/>
       </inputFiles>
       <forkEnvironment >
         <additionalClasspath>
@@ -179,7 +180,6 @@ import DualAxisChart;
 println "process_VaR ..."
 
 // Retrieve variables
-def nbMC = variables.get("nbMC").toInteger()
 def horizon = variables.get("horizon").toInteger()
 def confidenceRate = variables.get("confidenceRate").toDouble()
 def nbBins = variables.get("nbBins").toInteger()
@@ -187,32 +187,30 @@ def chart_file_path_from_dataspace = variables.get("chart_file_path_from_dataspa
 def width_chart = variables.get("width_chart").toInteger()
 def height_chart = variables.get("height_chart").toInteger()
 
-// Estimate the varIndex
-def VaRIndex = (int)((1 - confidenceRate) * nbMC);
-
 // Retrieve ptf PnLs at horizon from all tasks
-def ptfHorizonPnLs = new double[nbMC]
+def ptfHorizonPnLs = []
 def MCid = 0
 
 results.each { result ->
-	new File(result.value()).text.split(" ").each{ ptfHorizonPnL ->
-		ptfHorizonPnLs[MCid] = (double) ptfHorizonPnL.toDouble()
+	new File(localspace, result.value()).text.split().each{ ptfHorizonPnL ->
+		ptfHorizonPnLs += ptfHorizonPnL.toDouble()
 		MCid++;
 	}
 }
 println "nb MC simus retrived from tasks: " + MCid
 
 // Compute VaR
-Arrays.sort(ptfHorizonPnLs)
+ptfHorizonPnLs = ptfHorizonPnLs.sort()
+def VaRIndex = (int)((1 - confidenceRate) * MCid);
 def VaR = ptfHorizonPnLs[VaRIndex]
 
-def resultStr = "portfolio VaR " + confidenceRate*100 + "% at horizon " + horizon + " = " + VaR
+def resultStr = "portfolio VaR " + confidenceRate*100 + "% at horizon " + horizon + " = " + VaR + " (" + MCid + " simus)"
 println resultStr
 def chart_file_name = "VaR.png"
-DualAxisChart.writeChart(resultStr, ptfHorizonPnLs, nbBins, VaR, chart_file_name, width_chart, height_chart)
+DualAxisChart.writeChart(resultStr, ptfHorizonPnLs as double[], nbBins, VaR, chart_file_name, width_chart, height_chart)
 
 // Expose the resulting chart image
-def chart_file = new File(chart_file_name)
+def chart_file = new File(localspace, chart_file_name)
 result = chart_file.getBytes()
 resultMetadata.put("file.name", chart_file_name)
 resultMetadata.put("content.type", "image/png")
