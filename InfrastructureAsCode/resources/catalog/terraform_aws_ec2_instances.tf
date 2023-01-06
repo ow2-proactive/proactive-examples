@@ -1,5 +1,5 @@
-## A Terraform file that allows to create a number of VM instances (given as input) in AWS EC2.
-## This Terraform file produces as output files the SSH private key and the DNS of the created VM instances, thus enabling SSH access to them.
+## A Terraform file that allows to create a number of VM instances in AWS EC2.
+## This Terraform file produces as output files: (i) the SSH private key and (ii) the DNS of the created VM instances, thus enabling to access them via SSH.
 
 # Configure the AWS Provider
 provider "aws" {
