@@ -73,6 +73,7 @@ initializeAuthentication()
 remoteDir = variables.get("REMOTE_BASE")
 filePattern = variables.get("FILE_PATTERN")
 localBase = variables.get("LOCAL_BASE")
+cut = Boolean.parseBoolean(variables.get("CUT_FILE"))
 
 // used for cleanup in release()
 src = null
@@ -160,7 +161,7 @@ void importFiles() {
         children = this.remoteFile.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
         children.each { f ->
             String relativePath = File.separator + remoteBasePath.getRelativeName(f.getName());
-            if (f.getType() == FileType.FILE && f.getContent().getSize() > 0 && !f.getContent().isOpen()) {
+            if (f.getType() == FileType.FILE && f.getContent().getSize() > 0 && !f.getContent().isOpen() && !f.isContentOpen()) {
                 println("Examining remote file " + f.getName());
                 standardPath = new File(localDir, relativePath);
                 localUrl = standardPath.toURI().toURL();
@@ -168,6 +169,10 @@ void importFiles() {
                 LocalFile localFile = (LocalFile) fsManager.resolveFile(localUrl.toString());
                 println("Resolved local file name: " + localFile.getName());
                 createParentFolderAndCopyFile(localFile, f)
+                if(cut){
+                    println("Remote file "  + f.getName() + " is deleted")
+                    f.delete()
+                }
             } else {
                 println("Ignoring non-file " + f.getName());
             }

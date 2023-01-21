@@ -18,6 +18,7 @@ import org.apache.commons.vfs2.impl.*
 import org.apache.commons.vfs2.provider.local.*
 import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder
 import org.apache.commons.vfs2.provider.ftps.FtpsFileSystemConfigBuilder
+import org.apache.commons.vfs2.provider.sftp.SftpFileSystemConfigBuilder
 import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
 import java.security.PrivateKey
 import java.security.KeyFactory
@@ -249,6 +250,7 @@ void initializeAuthentication() {
         FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true)
         if (keyManager != null) {
             FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
+            SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
         }
 
     } catch (FileSystemException ex) {
