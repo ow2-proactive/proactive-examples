@@ -161,7 +161,7 @@ void importFiles() {
         children = this.remoteFile.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
         children.each { f ->
             String relativePath = File.separator + remoteBasePath.getRelativeName(f.getName());
-            if (f.getType() == FileType.FILE && f.getContent().getSize() > 0 && !f.getContent().isOpen() && !f.isContentOpen()) {
+            if (f.getType() == FileType.FILE && !f.isContentOpen() && f.getContent().getSize() > 0) {
                 println("Examining remote file " + f.getName());
                 standardPath = new File(localDir, relativePath);
                 localUrl = standardPath.toURI().toURL();
@@ -170,7 +170,7 @@ void importFiles() {
                 println("Resolved local file name: " + localFile.getName());
                 createParentFolderAndCopyFile(localFile, f)
                 if(cut){
-                    println("Remote file "  + f.getName() + " is deleted")
+                    println("Deleting remote file " + f.getName())
                     f.delete()
                 }
             } else {
