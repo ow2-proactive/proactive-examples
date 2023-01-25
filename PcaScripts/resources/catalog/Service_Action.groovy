@@ -57,7 +57,7 @@ if (!Strings.isNullOrEmpty(action)) {
     def serviceActionWorkflowSplits = serviceActionWorkflow.split('/')
     bucketName = serviceActionWorkflowSplits[0]
     action = serviceActionWorkflowSplits[1]
-    CloudAutomationWorkflow executableAction = catalogRestApi.getExecutableActionByCatalogObjectUsingGET(sessionId, instanceId, bucketName, action)
+    CloudAutomationWorkflow executableAction = catalogRestApi.getExecutableActionByCatalogObjectUsingGET(sessionId, instanceId as int, bucketName, action)
     println("Action Bucket_name: " + bucketName + ", Action_workflow_name: " + action)
     if (executableAction != null) {
         actionVariables = executableAction.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
