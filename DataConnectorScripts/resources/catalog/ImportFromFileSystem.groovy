@@ -18,6 +18,7 @@ import org.apache.commons.vfs2.impl.*
 import org.apache.commons.vfs2.provider.local.*
 import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder
 import org.apache.commons.vfs2.provider.ftps.FtpsFileSystemConfigBuilder
+import org.apache.commons.vfs2.provider.sftp.SftpFileSystemConfigBuilder
 import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
 import java.security.PrivateKey
 import java.security.KeyFactory
@@ -72,6 +73,7 @@ initializeAuthentication()
 remoteDir = variables.get("REMOTE_BASE")
 filePattern = variables.get("FILE_PATTERN")
 localBase = variables.get("LOCAL_BASE")
+cut = Boolean.parseBoolean(variables.get("CUT_FILE"))
 
 // used for cleanup in release()
 src = null
@@ -159,7 +161,7 @@ void importFiles() {
         children = this.remoteFile.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
         children.each { f ->
             String relativePath = File.separator + remoteBasePath.getRelativeName(f.getName());
-            if (f.getType() == FileType.FILE) {
+            if (f.getType() == FileType.FILE && !f.isContentOpen() && f.getContent().getSize() > 0) {
                 println("Examining remote file " + f.getName());
                 standardPath = new File(localDir, relativePath);
                 localUrl = standardPath.toURI().toURL();
@@ -167,6 +169,10 @@ void importFiles() {
                 LocalFile localFile = (LocalFile) fsManager.resolveFile(localUrl.toString());
                 println("Resolved local file name: " + localFile.getName());
                 createParentFolderAndCopyFile(localFile, f)
+                if(cut){
+                    println("Deleting remote file " + f.getName())
+                    f.delete()
+                }
             } else {
                 println("Ignoring non-file " + f.getName());
             }
@@ -248,6 +254,7 @@ void initializeAuthentication() {
         FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true)
         if (keyManager != null) {
             FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
+            SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
         }
 
     } catch (FileSystemException ex) {
