@@ -11,7 +11,6 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -127,7 +126,7 @@ public class MetadataJsonFilesTest {
                 String workflowKind = (String) (metatdata).get(WORKFLOW_KIND_KEY_NAME);
                 if (workflowKind.toLowerCase().startsWith(WORKFLOW_KIND_VALUE)) {
                     Assert.assertTrue(workflowName +
-                                      " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
+                                      " is invalid! Try an underscore-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
                                       workflowName.matches(WORKFLOW_NAME_PATTERN));
                 }
             });
@@ -149,7 +148,7 @@ public class MetadataJsonFilesTest {
                     scenarios.forEach(objectJsonObject -> {
                         String workflowName = (String) ((JSONObject) objectJsonObject).get(WORKFLOW_KIND_VALUE);
                         Assert.assertTrue(workflowName +
-                                        " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
+                                        " is invalid! Try an underscore-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
                                 workflowName.matches(WORKFLOW_NAME_PATTERN));
                     });
                 }

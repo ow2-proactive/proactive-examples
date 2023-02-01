@@ -9,19 +9,22 @@ import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
 
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -51,6 +54,18 @@ public class WorkflowsTest {
 
     private final static String PCW_RULE_NAME = "rule";
 
+    private final static String CATALOG_KEY_NAME = "catalog";
+
+    private final static String OBJECTS_KEY_NAME = "objects";
+
+    private final static String METADATA_KEY_NAME = "metadata";
+
+    private final static String FILE_KEY_NAME = "file";
+
+    private final static String WORKFLOW_KIND_KEY_NAME = "kind";
+
+    private final static String WORKFLOW_KIND_VALUE = "workflow";
+
     public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:[_A-Z\\d][a-zA-Z\\d]*)*$";
 
     private final String filePath;
@@ -60,6 +75,31 @@ public class WorkflowsTest {
     private static boolean isPackageDirIncludingCatalogObjects(Path packagePath) {
         return Files.isDirectory(packagePath) && Files.exists(Paths.get(packagePath.toString(), METADATA_JSON_FILE)) &&
                Files.exists(Paths.get(packagePath.toString(), CATALOG_OBJECT_DIR_PATH));
+    }
+
+    private static boolean isWorkflowKind(Path resourcePath){
+        if(!resourcePath.toString().endsWith(".xml")){
+            return false;
+        }
+        JSONObject jsonObject = getMetadataRootObject(resourcePath.getParent().getParent().getParent());
+        JSONObject catalog = (JSONObject) jsonObject.get(CATALOG_KEY_NAME);
+        if (catalog != null) {
+            JSONArray objects = (JSONArray) catalog.get(OBJECTS_KEY_NAME);
+            Optional<JSONObject> catalogObjectJson = objects.stream().filter(objectJsonObject -> (resourcePath.toString().contains(((JSONObject) objectJsonObject).get(FILE_KEY_NAME).toString()))).findAny();
+            if (catalogObjectJson.isPresent()) {
+                return ((String)((JSONObject)(catalogObjectJson.get()).get(METADATA_KEY_NAME)).get(WORKFLOW_KIND_KEY_NAME)).toLowerCase().startsWith(WORKFLOW_KIND_VALUE);
+            }
+        }
+        return false;
+    }
+
+    private static JSONObject getMetadataRootObject(Path packagePath) {
+        String metadataJsonFilePath = new File(packagePath.toString(), METADATA_JSON_FILE).getAbsolutePath();
+        try {
+            return  (JSONObject) new JSONParser().parse(new FileReader(metadataJsonFilePath));
+        } catch (IOException | ParseException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public WorkflowsTest(String filePath) {
@@ -81,7 +121,7 @@ public class WorkflowsTest {
                     .flatMap(resourcesPath -> {
                         try {
                             return Files.list(resourcesPath)
-                                        .filter(file -> file.toString().endsWith(".xml"))
+                                        .filter(file -> isWorkflowKind(file))
                                         .filter(file -> !file.toString().toLowerCase().contains(PCW_RULE_NAME));
                         } catch (IOException e) {
                             throw new RuntimeException(e);
@@ -107,10 +147,10 @@ public class WorkflowsTest {
 
         String workflowName = this.job.getName();
         assertTrue("The workflow name " + workflowName +
-                   " is invalid! Try an underscode-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
+                   " is invalid! Try an underscore-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
                    workflowName.matches(WORKFLOW_NAME_PATTERN));
 
-        // Check mandatory generic informations
+        // Check mandatory generic information
         String workflowIconValue = this.job.getGenericInformation().get(WORKFLOW_ICON_KEY_NAME);
         assertThat("The wf MUST HAVE a Workflow Generic Information: " + WORKFLOW_ICON_KEY_NAME,
                    workflowIconValue,
