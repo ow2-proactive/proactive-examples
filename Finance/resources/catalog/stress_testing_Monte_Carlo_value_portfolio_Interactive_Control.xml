@@ -1,0 +1,615 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Stress_Testing_Monte_Carlo_Value_Portfolio_Interactive_Control" projectName="Risk Valuation Workflows" tags="QuantLib,Cpp,Finance,Pricing,Bale,Risk,Solvency,Black-Scholes" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
+  <variables>
+    <variable name="nb_MC_per_ptf_value" value="1000"  description="The number of Monte Carlo simulations per portfolio estimation." group="Simulation"  />
+    <variable name="nb_time_steps" value="255"  description="The number of time steps to the horizon." group="Simulation"  />
+    <variable name="stress_horizon" value="1"  description="The stress horizon in year fraction." group="Simulation"  />
+    <variable name="assets_params_file_path_from_dataspace" value="assets.txt"  description="The relative path from the dataspace of the asset params file following the csv format." group="Simulation"  />
+    <variable name="assets_correlations_file_path_from_dataspace" value="assets_correlations.txt"  description="The relative path from the dataspace of the asset correlations file." group="Simulation"  />
+    <variable name="stressed_risk_free_rate_min_max_in_percent_and_steps" value="-10%,+10%,8"  description="The min, max, step of the stressed risk free rate range." group="Simulation"  />
+    <variable name="stressed_volatility_min_max_in_percent_and_steps" value="-5%,+5%,8"  description="The min, max, step of the stressed volatility rate range." group="Simulation"  />
+    <variable name="nb_replicated_tasks" value="4"  description="The number of ProActive replicated tasks which must divide the risk free rate step number x the volatility step number. These latter are deduced from stressed_risk_free_rate_min_max_in_percent_and_steps and stressed_volatility_min_max_in_percent_and_steps respectively." group="Parallelization"  />
+    <variable name="DOCKER_ENABLED" value="True" model="PA:Boolean" description="If true, the workflow tasks will be executed inside a docker container" group="Others"  />
+  </variables>
+  <description>
+    <![CDATA[ Portfolio Stress-Testing  according to user ranges of values. After the stress testing, user can rerun/trigger more simualations to improve the stressed portfolio estimations. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="hpc-finance"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+    <info name="Documentation" value="https://ow2-proactive.github.io/proactive-examples/Finance/resources/doc/V2/risk-valuation-proactive.pdf"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="plot_surface_and_put_signal"
+
+
+
+          preciousResult="true"
+          fork="true">
+      <variables>
+        <variable name="DOCKER_ENABLED" value="True" inherited="true" model="PA:Boolean" description="If true, the workflow tasks will be executed inside a docker container"   />
+        <variable name="DOCKER_IMAGE" value="activeeon/dlm3" inherited="true"  description="Name of the docker image"   />
+      </variables>
+      <depends>
+        <task ref="merge_to_csv"/>
+      </depends>
+      <inputFiles>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}.csv" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment javaHome="/usr" >
+        <envScript>
+          <script>
+            <file url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_docker_vars/raw" language="groovy"></file>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+# https://jakevdp.github.io/PythonDataScienceHandbook/04.12-three-dimensional-plotting.html
+
+import matplotlib as mpl
+mpl.use('Agg')
+from matplotlib import pyplot
+from mpl_toolkits.mplot3d import Axes3D
+import pandas as pd
+
+# Labels
+X_label = 'stressed_risk_free_rate_in_percent'
+Y_label = 'stressed_volatility_in_percent'
+Z_label = 'expected_PnL'
+
+# Read data
+job_id = variables.get("PA_JOB_ID")
+df = pd.read_csv('stressed_PnLs_job_' + job_id + '.csv', sep=' ')
+X = df[X_label]
+Y = df[Y_label]
+Z = df[Z_label]
+
+ # Plot
+fig = pyplot.figure()
+ax = Axes3D(fig)
+ax.plot_trisurf(X, Y, Z, cmap='viridis', edgecolor='none');
+ax.set_xlabel(X_label)
+ax.set_ylabel(Y_label)
+ax.set_zlabel(Z_label)
+
+# Change POV
+ax.view_init(elev=10., azim=100)
+
+# Save the chart
+chart_file_name = 'stressed_PnLs.png'
+fig.savefig(chart_file_name)
+
+# Expose the chart
+with open(chart_file_name, "rb") as binary_file:
+    FILE_BIN = binary_file.read()
+result = FILE_BIN
+resultMetadata.put("file.name", chart_file_name)
+resultMetadata.put("content.type", "image/png")
+
+# Put signal for interactive control
+variables.put("waitForSignals", True)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+          461.57498931884766
+        </positionTop>
+        <positionLeft>
+          376.0874938964844
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="init_stress_testing"
+
+
+
+
+          fork="true">
+      <depends>
+        <task ref="Start"/>
+      </depends>
+      <inputFiles>
+        <files  includes="$assets_params_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println "init_stress_testing..."
+
+// Retrieve variables
+def stressed_risk_free_rate_min_max_in_percent_and_steps = variables.get("stressed_risk_free_rate_min_max_in_percent_and_steps")
+def stressed_volatility_min_max_in_percent_and_steps = variables.get("stressed_volatility_min_max_in_percent_and_steps")
+def nb_replicated_tasks = variables.get("nb_replicated_tasks") as Integer
+def assets_params_file_path_from_dataspace = variables.get("assets_params_file_path_from_dataspace")
+
+// Deduce other variables
+def stressed_risk_free_rate_min_max_in_percent_and_steps_arr = stressed_risk_free_rate_min_max_in_percent_and_steps.split(",")
+def stressed_risk_free_rate_min_in_percent = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[0].replaceAll("%", "") as Integer
+def stressed_risk_free_rate_max_in_percent = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[1].replaceAll("%", "") as Integer
+def stressed_risk_free_rate_steps = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[2] as Integer
+
+def stressed_volatility_min_max_in_percent_and_steps_arr = stressed_volatility_min_max_in_percent_and_steps.split(",")
+def stressed_volatility_min_in_percent = stressed_volatility_min_max_in_percent_and_steps_arr[0].replaceAll("%", "") as Integer
+def stressed_volatility_max_in_percent = stressed_volatility_min_max_in_percent_and_steps_arr[1].replaceAll("%", "") as Integer
+def stressed_volatility_steps = stressed_volatility_min_max_in_percent_and_steps_arr[2] as Integer
+
+def nb_assets = new File(localspace, assets_params_file_path_from_dataspace).text.split(System.getProperty("line.separator")).length
+variables["nb_assets"] = nb_assets
+
+// Check split params validity
+def total_nb_steps = stressed_risk_free_rate_steps * stressed_volatility_steps
+def nb_steps_per_task = total_nb_steps / nb_replicated_tasks
+if (total_nb_steps % nb_replicated_tasks != 0)
+	throw new Exception("total_nb_steps % nb_replicated_tasks != 0")
+
+// Compute ranges
+def stressed_risk_free_rate_step_size_in_percent = (stressed_risk_free_rate_max_in_percent - stressed_risk_free_rate_min_in_percent) / (stressed_risk_free_rate_steps - 1)
+def stressed_volatility_step_size_in_percent = (stressed_volatility_max_in_percent - stressed_volatility_min_in_percent) / (stressed_volatility_steps - 1)
+def i = 0, j = 0, step_id = 0, task_id = 0
+def steps_to_consider_per_task = []
+while (i < stressed_risk_free_rate_steps)
+{
+    // Compute current_stressed_risk_free_rate_in_percent
+    def current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_min_in_percent + i * stressed_risk_free_rate_step_size_in_percent
+    if (i == stressed_risk_free_rate_steps - 1)
+    	current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_max_in_percent
+
+    while (j < stressed_volatility_steps)
+    {
+        // Compute current_stressed_risk_free_rate_in_percent
+    	def current_stressed_volatility_in_percent = stressed_volatility_min_in_percent + j * stressed_volatility_step_size_in_percent
+    	if (j == stressed_volatility_steps - 1)
+    		current_stressed_volatility_in_percent = stressed_volatility_max_in_percent
+
+        // Add another step pair
+        steps_to_consider_per_task += [[current_stressed_risk_free_rate_in_percent, current_stressed_volatility_in_percent]]
+
+        // If we reach nb_steps_per_task
+        if (step_id == nb_steps_per_task - 1)
+        {
+            variables["steps_for_task_" + task_id] = steps_to_consider_per_task
+            //println step_id + " == " + (nb_steps_per_task - 1) + " => " + variables["steps_for_task_" + task_id]
+            steps_to_consider_per_task = []
+            task_id++
+            step_id = -1
+        }
+
+        // inc
+        j++
+        step_id++
+    }
+
+    // inc
+    i++
+    j = 0
+}
+
+println "... init_stress_testing"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <replicate>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+runs=variables.get("nb_replicated_tasks")
+]]>
+            </code>
+          </script>
+        </replicate>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          100.3499984741211
+        </positionTop>
+        <positionLeft>
+          380.0874938964844
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="simulate_ptf_PnLs"
+
+
+
+
+          fork="true">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="init_stress_testing"/>
+      </depends>
+      <inputFiles>
+        <files  includes="ptfPnLSimulations" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$assets_params_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+        <files  includes="$assets_correlations_file_path_from_dataspace" accessMode="transferFromGlobalSpace"/>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}_task_${PA_TASK_REPLICATION}.txt" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// FUNCTIONS //////////////////////////////
+
+
+void fromListToFile(stressed_assets_params_file_name, stressed_assets_params_list,stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+{
+    // Build the file content
+    def file_content = ""
+    stressed_assets_params_list.each {
+        file_content += it.join(",") + System.getProperty("line.separator")
+    }
+    file_content = file_content.substring(0, file_content.length() - 1)
+
+    // Write the content
+    new File(localspace, stressed_assets_params_file_name).text = file_content
+}
+
+void generate_stressed_assets_params_file(stressed_assets_params_file_name, assets_params_list, stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+{
+    def stressed_assets_params_list = []
+
+    assets_params_list.each {
+        // Stress current values
+        def current_risk_free_rate = it[1] as Double
+        def stressed_risk_free_rate = current_risk_free_rate * ( 1 + stressed_risk_free_rate_in_percent / 100)
+
+        def current_volatility = it[2] as Double
+        def stressed_volatility = current_volatility * ( 1 + stressed_volatility_in_percent / 100)
+
+        // Store stressed values
+        stressed_assets_params_list += [[it[0], stressed_risk_free_rate, stressed_volatility, it[3]]]
+    }
+
+    // Generate a file from the list
+    fromListToFile(stressed_assets_params_file_name, stressed_assets_params_list, stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+}
+
+
+// MAIN //////////////////////////////
+
+
+println "simulate_ptf_PnLs ..."
+
+// Retrieve variables
+def job_id = variables.get("PA_JOB_ID")
+def task_id = variables.get("PA_TASK_REPLICATION")
+def steps_to_consider = variables.get("steps_for_task_" + task_id)
+def nb_MC_per_ptf_value = variables.get("nb_MC_per_ptf_value")
+def nb_time_steps = variables.get("nb_time_steps")
+def stress_horizon = variables.get("stress_horizon")
+def nb_assets = variables.get("nb_assets")
+def assets_params_file_path_from_dataspace = variables.get("assets_params_file_path_from_dataspace")
+def assets_correlations_file_path_from_dataspace = variables.get("assets_correlations_file_path_from_dataspace")
+
+// Set executable permission
+def executable_file_path = new File(localspace, "ptfPnLSimulations").absolutePath
+["chmod","+x", executable_file_path].execute().waitForProcessOutput(System.out, System.err)
+
+// Stressed values from the assets params file and Execute the command
+def assets_params_file_content = new File(localspace, assets_params_file_path_from_dataspace).text
+def assets_params_file_lines = assets_params_file_content.split(System.getProperty("line.separator"))
+def assets_params_list = []
+assets_params_file_lines.each {
+    assets_params_list += it.split(",")
+}
+
+// Results file. Ech line : <stressed_risk_free_rate_in_percent> <stressed_volatility_in_percent> <expected_PnL> <nb_MC>
+def stressed_PnLs_file_name = "stressed_PnLs_job_" + job_id + "_task_" + task_id + ".txt"
+def stressed_PnLs_file = new File(localspace, stressed_PnLs_file_name)
+def previous_stressed_PnLs_map = [:]
+if (stressed_PnLs_file.exists()){
+  stressed_PnLs_file.text.split(System.getProperty("line.separator")).each { stressed_result ->
+    def stressed_result_arr = stressed_result.split(" ")
+    previous_stressed_PnLs_map[stressed_result_arr[0] + "_" + stressed_result_arr[1]] = [stressed_result_arr[2], stressed_result_arr[3]]
+  }
+}
+
+// For each stressed pair
+def stressed_PnLs = ""
+def assets_params_file_name = new File(localspace, assets_params_file_path_from_dataspace).name
+
+(steps_to_consider as List).each {
+    // Retrieve the stressed rates
+    def stressed_risk_free_rate_in_percent = it.get(0)
+    def stressed_volatility_in_percent = it.get(1)
+
+    // Generate a stressed assets params file
+    def stressed_assets_params_file_name = "stressed_" + stressed_risk_free_rate_in_percent + "_" + stressed_volatility_in_percent + "_" + assets_params_file_name
+    generate_stressed_assets_params_file(stressed_assets_params_file_name, assets_params_list, stressed_risk_free_rate_in_percent, stressed_volatility_in_percent)
+
+    // Build the command and execute it
+    def cmd = ['/bin/sh', '-c', "docker run --rm -v " + localspace + ":" + localspace + " -w " + localspace + " activeeon/quantlib:1.19 /bin/bash -c './ptfPnLSimulations " + nb_MC_per_ptf_value + " " + nb_time_steps + " " + stress_horizon + " " + nb_assets + " " + stressed_assets_params_file_name + " " +  assets_correlations_file_path_from_dataspace + " " + task_id + "'"]
+    println cmd
+    def sout = new StringBuilder()
+    cmd.execute().waitForProcessOutput(sout, System.err)
+
+    // Sum PnLs
+    def PnLs_arr = sout.toString().split(" ")
+    def sum_PnLs = 0
+    PnLs_arr.each {
+        sum_PnLs += it as Double
+    }
+
+    // Estimate new expected PnL
+    def new_sum_PnLs = -1
+    def new_nb_MC = -1
+    def previous_expected_PnL_and_nb_MC_arr = previous_stressed_PnLs_map[stressed_risk_free_rate_in_percent + "_" + stressed_volatility_in_percent]
+    if (previous_expected_PnL_and_nb_MC_arr != null){
+
+      def previous_expected_PnL = previous_expected_PnL_and_nb_MC_arr[0] as Double
+      def previous_nb_MC = previous_expected_PnL_and_nb_MC_arr[1] as Integer
+      def previous_sum_PnLs = previous_expected_PnL * previous_nb_MC
+
+      new_sum_PnLs = previous_sum_PnLs + sum_PnLs
+      new_nb_MC = previous_nb_MC + PnLs_arr.size()
+
+    } else {
+       new_sum_PnLs = sum_PnLs
+       new_nb_MC = PnLs_arr.size()
+    }
+    def new_expected_PnL = new_sum_PnLs / new_nb_MC
+
+    // Store results
+    stressed_PnLs += stressed_risk_free_rate_in_percent + " " + stressed_volatility_in_percent + " " + new_expected_PnL + " " + new_nb_MC + System.getProperty("line.separator")
+}
+
+// Write results into a file
+stressed_PnLs = stressed_PnLs.substring(0, stressed_PnLs.length() - 1)
+stressed_PnLs_file.text = stressed_PnLs
+result = stressed_PnLs_file_name
+
+println "... simulate_ptf_PnLs"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}_task_${PA_TASK_REPLICATION}.txt" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+          232.7750015258789
+        </positionTop>
+        <positionLeft>
+          384.0874938964844
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="merge_to_csv"
+
+
+
+
+          fork="true">
+      <depends>
+        <task ref="simulate_ptf_PnLs"/>
+      </depends>
+      <inputFiles>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}_task_*.txt" accessMode="transferFromGlobalSpace"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def job_id = variables.get("PA_JOB_ID")
+def nb_replicated_tasks = variables.get("nb_replicated_tasks") as Integer
+def csv_content = "stressed_risk_free_rate_in_percent stressed_volatility_in_percent expected_PnL nb_MC" + System.getProperty("line.separator")
+
+// Gather all stressed PnLs
+for (i=0; i<nb_replicated_tasks-1; i++)
+{
+    csv_content += new File(localspace, "stressed_PnLs_job_" + job_id + "_task_" + i + ".txt").text + System.getProperty("line.separator")
+}
+csv_content += new File(localspace, "stressed_PnLs_job_" + job_id + "_task_" + i + ".txt").text
+
+// Write them into the csv file
+new File(localspace, "stressed_PnLs_job_" + job_id + ".csv").text = csv_content
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="stressed_PnLs_job_${PA_JOB_ID}.csv" accessMode="transferToGlobalSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+          341.1749954223633
+        </positionTop>
+        <positionLeft>
+          393.0874938964844
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Wait_For_Signals_With_Variables"
+
+
+
+
+          fork="true">
+      <description>
+        <![CDATA[ A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job. ]]>
+      </description>
+      <variables>
+        <variable name="SIGNALS" value="stop, kill" inherited="false"  description="List of comma-separated signals expected by this task."  advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="TASK.DOCUMENTATION" value="user/ProActiveUserGuide.html#_task_signal_api"/>
+      </genericInformation>
+      <depends>
+        <task ref="plot_surface_and_put_signal"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.scheduler.common.job.JobVariable
+import java.util.*;
+
+if (variables.get("waitForSignals")){
+
+List <JobVariable> signalVariables = new java.util.ArrayList<JobVariable>()
+signalVariables.add(new JobVariable("nb_MC_per_ptf_value", "" + variables.get("nb_MC_per_ptf_value"), "PA:INTEGER", "The number of Monte Carlo simulations.", "", false, false))
+
+signalapi.readyForSignal("Terminate_Job")
+signalapi.readyForSignal("Add_more_MC_simulations", signalVariables)
+
+variables.put("Terminate_Job", false)
+}
+variables.put("waitForSignals", false)
+
+signals = new HashSet()
+signals.add("Terminate_Job")
+signals.add("Add_more_MC_simulations")
+
+receivedSignals = signalapi.checkForSignals(signals)
+
+println "Received signal = " + receivedSignals.keySet()
+
+if(receivedSignals.keySet().contains("Terminate_Job")){
+    variables.put("Terminate_Job", true)
+	result = receivedSignals.keySet().toString()
+} else {
+    if(receivedSignals.keySet().contains("Add_more_MC_simulations")){
+    	updatedVariables = receivedSignals.get("Add_more_MC_simulations")
+    	variables.put("nb_MC_per_ptf_value", updatedVariables.get("nb_MC_per_ptf_value"))
+    	signalapi.removeSignal("ready_Terminate_Job")
+        result = receivedSignals.keySet().toString()
+        variables.put("PA_TASK_ITERATION", 0)
+    }
+    else{
+        result = null
+    }
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <loop target="Wait_For_Signals_With_Variables">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+if (result!=null){
+    loop = false
+} else {
+    loop = "* * * * *"
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          568.6750259399414
+        </positionTop>
+        <positionLeft>
+          368.1750183105469
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Rerun_Simulation"
+
+
+
+
+          fork="true">
+      <description>
+        <![CDATA[ A template task that waits for a Signal with variables, allowing to rerun the loop with new variable values. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-send.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Wait_For_Signals_With_Variables"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow  block="end">
+        <loop target="Start">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+loop = ! variables.get("Terminate_Job")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+          665.6750259399414
+        </positionTop>
+        <positionLeft>
+          597.1750183105469
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start"
+
+
+
+
+          fork="true">
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"></controlFlow>
+      <metadata>
+        <positionTop>
+          55.662498474121094
+        </positionTop>
+        <positionLeft>
+          598.1999816894531
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2257px;
+            height:2581px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-50.662498474121094px;left:-363.1750183105469px"><div class="task ui-draggable" id="jsPlumb_1_697" style="top: 461.575px; left: 376.087px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Python.png" width="20px">&nbsp;<span class="name">plot_surface_and_put_signal</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable" id="jsPlumb_1_700" style="top: 100.35px; left: 380.088px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">init_stress_testing</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable" id="jsPlumb_1_703" style="top: 232.775px; left: 384.088px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/quantlib.png" width="20px">&nbsp;<span class="name">simulate_ptf_PnLs</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable" id="jsPlumb_1_706" style="top: 341.175px; left: 393.087px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">merge_to_csv</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_709" style="top: 568.675px; left: 368.175px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A template task that sends a ready notification for all the signals specified in the variable SIGNALS, then loops until one signal among those specified is received by the job."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">Wait_For_Signals_With_Variables</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task block-end ui-draggable active-task" id="jsPlumb_1_712" style="top: 665.675px; left: 597.175px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A template task that waits for a Signal with variables, allowing to rerun the loop with new variable values."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-send.png" width="20px">&nbsp;<span class="name">Rerun_Simulation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_742" style="top: 55.675px; left: 598.2px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Start</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><svg style="position:absolute;left:434.0874938964844px;top:380.6749954223633px" width="36.5" height="81.4000244140625" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 15.5 80.4000244140625 C 25.5 30.4000244140625 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M17.102233000000002,60.25045293725587 L19.091042797889525,39.15437188916027 L13.73798088573652,46.66068444358117 L5.501274304214818,42.518624003423746 L17.102233000000002,60.25045293725587" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M17.102233000000002,60.25045293725587 L19.091042797889525,39.15437188916027 L13.73798088573652,46.66068444358117 L5.501274304214818,42.518624003423746 L17.102233000000002,60.25045293725587" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:465.5px;top:129.5px" width="26.600000000000023" height="104" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 5.600000000000023 93 C 15.600000000000023 93 -10 -10 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#e5db3d" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.849503200000021,81.373476 L13.013860909540195,60.822821279336885 L6.584594505225553,67.43073573870689 L-0.9288793517529195,62.08772997411135 L7.849503200000021,81.373476" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.849503200000021,81.373476 L13.013860909540195,60.822821279336885 L6.584594505225553,67.43073573870689 L-0.9288793517529195,62.08772997411135 L7.849503200000021,81.373476" class="" stroke="rgba(229,219,61,0.5)" fill="rgba(229,219,61,0.5)" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_723" style="position: absolute; transform: translate(-50%, -50%); left: 478.3px; top: 182.25px;">replicate</div><svg style="position:absolute;left:429.5px;top:139.5px" width="26" height="94" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 5 93 C 15 43 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.39958875,70.38066975000001 L12.470522892184412,49.806763292410864 L6.0713453802180375,56.4438204091113 L-1.4663264487043044,51.13500666219282 L7.39958875,70.38066975000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M7.39958875,70.38066975000001 L12.470522892184412,49.806763292410864 L6.0713453802180375,56.4438204091113 L-1.4663264487043044,51.13500666219282 L7.39958875,70.38066975000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:434.0874938964844px;top:272.5px" width="21.412506103515625" height="69.17499542236328" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 68.17499542236328 C -10 18.17499542236328 10.412506103515625 50 0.412506103515625 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.617163830360412,51.08720007693673 L4.74548779526407,31.217842738570475 L-2.36249693500415,37.08951652670566 L-9.252195754967003,30.96317584321421 L-2.617163830360412,51.08720007693673" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.617163830360412,51.08720007693673 L4.74548779526407,31.217842738570475 L-2.36249693500415,37.08951652670566 L-9.252195754967003,30.96317584321421 L-2.617163830360412,51.08720007693673" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:449.5874938964844px;top:501.0750198364258px" width="24.5875244140625" height="68.10001683235168" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 3.5875244140625 67.10001683235168 C 13.5875244140625 17.100016832351685 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.02378284487915,50.073471348282176 L11.637448468315306,29.640978640140784 L5.064856540122506,36.10635065924802 L-2.3296722207188454,30.59990494489743 L6.02378284487915,50.073471348282176" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.02378284487915,50.073471348282176 L11.637448468315306,29.640978640140784 L5.064856540122506,36.10635065924802 L-2.3296722207188454,30.59990494489743 L6.02378284487915,50.073471348282176" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:548.6750183105469px;top:558.1750366687775px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_738" style="position: absolute; transform: translate(-50%, -50%); left: 573.675px; top: 588.175px;">loop</div><svg style="position:absolute;left:453.1750183105469px;top:608.1750366687775px" width="215" height="58" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 194 57 C 204 7 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M165.381656,33.80783925 L146.73634564378102,23.740446254776586 L151.55695352054965,31.599310021151233 L144.52781641493226,37.56514873422694 L165.381656,33.80783925" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M165.381656,33.80783925 L146.73634564378102,23.740446254776586 L151.55695352054965,31.599310021151233 L144.52781641493226,37.56514873422694 L165.381656,33.80783925" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 450.087px; top: 491.575px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 450.087px; top: 451.575px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 430px; top: 130px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint replicate-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 466px; top: 130px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 435px; top: 263px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint replicate-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 471.6px; top: 223px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#e5db3d" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 435px; top: 223px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 434.587px; top: 371.175px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 434.587px; top: 331.175px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 453.675px; top: 598.675px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 453.675px; top: 558.675px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 549.175px; top: 558.675px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 549.175px; top: 598.675px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 647.675px; top: 695.675px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 647.675px; top: 655.675px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected" dragid="jsPlumb_1_746" elid="jsPlumb_1_742" style="position: absolute; height: 20px; width: 20px; left: 638px; top: 86px; visibility: visible;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:429.5px;top:49.5px" width="229" height="97" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 4 C -10 -46 218 50 208 0 " transform="translate(10.5,46.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M32.100224,-10.523392000000001 L52.71108665121563,-15.441963009218476 L46.026864314574134,-9.092067596351985 L51.27976224756761,-1.5153226946443388 L32.100224,-10.523392000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,46.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected connected" style="position: absolute; height: 20px; width: 20px; left: 430px; top: 90px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable endpointDrag _jsPlumb_endpoint_connected _jsPlumb_endpoint_full connected" style="position: absolute; height: 20px; width: 20px; left: 708.175px; top: 655.675px; visibility: visible;" dragid="jsPlumb_1_756" elid="jsPlumb_1_712"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><svg style="position:absolute;left:697.5px;top:45.5px" width="51" height="670.6750366687775" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 0 C 50 -50 10.175018310546875 619.6750366687775 20.175018310546875 569.6750366687775 " transform="translate(0.5,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M24.094672045326234,99.29711979381415 L31.84789198619985,119.01735256496673 L24.62544882009608,113.2870546047904 L17.857957175223607,119.54812933973656 L24.094672045326234,99.29711979381415" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path></svg><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full connected" style="position: absolute; height: 20px; width: 20px; left: 688px; top: 86px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_771" style="position: absolute; transform: translate(-50%, -50%); left: 722.588px; top: 380.338px;">loop</div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
