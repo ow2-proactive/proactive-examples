@@ -1,0 +1,709 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Azure_Databricks_Resize_Cluster" onTaskError="cancelJob" priority="normal" projectName="04. Azure Databricks" tags="REST API,Azure,Big Data,Databricks,Spark" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+      <variable advanced="false" description="The subscription id of your Microsoft Azure account." group="Subscription Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="SUBSCRIPTION_ID" value="change-it-and-put-your-azure-subscription-id"/>
+    <variable advanced="true" description="The tenant id of your Microsoft Azure account." group="Subscription Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="TENANT_ID" value="change-it-and-put-your-azure-tenant-id"/>
+    <variable advanced="true" description="ID of a Azure client application." group="Subscription Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="APP_ID" value="change-it-and-put-your-azure-client-application-id"/>
+    <variable advanced="true" description="Secret key of the Azure client application." group="Subscription Parameters" hidden="false" model="PA:HIDDEN" name="PASSWORD" value="ENC(L/ks1WBUEKZZ2K0wm+3i1A==)"/>
+    <variable advanced="false" description="Hidden variable that contains the authentication endpoint of Azure REST API." group="Subscription Parameters" hidden="true" model="PA:URL" name="AUTHENTICATION_ENDPOINT" value="https://login.microsoftonline.com"/>
+    <variable advanced="false" description="URL of the targeted Databricks workspace." group="Cluster Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="DATABRICKS_WORKSPACE_URL" value="adb-123456789101112.1.azuredatabricks.net"/>
+    <variable advanced="false" description="ID of the Spark cluster to be resized." group="Cluster Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="SPARK_CLUSTER_ID" value="0123-012345-abc1defg"/>
+    <variable advanced="false" description="Boolean value indicating whether the autoscaling feature (of Databricks Spark) is activated or not." group="Resizing Parameters" hidden="false" model="PA:BOOLEAN" name="AUTOSCALING" value="false"/>
+    <variable advanced="false" description="Number of Spark workers (to be used when the autoscaling feature is set to false)." group="Resizing Parameters" hidden="false" model="PA:INTEGER" name="NUMBER_OF_WORKERS" value="2"/>
+    <variable advanced="false" description="Minimal number of Spark workers (to be used when the autoscaling feature is set to true)." group="Resizing Parameters" hidden="false" model="PA:INTEGER" name="MIN_WORKERS" value="1"/>
+    <variable advanced="false" description="Maximal number of Spark workers (to be used when the autoscaling feature is set to true)." group="Resizing Parameters" hidden="false" model="PA:INTEGER" name="MAX_WORKERS" value="4"/>
+    <variable advanced="false" description="SPEL expression handling the variables to show with respect to the autoscaling setting." group="Resizing Parameters" hidden="true" model="PA:SPEL(variables['AUTOSCALING'] == 'false' ?  showVar('NUMBER_OF_WORKERS') &amp;&amp; hideVar('MIN_WORKERS') &amp;&amp; hideVar('MAX_WORKERS') : hideVar('NUMBER_OF_WORKERS') &amp;&amp; showVar('MIN_WORKERS') &amp;&amp; showVar('MAX_WORKERS'))" name="AUTOSCALING_HANDLER" value=""/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that uses Azure REST API to resize a Databricks Spark cluster. The workflow waits until the resizing operation is effectively performed. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="data-big-data"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png"/>
+<info name="Documentation" value="https://learn.microsoft.com/en-us/azure/databricks/"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="ad_token_for_azure_databricks">
+      <description>
+        <![CDATA[ A task performing a POST request to Azure REST API in order to authenticate to Azure Active Directory (AD) and acquire an authentication token for Databricks REST operations. ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${AUTHENTICATION_ENDPOINT}"/>
+        <variable description="Path of the request (relative to the base url)" inherited="false" name="PATH" value="/${TENANT_ID}/oauth2/token"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="Content-Type of the request" inherited="false" name="CONTENT_TYPE" value="application/x-www-form-urlencoded"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." hidden="false" inherited="false" name="REQUEST_BODY" value="&amp;grant_type=client_credentials&amp;client_id=${APP_ID}&amp;client_secret=%PASSWORD%&amp;resource=2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY").replace("%PASSWORD%",variables.get("PASSWORD")))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+
+variables.put("ACCESS_TOKEN",result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+// =========== Manage Azure Access token ============
+def slurper = new JsonSlurper()
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+access_token=jsonData.access_token
+variables.put("AZURE_DATABRICKS_ACCESS_TOKEN",access_token)
+println variables.get("AZURE_DATABRICKS_ACCESS_TOKEN")
+
+expires_on=jsonData.expires_on
+variables.put("AZURE_DATABRICKS_ACCESS_TOKEN_EXPIRES_ON",expires_on)
+println variables.get("AZURE_DATABRICKS_ACCESS_TOKEN_EXPIRES_ON")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            232
+        </positionTop>
+        <positionLeft>
+            551.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="resize_databricks_spark_cluster">
+      <description>
+        <![CDATA[ A task performing a POST request to Azure Databricks REST API, in order to resize a Databricks Spark cluster.
+
+This task requires the Azure authentication token provided by the task "ad_token_for_azure_databricks". ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="https://${DATABRICKS_WORKSPACE_URL}/api/2.0/clusters"/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/resize"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="text/html;charset=utf-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" name="REQUEST_BODY" value="${RESIZE_JSON_PAYLOAD}"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="cluster_id"/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;Authorization&quot;: &quot;Bearer ${AZURE_DATABRICKS_ACCESS_TOKEN}&quot; }"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="prepare_resizing_payload_payload"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            488
+        </positionTop>
+        <positionLeft>
+            551.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="get_databricks_spark_cluster_info">
+      <description>
+        <![CDATA[ A task performing a Get request to Azure Databricks REST API in order to check the status of the resize operation for the given Spark cluster. This task is executed iteratively (an iteration per minute) until the resize operation is finished.
+
+This task requires the Azure authentication token provided by the task "ad_token_for_azure_databricks". ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="https://${DATABRICKS_WORKSPACE_URL}/api/2.0/clusters"/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/get"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;Authorization&quot;: &quot;Bearer ${AZURE_DATABRICKS_ACCESS_TOKEN}&quot; }"/>
+        <variable advanced="false" hidden="false" inherited="false" name="REQUEST_BODY" value="{ &quot;cluster_id&quot;: &quot;${SPARK_CLUSTER_ID}&quot; }"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="resize_databricks_spark_cluster"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("PARAMETERS") != null && variables.get("PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.param(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="get_databricks_spark_cluster_info">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+action=variables.get("ACTION")
+if (action=="continue"){
+   loop= "* * * * *"
+} else if (action=="stop"){
+   loop=false
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+def slurper = new JsonSlurper()
+
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+clusterState=jsonData.state
+println clusterState
+
+LinkedHashMap resMap = [:]
+
+if (clusterState=="RESIZING"){
+   variables.put("ACTION","continue")
+} else if (clusterState=="RUNNING"){
+    
+    if (variables.get("AUTOSCALING").toLowerCase()=="true"){
+        minRequiredNumWorkers=variables.get("MIN_WORKERS") as int
+        minWorkers=jsonData.autoscale.min_workers as int
+            
+        maxRequiredNumWorkers=variables.get("MAX_WORKERS") as int
+        maxWorkers=jsonData.autoscale.max_workers as int
+            
+        if (minWorkers==minRequiredNumWorkers && maxWorkers==maxRequiredNumWorkers){
+            variables.put("ACTION","stop")
+            resMap.put("Autoscaling MIN Spark Workers",minWorkers)
+            resMap.put("Autoscaling MAX Spark Workers",maxWorkers)
+        } else {
+             throw new Exception("Databricks Spark cluster resizing operation failed. The current minimal number of workers is ${minWorkers}, whereas the required minimal number of workers 				is ${minRequiredNumWorkers}. The current maximal number of workers is ${maxWorkers}, whereas the required maximal number of workers is ${maxRequiredNumWorkers}.")
+        }
+    } else {
+        requiredNumWorkers=variables.get("NUMBER_OF_WORKERS") as int
+        numWorkers=jsonData.num_workers as int
+        if (numWorkers==requiredNumWorkers){
+            variables.put("ACTION","stop")
+            resMap.put("Number of Spark workers",numWorkers)
+        } else {
+             throw new Exception("Databricks Spark cluster resizing operation failed. The current number of workers is ${numWorkers}, whereas the required number of workers is 						${requiredNumWorkers}.")
+        }   
+    }   
+} else if (clusterState=="ERROR" || clusterState=="UNKNOWN"){
+   throw new Exception("Databricks Spark cluster deployment "+ clusterState)
+} else if (clusterState=="TERMINATING" || clusterState=="TERMINATED"){
+   throw new Exception("Databricks Spark cluster "+ clusterState +" via an external action")
+}
+
+resultMap.putAll(resMap)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            616
+        </positionTop>
+        <positionLeft>
+            551.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="prepare_resizing_payload_payload">
+      <description>
+        <![CDATA[ A groovy task that prepares the JSON payload needed for the resize the Databricks Spark cluster, based on the parameters given as input by the user. These parameters are: AUTOSCALING, NUMBER_OF_WORKERS, MIN_WORKERS and MAX_WORKERS. ]]>
+      </description>
+      <depends>
+        <task ref="ad_token_for_azure_databricks"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+jsonPayload=""
+
+clusterID=variables.get("SPARK_CLUSTER_ID")
+
+if (variables.get("AUTOSCALING").toLowerCase()=="true"){
+    minWorkers=variables.get("MIN_WORKERS")
+    maxWorkers=variables.get("MAX_WORKERS")
+    jsonPayload="{\"cluster_id\": \"${clusterID}\", \"autoscale\" : {\"min_workers\": ${minWorkers},\"max_workers\": ${maxWorkers} }}"
+} else {
+    nbWorkers=variables.get("NUMBER_OF_WORKERS")
+    jsonPayload="{\"cluster_id\": \"${clusterID}\", \"num_workers\": \"${nbWorkers}\" }"
+}
+
+variables.put("RESIZE_JSON_PAYLOAD",jsonPayload)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            361
+        </positionTop>
+        <positionLeft>
+            551.734375
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2736px;
+            height:3376px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-227px;left:-546.734375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_412" style="top: 232.016px; left: 551.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a POST request to Azure REST API in order to authenticate to Azure Active Directory (AD) and acquire an authentication token for Databricks REST operations."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png" width="20px">&nbsp;<span class="name">ad_token_for_azure_databricks</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_415" style="top: 488.015px; left: 551.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a POST request to Azure Databricks REST API, in order to resize a Databricks Spark cluster.
+
+This task requires the Azure authentication token provided by the task &quot;ad_token_for_azure_databricks&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png" width="20px">&nbsp;<span class="name">resize_databricks_spark_cluster</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_418" style="top: 616.015px; left: 551.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a Get request to Azure Databricks REST API in order to check the status of the resize operation for the given Spark cluster. This task is executed iteratively (an iteration per minute) until the resize operation is finished.
+
+This task requires the Azure authentication token provided by the task &quot;ad_token_for_azure_databricks&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png" width="20px">&nbsp;<span class="name">get_databricks_spark_cluster_info</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_421" style="top: 361.015px; left: 551.734px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that prepares the JSON payload needed for the resize the Databricks Spark cluster, based on the parameters given as input by the user. These parameters are: AUTOSCALING, NUMBER_OF_WORKERS, MIN_WORKERS and MAX_WORKERS."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">prepare_resizing_payload_payload</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><svg style="position:absolute;left:633px;top:400.5px" width="27.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 87 C -10 37 16.5 50 6.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.287796875,65.86284375000001 L6.937523466860352,46.78685191235085 L-0.6983926531040523,51.95335798598201 L-6.971962297157646,45.1974476904549 L-2.287796875,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.287796875,65.86284375000001 L6.937523466860352,46.78685191235085 L-0.6983926531040523,51.95335798598201 L-6.971962297157646,45.1974476904549 L-2.287796875,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:633px;top:527.5px" width="25.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4.5 88 C 14.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,66.78168750000002 L12.19383263091469,46.25114034666338 L5.739082405354392,52.834163932040326 L-1.7536909370449987,47.46216731630898 L6.950109375,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,66.78168750000002 L12.19383263091469,46.25114034666338 L5.739082405354392,52.834163932040326 L-1.7536909370449987,47.46216731630898 L6.950109375,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:733.5px;top:605.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_435" style="position: absolute; transform: translate(-50%, -50%); left: 758.5px; top: 635.5px;">loop</div><svg style="position:absolute;left:631.5px;top:271.5px" width="29" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 8 89 C 18 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.149632,67.21769599999999 L14.40690958201079,46.46015309170498 L8.273904868485769,53.343920460223465 L0.5331340422342654,48.335880223219206 L10.149632,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.149632,67.21769599999999 L14.40690958201079,46.46015309170498 L8.273904868485769,53.343920460223465 L0.5331340422342654,48.335880223219206 L10.149632,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 632px; top: 262px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 633.5px; top: 518px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 633.5px; top: 478px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 638px; top: 646px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 638px; top: 606px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 734px; top: 606px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 734px; top: 646px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 640px; top: 391px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 640px; top: 351px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
