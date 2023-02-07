@@ -1,0 +1,1087 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Azure_Databricks_Delete_Spark_Cluster" onTaskError="continueJobExecution" priority="normal" projectName="04. Azure Databricks" tags="REST API,Azure,Big Data,Databricks,Spark" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+       <variable advanced="false" description="The subscription id of your Microsoft Azure account." group="Subscription Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="SUBSCRIPTION_ID" value="change-it-and-put-your-azure-subscription-id"/>
+    <variable advanced="true" description="The tenant id of your Microsoft Azure account." group="Subscription Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="TENANT_ID" value="change-it-and-put-your-azure-tenant-id"/>
+    <variable advanced="true" description="ID of a Azure client application." group="Subscription Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="APP_ID" value="change-it-and-put-your-azure-client-application-id"/>
+    <variable advanced="true" description="Secret key of the Azure client application." group="Subscription Parameters" hidden="false" model="PA:HIDDEN" name="PASSWORD" value="ENC(L/ks1WBUEKZZ2K0wm+3i1A==)"/>
+    <variable advanced="false" description="Hidden variable that contains the authentication endpoint of Azure REST API." hidden="true" model="PA:URL" name="AUTHENTICATION_ENDPOINT" value="https://login.microsoftonline.com"/>
+    <variable advanced="false" description="Hidden variable that contains the REST endpoint for managing Azure HDInsight clusters." hidden="true" model="PA:URL" name="MANAGEMENT_ENDPOINT" value="https://management.azure.com"/>
+    <variable advanced="true" description="Name of the Resource Group to be deleted." group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="RESOURCE_GROUP_NAME" value="RG-of-${SPARK_CLUSTER_NAME}"/>
+    <variable advanced="true" description="Name of the Deployment (of Databricks workspace) to be deleted." group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="DEPLOYMENT_NAME" value="Deployment-of-${SPARK_CLUSTER_NAME}"/>
+    <variable advanced="false" description="URL of the Databricks workspace to be deleted." group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="DATABRICKS_WORKSPACE_URL" value="adb-123456789101112.1.azuredatabricks.net"/>
+    <variable advanced="false" description="Name of the Spark cluster to be deleted." group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="SPARK_CLUSTER_NAME" value="activeeon-databricks-spark-cluster-${PA_JOB_ID}"/>
+    <variable advanced="false" description="ID of the Spark cluster to be deleted." group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="SPARK_CLUSTER_ID" value="0123-012345-abc1defg"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that uses Azure REST API to delete a Databricks Spark cluster and associated resources. Once the deletion operation is enacted, the workflow waits until the cluster is effectively deleted. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="data-big-data"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png"/>
+<info name="Documentation" value="https://learn.microsoft.com/en-us/azure/databricks/"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="ad_token_for_azure_databricks">
+      <description>
+        <![CDATA[ A task performing a POST request to Azure REST API in order to authenticate to Azure Active Directory (AD) and acquire an authentication token for Databricks REST operations. ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${AUTHENTICATION_ENDPOINT}"/>
+        <variable description="Path of the request (relative to the base url)" inherited="false" name="PATH" value="/${TENANT_ID}/oauth2/token"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="Content-Type of the request" inherited="false" name="CONTENT_TYPE" value="application/x-www-form-urlencoded"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." hidden="false" inherited="false" name="REQUEST_BODY" value="&amp;grant_type=client_credentials&amp;client_id=${APP_ID}&amp;client_secret=%PASSWORD%&amp;resource=2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY").replace("%PASSWORD%",variables.get("PASSWORD")))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+
+variables.put("ACCESS_TOKEN",result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+// =========== Manage Azure Access token ============
+def slurper = new JsonSlurper()
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+access_token=jsonData.access_token
+variables.put("AZURE_DATABRICKS_ACCESS_TOKEN",access_token)
+println variables.get("AZURE_DATABRICKS_ACCESS_TOKEN")
+
+expires_on=jsonData.expires_on
+variables.put("AZURE_DATABRICKS_ACCESS_TOKEN_EXPIRES_ON",expires_on)
+println variables.get("AZURE_DATABRICKS_ACCESS_TOKEN_EXPIRES_ON")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            453.625
+        </positionTop>
+        <positionLeft>
+            599.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="delete_databricks_spark_cluster">
+      <description>
+        <![CDATA[ A task performing a POST request to Azure Databricks REST API, in order to delete a Databricks Spark cluster.
+
+This task requires the Azure authentication token provided by the task "ad_token_for_azure_databricks". ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="https://${DATABRICKS_WORKSPACE_URL}/api/2.0/clusters"/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/delete"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="text/html;charset=utf-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{ &quot;cluster_id&quot;: &quot;${SPARK_CLUSTER_ID}&quot; }"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;Authorization&quot;: &quot;Bearer ${AZURE_DATABRICKS_ACCESS_TOKEN}&quot; }"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="ad_token_for_azure_databricks"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            580.625
+        </positionTop>
+        <positionLeft>
+            612.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="ad_token_for_azure_resources">
+      <description>
+        <![CDATA[ A task performing a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token. ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${AUTHENTICATION_ENDPOINT}"/>
+        <variable description="Path of the request (relative to the base url)" inherited="false" name="PATH" value="/${TENANT_ID}/oauth2/token"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="Content-Type of the request" inherited="false" name="CONTENT_TYPE" value="application/x-www-form-urlencoded"/>
+        <variable description="A JSON parameter containing the request body." inherited="false" name="REQUEST_BODY" value="&amp;grant_type=client_credentials&amp;client_id=${APP_ID}&amp;client_secret=%PASSWORD%&amp;resource=https%3A%2F%2Fmanagement.azure.com%2F"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="delete_databricks_spark_cluster"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY").replace("%PASSWORD%",variables.get("PASSWORD")))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+
+variables.put("ACCESS_TOKEN",result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+// =========== Manage Azure Access token ============
+def slurper = new JsonSlurper()
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+access_token=jsonData.access_token
+variables.put("ACCESS_TOKEN",access_token)
+println variables.get("ACCESS_TOKEN")
+
+expires_on=jsonData.expires_on
+variables.put("EXPIRES_ON",expires_on)
+println variables.get("EXPIRES_ON")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            709.625
+        </positionTop>
+        <positionLeft>
+            599.234375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="delete_resource_group">
+      <description>
+        <![CDATA[ A task performing a DELETE request to Azure REST API in order to remove a resource group, which name is given as input.
+
+This task requires the Azure authentication token provided by the task "ad_token_for_azure_resources". ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable description="Path of the request (relative to the base url)" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}?api-version=2020-10-01"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="Content-Type of the request" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable description="A JSON parameter containing the request body." inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{}"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" inherited="false" name="RESPONSE_PATH" value=""/>
+        <variable description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_resource_group.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="delete_databricks_deployment"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("AZURE_PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("AZURE_PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.delete(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            965.640625
+        </positionTop>
+        <positionLeft>
+            599.234375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="delete_databricks_deployment">
+      <description>
+        <![CDATA[ A task performing a DELETE request to Azure REST API in order to undeploy a Databricks Workspace, which name is given as input.
+
+This task requires the Azure authentication token provided by the task "ad_token_for_azure_resources". ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable description="Path of the request (relative to the base url)" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Resources/deployments/${DEPLOYMENT_NAME}?api-version=2020-10-01"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="Content-Type of the request" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable description="A JSON parameter containing the request body." inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{}"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" inherited="false" name="RESPONSE_PATH" value=""/>
+        <variable description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="ad_token_for_azure_resources"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("AZURE_PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("AZURE_PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.delete(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            835.640625
+        </positionTop>
+        <positionLeft>
+            599.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" maxNumberOfExecution="1" name="check_delete_operation">
+      <description>
+        <![CDATA[ A task that performs iteratively a GET request to Azure  REST API, in order to get information about the status of the resource group deletion.
+
+This task requires the Azure authentication token provided by the task "ad_token_for_azure_resources". ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}?api-version=2020-10-01"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_resource_group.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="delete_resource_group"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.head(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+if (response.statusCode==HttpStatus.SC_NOT_FOUND) {
+    variables.put("CLUSTER_STATE","NOT_FOUND")
+} else {
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_NO_CONTENT)
+  .extract();
+}
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="check_delete_operation">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+loop=variables.get("LOOP")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+loop = "* * * * *"
+
+if (variables.get("CLUSTER_STATE")=="NOT_FOUND"){
+	loop = "false"
+}
+
+variables.put("LOOP", loop)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            1093.640625
+        </positionTop>
+        <positionLeft>
+            598.25
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2736px;
+            height:3132px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-448.625px;left:-593.25px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_973" style="top: 453.64px; left: 599.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a POST request to Azure REST API in order to authenticate to Azure Active Directory (AD) and acquire an authentication token for Databricks REST operations."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png" width="20px">&nbsp;<span class="name">ad_token_for_azure_databricks</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_976" style="top: 580.64px; left: 612.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a POST request to Azure Databricks REST API, in order to delete a Databricks Spark cluster.
+
+This task requires the Azure authentication token provided by the task &quot;ad_token_for_azure_databricks&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png" width="20px">&nbsp;<span class="name">delete_databricks_spark_cluster</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_979" style="top: 709.64px; left: 599.234px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png" width="20px">&nbsp;<span class="name">ad_token_for_azure_resources</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_982" style="top: 965.656px; left: 599.234px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a DELETE request to Azure REST API in order to remove a resource group, which name is given as input.
+
+This task requires the Azure authentication token provided by the task &quot;ad_token_for_azure_resources&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_resource_group.png" width="20px">&nbsp;<span class="name">delete_resource_group</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_985" style="top: 835.656px; left: 599.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a DELETE request to Azure REST API in order to undeploy a Databricks Workspace, which name is given as input.
+
+This task requires the Azure authentication token provided by the task &quot;ad_token_for_azure_resources&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/databricks.png" width="20px">&nbsp;<span class="name">delete_databricks_deployment</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_988" style="top: 1093.66px; left: 598.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs iteratively a GET request to Azure  REST API, in order to get information about the status of the resource group deletion.
+
+This task requires the Azure authentication token provided by the task &quot;ad_token_for_azure_resources&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_resource_group.png" width="20px">&nbsp;<span class="name">check_delete_operation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><svg style="position:absolute;left:679px;top:493.5px" width="35.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 14.5 87 C 24.5 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M16.093647999999998,65.388768 L18.52248221584758,44.33880922683542 L13.013865417967027,51.73172076249634 L4.8654349783439255,47.4185918088684 L16.093647999999998,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M16.093647999999998,65.388768 L18.52248221584758,44.33880922683542 L13.013865417967027,51.73172076249634 L4.8654349783439255,47.4185918088684 L16.093647999999998,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:678px;top:620.5px" width="36.5" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 25.5 50 15.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.5081120000000008,67.21769599999999 L9.84162374045087,49.32402397266217 L1.664151137298745,53.58183348280895 L-3.794238776740168,46.151760835363426 L-1.5081120000000008,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.5081120000000008,67.21769599999999 L9.84162374045087,49.32402397266217 L1.664151137298745,53.58183348280895 L-3.794238776740168,46.151760835363426 L-1.5081120000000008,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:660px;top:875.5px" width="37.5" height="91" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 90 C -10 40 26.5 50 16.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.3644536250000012,67.650705 L10.252780363216113,49.92953476598226 L2.012274289848046,54.06403106599077 L-3.3338935707931228,46.552806851134214 L-1.3644536250000012,67.650705" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.3644536250000012,67.650705 L10.252780363216113,49.92953476598226 L2.012274289848046,54.06403106599077 L-3.3338935707931228,46.552806851134214 L-1.3644536250000012,67.650705" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:676.5px;top:749.5px" width="22.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 86 C -10 36 11.5 50 1.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.6935781249999997,64.94400000000002 L5.280145542563307,45.311890310174505 L-2.006059467283238,50.96089168692129 L-8.702962770515416,44.62437165245774 L-2.6935781249999997,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.6935781249999997,64.94400000000002 L5.280145542563307,45.311890310174505 L-2.006059467283238,50.96089168692129 L-8.702962770515416,44.62437165245774 L-2.6935781249999997,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:660px;top:1005.5px" width="22" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 1 88 C 11 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.7341562499999994,66.78168750000002 L9.900828592736769,46.50923939383077 L3.155021153255475,52.793671109542124 L-4.087187797721125,47.08837449057529 L3.7341562499999994,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.7341562499999994,66.78168750000002 L9.900828592736769,46.50923939383077 L3.155021153255475,52.793671109542124 L-4.087187797721125,47.08837449057529 L3.7341562499999994,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:734.5px;top:1083.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1011" style="position: absolute; transform: translate(-50%, -50%); left: 759.5px; top: 1113.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 679.5px; top: 484px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 694px; top: 611px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 694px; top: 571px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 678.5px; top: 740px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 678.5px; top: 700px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 660.5px; top: 996px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 660.5px; top: 956px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677px; top: 866px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677px; top: 826px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 661.5px; top: 1124px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 661.5px; top: 1084px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 735px; top: 1084px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 735px; top: 1124px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
