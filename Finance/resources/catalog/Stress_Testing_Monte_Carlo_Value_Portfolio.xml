@@ -3,14 +3,19 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Stress_Testing_Monte_Carlo_Value_Portfolio" tags="QuantLib,Cpp,Finance,Pricing,Bale,Risk,Solvency,Black-Scholes" projectName="Risk Valuation Workflows" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2" >
   <variables>
-    <variable name="nb_MC_per_ptf_value" group="Simulation" value="1000" description="The number of Monte Carlo simulations per portfolio estimation."/>
-    <variable name="nb_time_steps" group="Simulation" value="255" description="The number of time steps to the horizon."/>
-    <variable name="stress_horizon" group="Simulation" value="1" description="The stress horizon in year fraction."/>
-    <variable name="assets_params_file_path_from_dataspace" group="Simulation" value="assets.txt" description="The relative path from the dataspace of the asset params file following the csv format."/>
-    <variable name="assets_correlations_file_path_from_dataspace" group="Simulation" value="assets_correlations.txt" description="The relative path from the dataspace of the asset correlations file."/>
-    <variable name="stressed_risk_free_rate_min_max_in_percent_and_steps" group="Simulation" value="-10%,+10%,8" description="The min, max, step of the stressed risk free rate range."/>
-    <variable name="stressed_volatility_min_max_in_percent_and_steps" group="Simulation" value="-5%,+5%,8" description="The min, max, step of the stressed volatility rate range."/>
-    <variable name="nb_replicated_tasks" group="Parallelization" value="4" description="The number of ProActive replicated tasks which must divide the risk free rate step number x the volatility step number. These latter are deduced from stressed_risk_free_rate_min_max_in_percent_and_steps and stressed_volatility_min_max_in_percent_and_steps respectively."/>
+    <variable name="nb_MC_per_ptf_value" value="1000" model="PA:INTEGER" description="The number of Monte Carlo simulations per portfolio estimation." group="Simulation" advanced="false" />
+    <variable name="nb_time_steps" value="255" model="PA:INTEGER" description="The number of time steps to the horizon." group="Simulation" advanced="false" />
+    <variable name="stress_horizon" value="1" model="PA:FLOAT" description="The stress horizon in year fraction." group="Simulation" advanced="false" />
+    <variable name="assets_params_file_path_from_dataspace" value="assets.txt" model="PA:GLOBAL_FILE" description="The relative path from the dataspace of the asset params file following the csv format." group="Simulation" advanced="false" />
+    <variable name="assets_correlations_file_path_from_dataspace" value="assets_correlations.txt" model="PA:GLOBAL_FILE" description="The relative path from the dataspace of the asset correlations file." group="Simulation" advanced="false" />
+    <variable name="stressed_risk_free_rate_in_percent_range_min" value="-10" model="PA:INTEGER" description="The min of the stressed risk free rate range." group="Simulation" advanced="false" />
+    <variable name="stressed_risk_free_rate_in_percent_range_max" value="+10" model="PA:INTEGER" description="The max of the stressed risk free rate range." group="Simulation" advanced="false" />
+    <variable name="stressed_risk_free_rate_range_nb_steps" value="8" model="PA:INTEGER" description="The step number of the stressed risk free rate range." group="Simulation" advanced="false" />
+    <variable name="stressed_volatility_in_percent_range_min" value="-5" model="PA:INTEGER" description="The min of the stressed volatility rate range." group="Simulation" advanced="false" />
+    <variable name="stressed_volatility_in_percent_range_max" value="+5" model="PA:INTEGER" description="The max of the stressed volatility rate range." group="Simulation" advanced="false" />
+    <variable name="stressed_volatility_range_nb_steps" value="8" model="PA:INTEGER" description="The step number of the stressed volatility rate range." group="Simulation" advanced="false" />
+    <variable name="nb_replicated_tasks" value="4" model="PA:INTEGER" description="The number of ProActive replicated tasks which must divide stressed_risk_free_rate_range_nb_steps x stressed_volatility_range_nb_steps." group="Parallelization" advanced="false" />
+    <variable name="PARAMS_CHECK" value="" model="PA:SPEL((T(Integer).parseInt(variables[&#x27;stressed_risk_free_rate_range_nb_steps&#x27;]) * T(Integer).parseInt(variables[&#x27;stressed_volatility_range_nb_steps&#x27;])) % T(Integer).parseInt(variables[&#x27;nb_replicated_tasks&#x27;]) == 0 )" description="Check (stressed_risk_free_rate_range_nb_steps x stressed_volatility_range_nb_steps) % nb_replicated_tasks == 0"  advanced="false" hidden="true"/>
     <variable name="DOCKER_ENABLED" group="Others" value="True" model="PA:Boolean" description="If true, the workflow tasks will be executed inside a docker container"/>
   </variables>
   <description>
@@ -114,49 +119,42 @@ resultMetadata.put("content.type", "image/png")
 println "init_stress_testing..."
 
 // Retrieve variables
-def stressed_risk_free_rate_min_max_in_percent_and_steps = variables.get("stressed_risk_free_rate_min_max_in_percent_and_steps")
-def stressed_volatility_min_max_in_percent_and_steps = variables.get("stressed_volatility_min_max_in_percent_and_steps")
+def stressed_risk_free_rate_in_percent_range_min = variables.get("stressed_risk_free_rate_in_percent_range_min") as Integer
+def stressed_risk_free_rate_in_percent_range_max = variables.get("stressed_risk_free_rate_in_percent_range_max") as Integer
+def stressed_risk_free_rate_range_nb_steps = variables.get("stressed_risk_free_rate_range_nb_steps") as Integer
+def stressed_volatility_in_percent_range_min = variables.get("stressed_volatility_in_percent_range_min") as Integer
+def stressed_volatility_in_percent_range_max = variables.get("stressed_volatility_in_percent_range_max") as Integer
+def stressed_volatility_range_nb_steps = variables.get("stressed_volatility_range_nb_steps") as Integer
 def nb_replicated_tasks = variables.get("nb_replicated_tasks") as Integer
 def assets_params_file_path_from_dataspace = variables.get("assets_params_file_path_from_dataspace")
-
-// Deduce other variables
-def stressed_risk_free_rate_min_max_in_percent_and_steps_arr = stressed_risk_free_rate_min_max_in_percent_and_steps.split(",")
-def stressed_risk_free_rate_min_in_percent = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[0].replaceAll("%", "") as Integer
-def stressed_risk_free_rate_max_in_percent = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[1].replaceAll("%", "") as Integer
-def stressed_risk_free_rate_steps = stressed_risk_free_rate_min_max_in_percent_and_steps_arr[2] as Integer
-
-def stressed_volatility_min_max_in_percent_and_steps_arr = stressed_volatility_min_max_in_percent_and_steps.split(",")
-def stressed_volatility_min_in_percent = stressed_volatility_min_max_in_percent_and_steps_arr[0].replaceAll("%", "") as Integer
-def stressed_volatility_max_in_percent = stressed_volatility_min_max_in_percent_and_steps_arr[1].replaceAll("%", "") as Integer
-def stressed_volatility_steps = stressed_volatility_min_max_in_percent_and_steps_arr[2] as Integer
 
 def nb_assets = new File(localspace, assets_params_file_path_from_dataspace).text.split(System.getProperty("line.separator")).length
 variables["nb_assets"] = nb_assets
 
 // Check split params validity
-def total_nb_steps = stressed_risk_free_rate_steps * stressed_volatility_steps
+def total_nb_steps = stressed_risk_free_rate_range_nb_steps * stressed_volatility_range_nb_steps
 def nb_steps_per_task = total_nb_steps / nb_replicated_tasks
 if (total_nb_steps % nb_replicated_tasks != 0)
 	throw new Exception("total_nb_steps % nb_replicated_tasks != 0")
 
 // Compute ranges
-def stressed_risk_free_rate_step_size_in_percent = (stressed_risk_free_rate_max_in_percent - stressed_risk_free_rate_min_in_percent) / (stressed_risk_free_rate_steps - 1)
-def stressed_volatility_step_size_in_percent = (stressed_volatility_max_in_percent - stressed_volatility_min_in_percent) / (stressed_volatility_steps - 1)
+def stressed_risk_free_rate_step_size_in_percent = (stressed_risk_free_rate_in_percent_range_max - stressed_risk_free_rate_in_percent_range_min) / (stressed_risk_free_rate_range_nb_steps - 1)
+def stressed_volatility_step_size_in_percent = (stressed_volatility_in_percent_range_max - stressed_volatility_in_percent_range_min) / (stressed_volatility_range_nb_steps - 1)
 def i = 0, j = 0, step_id = 0, task_id = 0
 def steps_to_consider_per_task = []
-while (i < stressed_risk_free_rate_steps)
+while (i < stressed_risk_free_rate_range_nb_steps)
 {
     // Compute current_stressed_risk_free_rate_in_percent
-    def current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_min_in_percent + i * stressed_risk_free_rate_step_size_in_percent
-    if (i == stressed_risk_free_rate_steps - 1)
-    	current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_max_in_percent
+    def current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_in_percent_range_min + i * stressed_risk_free_rate_step_size_in_percent
+    if (i == stressed_risk_free_rate_range_nb_steps - 1)
+    	current_stressed_risk_free_rate_in_percent = stressed_risk_free_rate_in_percent_range_max
 
-    while (j < stressed_volatility_steps)
+    while (j < stressed_volatility_range_nb_steps)
     {
         // Compute current_stressed_risk_free_rate_in_percent
-    	def current_stressed_volatility_in_percent = stressed_volatility_min_in_percent + j * stressed_volatility_step_size_in_percent
-    	if (j == stressed_volatility_steps - 1)
-    		current_stressed_volatility_in_percent = stressed_volatility_max_in_percent
+    	def current_stressed_volatility_in_percent = stressed_volatility_in_percent_range_min + j * stressed_volatility_step_size_in_percent
+    	if (j == stressed_volatility_range_nb_steps - 1)
+    		current_stressed_volatility_in_percent = stressed_volatility_in_percent_range_max
 
         // Add another step pair
         steps_to_consider_per_task += [[current_stressed_risk_free_rate_in_percent, current_stressed_volatility_in_percent]]
