@@ -6,6 +6,7 @@
 
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.api.IpUtilsRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 import org.ow2.proactive.pca.service.client.model.Container
 import org.ow2.proactive.pca.service.client.model.Endpoint
@@ -22,45 +23,11 @@ def httpEnabled = variables.get("HTTP_ENABLED") // e.g. Visdom, Tensorboard
 def httpsEnabled = variables.get("HTTPS_ENABLED") // e.g. MaaS, JupyterLab
 def engine = variables.get("ENGINE") // docker, singularity
 
-// Handle service parameters
-def hostname = variables.get("PA_NODE_HOST")
-def port = new File(instanceName+"_port").text.trim()
-
-def containerID="";
-if ("docker".equalsIgnoreCase(engine)) {
-    containerID = new File(instanceName+"_containerID").text.trim()
-    if ("".equals(containerID)) {
-        println("Docker container didn't started, terminating execution.")
-        return;
-    }
-}
-
-def containerUrl = hostname + ":" + port
-if (httpsEnabled != null){
-    if ("true".equalsIgnoreCase(httpsEnabled)){
-        containerUrl = "https://"+containerUrl
-    }else{
-        containerUrl = "http://"+containerUrl
-    }
-}else{
-    if (httpEnabled != null && "true".equalsIgnoreCase(httpEnabled)){
-        containerUrl = "http://" + containerUrl
-    } else if(binding.variables["args"] && args.length > 0 && !args[0].trim().isEmpty()){
-        containerUrl = args[0] + "://" + containerUrl
-    } else {
-        containerUrl = null;
-    }
-}
-
-println "containerUrl: " + containerUrl
-
-variables.put("HOSTNAME", hostname)
-variables.put("PORT", port)
-
-// Determine Cloud Automation URL
-def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
-
 try {
+
+    // Determine Cloud Automation URL
+    def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+
     // Get schedulerapi access and acquire session id
     schedulerapi.connect()
     def sessionId = schedulerapi.getSession()
@@ -69,6 +36,46 @@ try {
     def apiClient = new ApiClient()
     apiClient.setBasePath(pcaUrl)
     def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+
+    def ipUtilsRestApi = new IpUtilsRestApi(apiClient)
+
+    // Handle service parameters
+    def hostname = ipUtilsRestApi.getMyRemotePublicAddrUsingGET(sessionId)
+    if (hostname.equals("127.0.0.1")) {
+        hostname = variables.get("PA_NODE_HOST")
+    }
+    def port = new File(instanceName+"_port").text.trim()
+
+    def containerID="";
+    if ("docker".equalsIgnoreCase(engine)) {
+        containerID = new File(instanceName+"_containerID").text.trim()
+        if ("".equals(containerID)) {
+            println("Docker container didn't started, terminating execution.")
+            return;
+        }
+    }
+
+    def containerUrl = hostname + ":" + port
+    if (httpsEnabled != null){
+        if ("true".equalsIgnoreCase(httpsEnabled)){
+            containerUrl = "https://"+containerUrl
+        }else{
+            containerUrl = "http://"+containerUrl
+        }
+    }else{
+        if (httpEnabled != null && "true".equalsIgnoreCase(httpEnabled)){
+            containerUrl = "http://" + containerUrl
+        } else if(binding.variables["args"] && args.length > 0 && !args[0].trim().isEmpty()){
+            containerUrl = args[0] + "://" + containerUrl
+        } else {
+            containerUrl = null;
+        }
+    }
+
+    println "containerUrl: " + containerUrl
+
+    variables.put("HOSTNAME", hostname)
+    variables.put("PORT", port)
 
     // Implement service model
 
