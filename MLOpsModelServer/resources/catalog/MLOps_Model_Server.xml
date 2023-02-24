@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MLOps_Model_Server" tags="MLOps,Dashboard,Model Management,Model Deployment,Model Monitoring,Triton,Service,Service Automation" onTaskError="continueJobExecution" priority="normal" projectName="2. MLOps Model Server" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MLOps_Model_Server" onTaskError="continueJobExecution" priority="normal" projectName="2. MLOps Model Server" tags="MLOps,Model Deployment,Triton,Dashboard,Service,Model Monitoring,Service Automation,Model Management" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
   <variables>
     <variable advanced="true" description="Name of the node on which the service will be deployed." group="Resource Management" name="NODE_NAME" value=""/>
-    <variable advanced="true" description="Service instance name." group="Proactive Service Parameters" hidden="false" name="INSTANCE_NAME" value="model-server-$PA_JOB_ID"/>
-    <variable advanced="true" description="The endpoint_id that will be used if PROXYFIED is set to True." group="Proactive Service Parameters" hidden="false" name="ENDPOINT_ID" value="model-server-gui-$PA_JOB_ID"/>
+    <variable advanced="true" description="Service instance name." group="Proactive Service Parameters" hidden="false" model="" name="INSTANCE_NAME" value="model-server-$PA_JOB_ID"/>
+    <variable advanced="true" description="The endpoint_id that will be used if PROXYFIED is set to True." group="Proactive Service Parameters" hidden="false" model="" name="ENDPOINT_ID" value="model-server-gui-$PA_JOB_ID"/>
     <variable advanced="false" description="If True, container will run with NVIDIA GPU support." group="MLOps_Model_Server Service Configuration" hidden="false" model="PA:Boolean" name="GPU_ENABLED" value="false"/>
     <variable advanced="false" description="The index of the GPU to be used by Triton. If [all], all GPUs available are used." group="MLOps_Model_Server Service Configuration" hidden="false" model="PA:LIST(all,0,1,2,3,4,5,6,7)" name="GPU_INDEX" value="all"/>
     <variable advanced="true" description="True if a proxy is needed to protect the access to the service endpoint." group="Proactive Service Parameters" hidden="false" model="PA:Boolean" name="PROXYFIED" value="True"/>
@@ -192,6 +192,7 @@ echo END "$variables_PA_TASK_NAME"
 
 import org.ow2.proactive.pca.service.client.ApiClient
 import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.api.IpUtilsRestApi
 import org.ow2.proactive.pca.service.client.model.ServiceInstanceData
 import org.ow2.proactive.pca.service.client.model.Container
 import org.ow2.proactive.pca.service.client.model.Endpoint
@@ -204,166 +205,176 @@ def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def httpsEnabled = variables.get("HTTPS_ENABLED")
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")
-def hostname = variables.get("PA_NODE_HOST")
 def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
 def engine = variables.get("ENGINE")
 
 println("proxyfied:    " + proxyfied)
 println("httpsEnabled: " + httpsEnabled)
 
-// Handle service parameters
-def port_prometheus = new File(instanceName+"_port_prometheus").text.trim()
-def containerUrlPrometheus = hostname+":"+port_prometheus
-def prometheusMetricsEndpoint = "/metrics"
+try {
+    // Determine Cloud Automation URL
+    def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
 
-def port_http = new File(instanceName+"_port_http").text.trim()
-def containerUrlHttp = hostname+":"+port_http
+    // Get schedulerapi access and acquire session id
+    schedulerapi.connect()
+    def sessionId = schedulerapi.getSession()
 
-def port_grpc = new File(instanceName+"_port_grpc").text.trim()
-def containerUrlGrpc = hostname+":"+port_grpc
+    // Connect to Cloud Automation API
+    def apiClient = new ApiClient()
+    apiClient.setBasePath(pcaUrl)
+    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
-def containerID = ""
-if (engine != null && "singularity".equalsIgnoreCase(engine)) {
-    containerID = "0"
-} else {
-    containerID = new File(instanceName+"_containerID").text.trim()
+    // Implement service model
+    def ipUtilsRestApi = new IpUtilsRestApi(apiClient)
+    
+    // Handle service parameters
+    def hostname = ipUtilsRestApi.getMyRemotePublicAddrUsingGET(sessionId)
+    if (hostname.equals("127.0.0.1")) {
+        hostname = variables.get("PA_NODE_HOST")
+    }
+    println("hostname:    " + hostname)
+    
+    def port_prometheus = new File(instanceName+"_port_prometheus").text.trim()
+    def containerUrlPrometheus = hostname+":"+port_prometheus
+    def prometheusMetricsEndpoint = "/metrics"
+
+    def port_http = new File(instanceName+"_port_http").text.trim()
+    def containerUrlHttp = hostname+":"+port_http
+
+    def port_grpc = new File(instanceName+"_port_grpc").text.trim()
+    def containerUrlGrpc = hostname+":"+port_grpc
+
+    def containerID = ""
+    if (engine != null && "singularity".equalsIgnoreCase(engine)) {
+        containerID = "0"
+    } else {
+        containerID = new File(instanceName+"_containerID").text.trim()
+    }
+
+    // Https
+    if ("true".equalsIgnoreCase(httpsEnabled)){
+        containerUrlPrometheusMetrics = "https://"+containerUrlPrometheus+prometheusMetricsEndpoint
+    } else{
+        containerUrlPrometheusMetrics = "http://"+containerUrlPrometheus+prometheusMetricsEndpoint
+    }
+    containerUrlPrometheusMetrics = URLDecoder.decode(containerUrlPrometheusMetrics, "UTF-8");
+    containerUrlPrometheus = URLDecoder.decode(containerUrlPrometheus, "UTF-8");
+    containerUrlHttp = URLDecoder.decode(containerUrlHttp, "UTF-8");
+    containerUrlGrpc = URLDecoder.decode(containerUrlGrpc, "UTF-8");
+
+    // Container
+    def Container container = new Container()
+    container.setId(containerID)
+    container.setName(instanceName)
+
+    // Node
+    def Node node = new Node();
+    node.setName(variables.get("PA_NODE_NAME"))
+    node.setHost(variables.get("PA_NODE_HOST"))
+    node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
+    node.setUrl(variables.get("PA_NODE_URL"))
+
+    // Endpoint (primary)
+    def Endpoint endpoint = new Endpoint();
+    endpointIDmetrics = endpointID + "-metrics"
+    endpoint.setId(endpointIDmetrics);
+    // Set the endpoint parameters according to the Proxy settings
+    if ("true".equalsIgnoreCase(proxyfied)){
+        proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointIDmetrics
+        endpoint.setProxyfied(true);
+        endpoint.setProxyfiedUrl(proxyfiedURL)
+    }else{
+        endpoint.setProxyfied(false)
+    }
+    endpoint.setUrl(containerUrlPrometheusMetrics);
+
+    // Endpoint (secondary)
+    // def Endpoint endpointPrometheusMetrics = new Endpoint();
+    // endpointIDmetrics = endpointID + "-metrics"
+    // endpointPrometheusMetrics.setId(endpointIDmetrics);
+    // endpointPrometheusMetrics.setUrl(containerUrlPrometheusMetrics);
+
+    def Endpoint endpointPrometheus = new Endpoint();
+    endpointIDprom = endpointID + "-prom"
+    endpointPrometheus.setId(endpointIDprom);
+    endpointPrometheus.setUrl(containerUrlPrometheus);
+
+    def Endpoint endpointHttp = new Endpoint();
+    endpointIDhttp = endpointID + "-http"
+    endpointHttp.setId(endpointIDhttp);
+    endpointHttp.setUrl(containerUrlHttp);
+
+    def Endpoint endpointGrpc = new Endpoint();
+    endpointIDgrpc = endpointID + "-grpc"
+    endpointGrpc.setId(endpointIDgrpc);
+    endpointGrpc.setUrl(containerUrlGrpc);
+
+    // Deployment (primary)
+    def Deployment deployment = new Deployment()
+    deployment.setNode(node)
+    deployment.setContainer(container)
+    deployment.setEndpoint(endpoint)
+
+    // Deployment (secondary)
+
+    // def Deployment deploymentPrometheusMetrics = new Deployment()
+    // // deploymentPrometheusMetrics.setNode(node)
+    // // deploymentPrometheusMetrics.setContainer(container)
+    // deploymentPrometheusMetrics.setEndpoint(endpointPrometheusMetrics)
+
+    def Deployment deploymentPrometheus = new Deployment()
+    // deploymentPrometheus.setNode(node)
+    // deploymentPrometheus.setContainer(container)
+    deploymentPrometheus.setEndpoint(endpointPrometheus)
+
+    def Deployment deploymentHttp = new Deployment()
+    // deploymentHttp.setNode(node)
+    // deploymentHttp.setContainer(container)
+    deploymentHttp.setEndpoint(endpointHttp)
+
+    def Deployment deploymentGrpc = new Deployment()
+    // deploymentGrpc.setNode(node)
+    // deploymentGrpc.setContainer(container)
+    deploymentGrpc.setEndpoint(endpointGrpc)
+
+    // Update service instance model (add Deployment, Groups)
+    def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+    serviceInstanceData.setInstanceStatus("RUNNING")
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
+    // serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentPrometheusMetrics)
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentPrometheus)
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentHttp)
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentGrpc)
+    if ("true".equalsIgnoreCase(proxyfied)){
+        serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
+        serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
+    }
+    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+    println(serviceInstanceData)
+
+    schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)
+
+    // Inform other platforms that service is running through Synchronization API
+    channel = "Service_Instance_" + instanceId
+    synchronizationapi.createChannelIfAbsent(channel, false)
+    synchronizationapi.put(channel, "RUNNING", true)
+    synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
+
+    // Add token to the current node
+    token = instanceName
+    nodeUrl = variables.get("PA_NODE_URL")
+    println("Current nodeUrl: " + nodeUrl)
+    println("Adding token:    " + token)
+    rmapi.connect()
+    rmapi.addNodeToken(nodeUrl, token)
+
+    // Log output
+    println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
+    println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
+} catch (Exception e) {
+    StackTraceUtils.printSanitizedStackTrace(e)
+    throw e
 }
-
-// Determine Cloud Automation URL
-def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
-
-// Get schedulerapi access and acquire session id
-schedulerapi.connect()
-def sessionId = schedulerapi.getSession()
-
-// Connect to Cloud Automation API
-def apiClient = new ApiClient()
-apiClient.setBasePath(pcaUrl)
-def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
-
-// Implement service model
-
-// Https
-if ("true".equalsIgnoreCase(httpsEnabled)){
-    containerUrlPrometheusMetrics = "https://"+containerUrlPrometheus+prometheusMetricsEndpoint
-} else{
-    containerUrlPrometheusMetrics = "http://"+containerUrlPrometheus+prometheusMetricsEndpoint
-}
-containerUrlPrometheusMetrics = URLDecoder.decode(containerUrlPrometheusMetrics, "UTF-8");
-containerUrlPrometheus = URLDecoder.decode(containerUrlPrometheus, "UTF-8");
-containerUrlHttp = URLDecoder.decode(containerUrlHttp, "UTF-8");
-containerUrlGrpc = URLDecoder.decode(containerUrlGrpc, "UTF-8");
-
-// Container
-def Container container = new Container()
-container.setId(containerID)
-container.setName(instanceName)
-
-// Node
-def Node node = new Node();
-node.setName(variables.get("PA_NODE_NAME"))
-node.setHost(variables.get("PA_NODE_HOST"))
-node.setNodeSourceName(variables.get("PA_NODE_SOURCE"))
-node.setUrl(variables.get("PA_NODE_URL"))
-
-// Endpoint (primary)
-def Endpoint endpoint = new Endpoint();
-endpointIDmetrics = endpointID + "-metrics"
-endpoint.setId(endpointIDmetrics);
-// Set the endpoint parameters according to the Proxy settings
-if ("true".equalsIgnoreCase(proxyfied)){
-    proxyfiedURL = pcaUrl+"/services/"+instanceId+"/endpoints/"+endpointIDmetrics
-    endpoint.setProxyfied(true);
-    endpoint.setProxyfiedUrl(proxyfiedURL)
-}else{
-    endpoint.setProxyfied(false)
-}
-endpoint.setUrl(containerUrlPrometheusMetrics);
-
-// Endpoint (secondary)
-// def Endpoint endpointPrometheusMetrics = new Endpoint();
-// endpointIDmetrics = endpointID + "-metrics"
-// endpointPrometheusMetrics.setId(endpointIDmetrics);
-// endpointPrometheusMetrics.setUrl(containerUrlPrometheusMetrics);
-
-def Endpoint endpointPrometheus = new Endpoint();
-endpointIDprom = endpointID + "-prom"
-endpointPrometheus.setId(endpointIDprom);
-endpointPrometheus.setUrl(containerUrlPrometheus);
-
-def Endpoint endpointHttp = new Endpoint();
-endpointIDhttp = endpointID + "-http"
-endpointHttp.setId(endpointIDhttp);
-endpointHttp.setUrl(containerUrlHttp);
-
-def Endpoint endpointGrpc = new Endpoint();
-endpointIDgrpc = endpointID + "-grpc"
-endpointGrpc.setId(endpointIDgrpc);
-endpointGrpc.setUrl(containerUrlGrpc);
-
-// Deployment (primary)
-def Deployment deployment = new Deployment()
-deployment.setNode(node)
-deployment.setContainer(container)
-deployment.setEndpoint(endpoint)
-
-// Deployment (secondary)
-
-// def Deployment deploymentPrometheusMetrics = new Deployment()
-// // deploymentPrometheusMetrics.setNode(node)
-// // deploymentPrometheusMetrics.setContainer(container)
-// deploymentPrometheusMetrics.setEndpoint(endpointPrometheusMetrics)
-
-def Deployment deploymentPrometheus = new Deployment()
-// deploymentPrometheus.setNode(node)
-// deploymentPrometheus.setContainer(container)
-deploymentPrometheus.setEndpoint(endpointPrometheus)
-
-def Deployment deploymentHttp = new Deployment()
-// deploymentHttp.setNode(node)
-// deploymentHttp.setContainer(container)
-deploymentHttp.setEndpoint(endpointHttp)
-
-def Deployment deploymentGrpc = new Deployment()
-// deploymentGrpc.setNode(node)
-// deploymentGrpc.setContainer(container)
-deploymentGrpc.setEndpoint(endpointGrpc)
-
-// Update service instance model (add Deployment, Groups)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
-serviceInstanceData.setInstanceStatus("RUNNING")
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
-// serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentPrometheusMetrics)
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentPrometheus)
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentHttp)
-serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentGrpc)
-if ("true".equalsIgnoreCase(proxyfied)){
-    serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
-    serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
-}
-serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
-println(serviceInstanceData)
-
-schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)
-
-// Inform other platforms that service is running through Synchronization API
-channel = "Service_Instance_" + instanceId
-synchronizationapi.createChannelIfAbsent(channel, false)
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
-
-// Add token to the current node
-token = instanceName
-nodeUrl = variables.get("PA_NODE_URL")
-println("Current nodeUrl: " + nodeUrl)
-println("Adding token:    " + token)
-rmapi.connect()
-rmapi.addNodeToken(nodeUrl, token)
-
-// Log output
-println(variables.get("PA_JOB_NAME") + "_INSTANCE_ID: " + instanceId)
-println(variables.get("PA_JOB_NAME") + "_ENDPOINT: " + endpoint)
-
 println("END " + variables.get("PA_TASK_NAME"))
 ]]>
           </code>
@@ -376,10 +387,10 @@ println("END " + variables.get("PA_TASK_NAME"))
       </cleaning>
       <metadata>
         <positionTop>
-            139.6166534423828
+            166.43333435058594
         </positionTop>
         <positionLeft>
-            13.633331298828125
+            742.566650390625
         </positionLeft>
       </metadata>
     </task>
@@ -418,10 +429,10 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
       </controlFlow>
       <metadata>
         <positionTop>
-            267.6166534423828
+            294.43333435058594
         </positionTop>
         <positionLeft>
-            13.633331298828125
+            741.566650390625
         </positionLeft>
       </metadata>
     </task>
@@ -435,14 +446,14 @@ variables.put("LAST_TIME_MARKER",new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"))
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2710px;
-            height:3036px;
+            width:2949px;
+            height:3636px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-134.6166534423828px;left:-8.633331298828125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" style="top: 139.61px; left: 13.625px;" id="jsPlumb_1_16"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Download NVIDIA Triton Server container image and start it."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png" width="20px">&nbsp;<span class="name">Start_MLOps_Model_Server_D</span></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 267.61px; left: 13.625px;" id="jsPlumb_1_19"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
-It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a></div><svg style="position:absolute;left:69px;top:179.5px" width="42.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 21.5 88 C 31.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: #a8a095;" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.494896,66.303232 L23.16866373995708,45.12432652703957 L18.292495623246907,52.94883830079128 L9.814270040748365,49.32672690379266 L22.494896,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: #a8a095;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M22.494896,66.303232 L23.16866373995708,45.12432652703957 L18.292495623246907,52.94883830079128 L9.814270040748365,49.32672690379266 L22.494896,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: #a8a095;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></path></svg><svg style="position:absolute;left:168.0266769263776px;top:217.5px" width="20.473323073622403" height="141" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C -10 90 -10 -50 0 0 " transform="translate(19.973323073622403,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style="--darkreader-inline-stroke: #91cd91;" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294157,28.915376004420658 L-10.777784470220794,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)" style="--darkreader-inline-fill: #91cd91; --darkreader-inline-stroke: #91cd91;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4569999999999963,49.16001999999999 L-8.714346841294157,28.915376004420658 L-10.777784470220794,37.90104376767174 L-19.973323073622403,37.23616047464146 L-2.4569999999999963,49.16001999999999" class="" stroke="#316b31" fill="#316b31" transform="translate(19.973323073622403,50.5)" style="--darkreader-inline-fill: #91cd91; --darkreader-inline-stroke: #91cd91;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></path></svg><div style="position: absolute; transform: translate(-50%, -50%); left: 180px; top: 287.5px;" class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_30">loop</div><div style="position: absolute; height: 20px; width: 20px; left: 69.5px; top: 170px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 91px; top: 298px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 91px; top: 258px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 178px; top: 258px;" class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style="--darkreader-inline-fill: #91cd91; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 178px; top: 298px;" class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style="--darkreader-inline-fill: #91cd91; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-161.43333435058594px;left:-736.566650390625px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" style="top: 166.433px; left: 742.567px;" id="jsPlumb_1_1"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Download NVIDIA Triton Server container image and start it."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png" width="20px">&nbsp;<span class="name">Start_MLOps_Model_Server_D</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" style="top: 294.433px; left: 741.567px; z-index: 24;" id="jsPlumb_1_4"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_as_service.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status_D</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i id="called-icon"></i></a></div><svg style="position:absolute;left:821.066650390625px;top:205.5px" width="22.433349609375" height="89.43333435058594" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88.43333435058594 C -10 38.43333435058594 11.433349609375 50 1.433349609375 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.6989872207641596,67.17985405969621 L5.227620611060525,47.52867373177556 L-2.0450127869675283,53.19513677832293 L-8.757096670312754,46.87469929797893 L-2.6989872207641596,67.17985405969621" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.6989872207641596,67.17985405969621 L5.227620611060525,47.52867373177556 L-2.0450127869675283,53.19513677832293 L-8.757096670312754,46.87469929797893 L-2.6989872207641596,67.17985405969621" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:911.066650390625px;top:283.93333435058594px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719789 L22.73126656242089,15.79496617605654 L21.37378389148668,6.675906970298892 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div style="position: absolute; transform: translate(-50%, -50%); left: 936.067px; top: 313.933px;" class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_15">loop</div><div style="position: absolute; height: 20px; width: 20px; left: 823px; top: 196px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 821.567px; top: 324.433px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 821.567px; top: 284.433px;" class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 911.567px; top: 284.433px;" class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div style="position: absolute; height: 20px; width: 20px; left: 911.567px; top: 324.433px;" class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
