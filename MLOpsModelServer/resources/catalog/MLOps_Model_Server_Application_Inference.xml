@@ -8,6 +8,7 @@
     <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
     <variable advanced="true" description="Name of the container image being used to run the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(,nvcr.io/nvidia/tritonserver:22.10-py3-sdk)" name="CONTAINER_IMAGE" value="nvcr.io/nvidia/tritonserver:22.10-py3-sdk"/>
     <variable advanced="false" description="The frequency (in ms) to send a new inference request for the selected model." group="Model Server" hidden="false" model="PA:Integer" name="INFERENCE_FREQUENCY" value="30000"/>
+    <variable advanced="true" description="Time in milliseconds to check if there are any signal updates." group="Model Server" hidden="false" model="PA:Integer" name="SIGNAL_FREQUENCY_CHECK" value="60000"/>
   </variables>
   <description>
     <![CDATA[ Inference workflow that periodically sends inferences consuming a specific deployed model. ]]>
@@ -733,10 +734,17 @@ public static boolean containsIgnoreCase(String str, String searchStr) {
 
 // Get workflow variables
 int INFERENCE_FREQUENCY = variables.get("INFERENCE_FREQUENCY") as Integer
+int SIGNAL_FREQUENCY_CHECK = variables.get("SIGNAL_FREQUENCY_CHECK") as Integer
 String MODEL_NAME = variables.get("MODEL_NAME")
 String IMAGE_PATH = variables.get("IMAGE_PATH")
 String GRPC_INFERENCE_URL = variables.get("GRPC_INFERENCE_URL")
 String TASK_FILE_PATH = variables.get("TASK_FILE_PATH")
+println("INFERENCE_FREQUENCY: " + INFERENCE_FREQUENCY)
+println("SIGNAL_FREQUENCY_CHECK: " + SIGNAL_FREQUENCY_CHECK)
+println("GRPC_INFERENCE_URL: " + GRPC_INFERENCE_URL)
+println("MODEL_NAME: " + MODEL_NAME)
+println("IMAGE_PATH: " + IMAGE_PATH)
+println("TASK_FILE_PATH: " + TASK_FILE_PATH)
 
 // Create the inference script file
 def create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH) {
@@ -775,92 +783,110 @@ def create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAG
 // Create the inference script file using the initial workflow variables values
 create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH)
 result = null
+int timeWithoutSignalCheck = 0
+int timeSpent = 0
+int sleepTime = 0
+int firstStart = 1
+int signalCheckStartTime = System.currentTimeMillis()
 
 // Loop continuously sending inferences periodically according to the defined frequency value
 while (true) {
-    def startTime = System.currentTimeMillis()
-    if (variables.get("READY_SENT") == null || "Update_Frequency_Parameter".equalsIgnoreCase(result) || "Update_Inference_Parameters".equalsIgnoreCase(result)) {
-        // Define the Update_Inference_Parameters signal
-        List <JobVariable> signalVariables = new java.util.ArrayList<JobVariable>()
-        signalVariables.add(new JobVariable("GRPC_INFERENCE_URL", GRPC_INFERENCE_URL, "PA:NOT_EMPTY_STRING", "GRPC inference url of the model server (e.g. localhost:8001).", "", false, false))
-        signalVariables.add(new JobVariable("MODEL_NAME", MODEL_NAME, "PA:LIST(simple,simple_identity,simple_int8,simple_sequence,simple_string,densenet_onnx,inception_graphdef)", "Name of the model to be tested.", "", false, false))
-        signalVariables.add(new JobVariable("IMAGE_PATH", IMAGE_PATH, "PA:URL", "Path of the image to be used for inference.", "", false, false))
-        signalVariables.add(new JobVariable("IMAGE_PATH_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'densenet_onnx' || variables['MODEL_NAME'].toLowerCase() == 'inception_graphdef' ? showVar('IMAGE_PATH') : hideVar('IMAGE_PATH'))", "Handler for IMAGE_PATH variable.", "", false, true))
-
-        // Define the Update_Frequency_Parameter signal
-        List <JobVariable> signalVariables_frequency = new java.util.ArrayList<JobVariable>()
-        signalVariables_frequency.add(new JobVariable("INFERENCE_FREQUENCY", ""+INFERENCE_FREQUENCY, "PA:Integer", "The frequency (in ms) to send a new inference request for the selected model.", "", false, false))
-
-        // Read the variable SIGNALS
-        signals = variables.get("SIGNALS")
-
-        // Split the value of the variable SIGNALS and transform it into a list
-        Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
-
-        // Send a ready notification for each signal in the set with updated variables
-        println("Ready for signals "+ signalsSet)
-        signalsSet.each{ signal ->
-            if(signal.equals("Terminate_Job")) {
-                signalapi.readyForSignal(signal);
-            } else if (signal.equals("Update_Frequency_Parameter")) {
-                signalapi.readyForSignal(signal, signalVariables_frequency)
-            } else if (signal.equals("Update_Inference_Parameters")) {
-                signalapi.readyForSignal(signal, signalVariables)
-            }
-        }
-
-        // Add a variable to avoid sending ready notifications again
-        variables.put("READY_SENT", true)
-
-        // Add the signals set as a variable to be used by next tasks
-        variables.put("SIGNALS_SET", signalsSet)
-    }
-
-    //Read the variable SIGNALS_SET
-    Set signalsSet =  variables.get("SIGNALS_SET")
-
-    // Check whether one signal among those specified as input is received
-    println("Checking whether one signal in the set "+ signalsSet +" is received")
-    receivedSignals = signalapi.checkForSignals(signalsSet)
-
-    // Check if a signal was received
-    if (receivedSignals != null && !receivedSignals.isEmpty()) {
-        // Print the received signal
-        println("Received signals: " + receivedSignals.toString())
-        for (String s : Arrays.asList(receivedSignals.keySet())) {
-            if (containsIgnoreCase(s, "Terminate_Job")) {
-                result = "Terminate_Job"
-                break
-            }
-            if (containsIgnoreCase(s, "Update_Frequency_Parameter")) {
-                updatedVariables = receivedSignals.get("Update_Frequency_Parameter")
-                INFERENCE_FREQUENCY = updatedVariables.get("INFERENCE_FREQUENCY") as Integer
-                result = "Update_Frequency_Parameter"
-            }
-            if (containsIgnoreCase(s, "Update_Inference_Parameters")) {
-                updatedVariables = receivedSignals.get("Update_Inference_Parameters")
-                GRPC_INFERENCE_URL = updatedVariables.get("GRPC_INFERENCE_URL")
-                MODEL_NAME = updatedVariables.get("MODEL_NAME")
-                IMAGE_PATH = updatedVariables.get("IMAGE_PATH")
-                result = "Update_Inference_Parameters"
-                // Re-generate the inference script using the new variable values
-                create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH)
-            }
-        }
-    } else {
-        result = null
-    }
-    println("result: " + result)
-    if ("Terminate_Job".equalsIgnoreCase(result)){
-        break
-    }
+    int startTime = System.currentTimeMillis()
     println("INFERENCE_FREQUENCY: " + INFERENCE_FREQUENCY)
+	timeWithoutSignalCheck = System.currentTimeMillis() - signalCheckStartTime
+    println("timeWithoutSignalCheck: " + timeWithoutSignalCheck)
+    if (firstStart == 1 || timeWithoutSignalCheck >= SIGNAL_FREQUENCY_CHECK) {
+        signalCheckStartTime = System.currentTimeMillis()
+        println("Checking for signals")
+        if (variables.get("READY_SENT") == null || "Update_Frequency_Parameter".equalsIgnoreCase(result) || "Update_Inference_Parameters".equalsIgnoreCase(result)) {
+            // Define the Update_Inference_Parameters signal
+            List <JobVariable> signalVariables = new java.util.ArrayList<JobVariable>()
+            signalVariables.add(new JobVariable("GRPC_INFERENCE_URL", GRPC_INFERENCE_URL, "PA:NOT_EMPTY_STRING", "GRPC inference url of the model server (e.g. localhost:8001).", "", false, false))
+            signalVariables.add(new JobVariable("MODEL_NAME", MODEL_NAME, "PA:LIST(simple,simple_identity,simple_int8,simple_sequence,simple_string,densenet_onnx,inception_graphdef)", "Name of the model to be tested.", "", false, false))
+            signalVariables.add(new JobVariable("IMAGE_PATH", IMAGE_PATH, "PA:URL", "Path of the image to be used for inference.", "", false, false))
+            signalVariables.add(new JobVariable("IMAGE_PATH_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'densenet_onnx' || variables['MODEL_NAME'].toLowerCase() == 'inception_graphdef' ? showVar('IMAGE_PATH') : hideVar('IMAGE_PATH'))", "Handler for IMAGE_PATH variable.", "", false, true))
+
+            // Define the Update_Frequency_Parameter signal
+            List <JobVariable> signalVariables_frequency = new java.util.ArrayList<JobVariable>()
+            signalVariables_frequency.add(new JobVariable("INFERENCE_FREQUENCY", ""+INFERENCE_FREQUENCY, "PA:Integer", "The frequency (in ms) to send a new inference request for the selected model.", "", false, false))
+
+            // Read the variable SIGNALS
+            signals = variables.get("SIGNALS")
+
+            // Split the value of the variable SIGNALS and transform it into a list
+            Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+
+            // Send a ready notification for each signal in the set with updated variables
+            println("Ready for signals "+ signalsSet)
+            signalsSet.each{ signal ->
+                if(signal.equals("Terminate_Job")) {
+                    signalapi.readyForSignal(signal);
+                } else if (signal.equals("Update_Frequency_Parameter")) {
+                    signalapi.readyForSignal(signal, signalVariables_frequency)
+                } else if (signal.equals("Update_Inference_Parameters")) {
+                    signalapi.readyForSignal(signal, signalVariables)
+                }
+            }
+
+            // Add a variable to avoid sending ready notifications again
+            variables.put("READY_SENT", true)
+
+            // Add the signals set as a variable to be used by next tasks
+            variables.put("SIGNALS_SET", signalsSet)
+        }
+
+        //Read the variable SIGNALS_SET
+        Set signalsSet =  variables.get("SIGNALS_SET")
+
+        // Check whether one signal among those specified as input is received
+        println("Checking whether one signal in the set "+ signalsSet +" is received")
+        receivedSignals = signalapi.checkForSignals(signalsSet)
+
+        // Check if a signal was received
+        if (receivedSignals != null && !receivedSignals.isEmpty()) {
+            // Print the received signal
+            println("Received signals: " + receivedSignals.toString())
+            for (String s : Arrays.asList(receivedSignals.keySet())) {
+                if (containsIgnoreCase(s, "Terminate_Job")) {
+                    result = "Terminate_Job"
+                    break
+                }
+                if (containsIgnoreCase(s, "Update_Frequency_Parameter")) {
+                    updatedVariables = receivedSignals.get("Update_Frequency_Parameter")
+                    INFERENCE_FREQUENCY = updatedVariables.get("INFERENCE_FREQUENCY") as Integer
+                    result = "Update_Frequency_Parameter"
+                }
+                if (containsIgnoreCase(s, "Update_Inference_Parameters")) {
+                    updatedVariables = receivedSignals.get("Update_Inference_Parameters")
+                    GRPC_INFERENCE_URL = updatedVariables.get("GRPC_INFERENCE_URL")
+                    MODEL_NAME = updatedVariables.get("MODEL_NAME")
+                    IMAGE_PATH = updatedVariables.get("IMAGE_PATH")
+                    result = "Update_Inference_Parameters"
+                    // Re-generate the inference script using the new variable values
+                    create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH)
+                }
+            }
+        } else {
+            result = null
+        }
+        println("result: " + result)
+        if ("Terminate_Job".equalsIgnoreCase(result)){
+            break
+        }
+        firstStart = 0
+    }
     def command = "sh inference.sh"
     def output = command.execute().text
     println(output)
-    def endTime = System.currentTimeMillis()
-    def timeTaken = endTime - startTime
-    sleep(INFERENCE_FREQUENCY - timeTaken)
+    int endTime = System.currentTimeMillis()
+    timeSpent = endTime - startTime
+    println("timeSpent: " + timeSpent)
+    sleepTime = INFERENCE_FREQUENCY - timeSpent
+    if (sleepTime < 0) {
+        sleepTime = 0
+    }
+    println("sleepTime: " + sleepTime)
+    sleep(sleepTime)
 }
 ]]>
           </code>
@@ -869,10 +895,10 @@ while (true) {
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            108.95001220703125
+            185.13890075683594
         </positionTop>
         <positionLeft>
-            324.5333251953125
+            398.36810302734375
         </positionLeft>
       </metadata>
     </task>
@@ -886,13 +912,13 @@ while (true) {
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2778px;
-            height:4264px;
+            width:3211px;
+            height:5502px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-103.95001220703125px;left:-319.5333251953125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" style="top: 108.949px; left: 324.538px;" id="jsPlumb_1_4"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Inference workflow that periodically sends inferences consuming a specific deployed model."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png" width="20px">&nbsp;<span class="name">Model_Inference_Periodic</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div style="position: absolute; height: 20px; width: 20px; left: 393.5px; top: 139px;" class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-180.13890075683594px;left:-393.36810302734375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_10" style="top: 185.156px; left: 398.385px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Inference workflow that periodically sends inferences consuming a specific deployed model."><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png" width="20px">&nbsp;<span class="name">Model_Inference_Periodic</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 466.5px; top: 215px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill:#a8a095; --darkreader-inline-stroke:none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
