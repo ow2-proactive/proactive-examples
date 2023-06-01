@@ -3,11 +3,13 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="MLOps_Model_Server_Application_Performance_Analyzer" projectName="3. MLOps Model Server Workflows" tags="MLOps,Model Inference,Triton" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
   <variables>
-    <variable name="GRPC_INFERENCE_URL" value="" model="" description="GRPC inference url of the model server (e.g. localhost:8001)." group="Model Server" advanced="false" hidden="false"/>
+    <variable name="MODEL_SERVER_ID" value=""  description="Id of the model server where the model that need to be consumed is deployed" group="Model Server" advanced="false" hidden="false"/>
+    <variable name="GRPC_INFERENCE_URL" value=""  description="GRPC inference url of the model server (e.g. localhost:8001)." group="Model Server" advanced="true" hidden="false"/>
     <variable name="MODEL_NAME" value="simple" model="PA:LIST(simple,simple_identity,simple_int8,simple_sequence,simple_string,densenet_onnx,inception_graphdef)" description="Name of the model to be tested." group="Model Server" advanced="false" hidden="false"/>
     <variable name="CONTAINER_PLATFORM" value="docker" model="PA:LIST(no-container,docker,podman,singularity)" description="Container platform used for executing the workflow tasks." group="Container Parameters" advanced="true" hidden="false"/>
     <variable name="CONTAINER_IMAGE" value="nvcr.io/nvidia/tritonserver:22.10-py3-sdk" model="PA:LIST(,nvcr.io/nvidia/tritonserver:22.10-py3-sdk)" description="Name of the container image being used to run the workflow tasks." group="Container Parameters" advanced="true" hidden="false"/>
     <variable name="CONCURRENCY_RANGE" value="1:4:1" model="PA:REGEXP(^(\d+):(\d+):(\d+)$)?" description="The concurrency-range option is used to define the range of concurrency levels that will be evaluated to measure the performance of a deployed model. The format for defining this range is start:end:step, where start is the starting concurrency level, end is the ending concurrency level, and step is the increment between each measurement. The performance analysis will begin at the concurrency level specified by start and will continue until end in strides of step." group="Model Server" advanced="false" hidden="false"/>
+    <variable name="USE_GRPC" value="False" model="PA:Boolean" description="True, if you want to use a specific GRPC_INFERENCE_URL to send inferences instead of the MODEL_SERVER_ID" group="Model Server" advanced="true" hidden="false"/>
   </variables>
   <description>
     <![CDATA[ This workflow helps to measure the inference performance of the deployed models on the Model Server. It measures the changes in performance by testing different concurrency ranges.
@@ -54,7 +56,6 @@ Overhead: The average time spent in the endpoint that cannot be correctly captur
         <script>
           <code language="cpython">
             <![CDATA[
-
 import json
 import argparse
 import sys
@@ -210,8 +211,79 @@ if __name__ == "__main__":
           <code language="groovy">
             <![CDATA[
 import groovy.io.FileType
+import com.google.common.base.Splitter;
+import org.ow2.proactive.scheduler.common.job.JobVariable;
+import groovy.json.JsonSlurper
 
-String GRPC_INFERENCE_URL = variables.get("GRPC_INFERENCE_URL")
+// -------------------------------------------------------------
+// Extract the GRPC_INFERENCE_URL using the MODEL_SERVER_ID
+String getGrpcEndpointUrl(String sessionid, String proactiveUrl, String instanceId) {
+    // Define headers
+    def headers = ['sessionid': sessionid]
+
+    // Define base URL
+    def baseUrl = "$proactiveUrl/cloud-automation-service/serviceInstances/$instanceId"
+
+    // Create URL object
+    def url = new URL(baseUrl)
+
+    // Open connection
+    def connection = url.openConnection()
+
+    // Set headers
+    headers.each { key, value ->
+        connection.setRequestProperty(key, value)
+    }
+
+    // Get response
+    def response = connection.getInputStream()
+
+    // Parse JSON response
+    def json = new JsonSlurper().parseText(response.text)
+
+    // Fetch GRPC_ENDPOINT_ID
+    def grpcEndpointId = json.deployments.endpoint.find { it.id.contains("-grpc") }?.id
+
+    // Fetch GRPC_ENDPOINT_URL
+    def grpcEndpointUrl = json.deployments.endpoint.find { it.id == grpcEndpointId }?.url
+
+    return grpcEndpointUrl
+}
+
+// Usage example
+schedulerapi.connect()
+connectionInfo = schedulerapi.getConnectionInfo()
+ciLogin = connectionInfo.getLogin()
+ciPasswd = connectionInfo.getPassword()
+ciUrl = connectionInfo.getUrl()
+def sessionId = schedulerapi.getSession()
+
+user_credentials = [
+  sessionId: sessionId,
+  ciLogin: ciLogin,
+  ciPasswd: ciPasswd,
+  ciUrl: ciUrl
+]
+// def sessionId = 'your_session_id'
+def url = new URL(ciUrl)
+def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
+def instanceId = variables.get("MODEL_SERVER_ID")
+def USE_GRPC = variables.get("USE_GRPC")
+println "USE_GRPC: $USE_GRPC"
+
+String GRPC_INFERENCE_URL = ""  // Declare and initialize the variable outside the conditional blocks
+
+if (USE_GRPC == "false") {
+    GRPC_INFERENCE_URL = getGrpcEndpointUrl(sessionId, proactiveUrl, instanceId)
+    println "Using the defined variable MODEL_SERVER_ID to get the GRPC_INFERENCE_URL associated with it."
+} else {
+    GRPC_INFERENCE_URL = variables.get("GRPC_INFERENCE_URL")
+    println "Using the defined variable GRPC_INFERENCE_URL to send inferences."
+}
+
+println("GRPC_INFERENCE_URL: " + GRPC_INFERENCE_URL)
+// -------------------------------------------------------------
+
 String MODEL_NAME = variables.get("MODEL_NAME")
 String CONCURRENCY_RANGE = variables.get("CONCURRENCY_RANGE")
 
@@ -297,6 +369,33 @@ if (inputFile.exists()) {
         }
         html << '</tr>'
     }
+    // Add the description of the different fields
+html << """
+    </table>
+    <p><strong>The Description of the Performance Report Fields:</strong></p>
+    <ul>
+      <li><strong>Concurrency:</strong> number of requests sent at the same time</li>
+      <li><strong>Inferences/Second:</strong> number of inferences made per second. It indicates the computational efficiency and speed of the model in processing input data and providing results.</li>
+      <li><strong>Client Send:</strong> total amount of time it takes the client to send a request, plus the amount of time it takes for the client to receive the response.</li>
+      <li><strong>Network+Server Send/Recv:</strong> combined time taken for both network communication and server processing during the execution of the inference.</li>
+      <li><strong>Server Queue:</strong> average time spent in the inference schedule queue by a request waiting for an instance of the model to become available.</li>
+      <li><strong>Server Compute Input:</strong> Time needed to copy data to the GPU/CPU from input buffers.</li>
+      <li><strong>Server Compute Infer:</strong> Average time spent performing the actual inference.</li>
+      <li><strong>Server Compute Output:</strong> Time needed to copy data from the GPU/CPU to output buffers.</li>
+      <li><strong>Client Recv:</strong> the amount of time it takes for the client to receive the response.</li>
+      <li><strong>p50 latency:</strong> the 50th percentile of latency (inference time)</li>
+      <ul>
+        <li><em>50th percentile:</em> it means that a certain value separates all inference latencies in such a way that 50% of the values are below that point, and only 50% are higher.</li>
+      </ul>
+      <li><strong>p90 latency:</strong> the 90th percentile of latency (inference time)</li>
+      <ul>
+      	<li><em>90th percentile:</em> it means that a certain value separates all inference
+      </ul>
+      <li><strong>p95 latency:</strong> the 95th percentile of latency</li>
+      <li><strong>p99 latency:</strong> the 99th percentile of latency</li>
+    </body>
+    </html>
+    """
     byte[] htmlBytes = html.toString().getBytes("UTF-8")
     result = htmlBytes
     println "Done"
@@ -314,10 +413,10 @@ resultMetadata.put("content.type", "text/html")
       <controlFlow block="none"></controlFlow>
       <metadata>
         <positionTop>
-            181.96182250976562
+            130.52084350585938
         </positionTop>
         <positionLeft>
-            325.4340515136719
+            326.3975524902344
         </positionLeft>
       </metadata>
     </task>
@@ -331,13 +430,13 @@ resultMetadata.put("content.type", "text/html")
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2388px;
-            height:3031px;
+            width:2339px;
+            height:2822px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-176.96182250976562px;left:-320.4340515136719px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_43" style="top: 181.962px; left: 325.442px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Analyze the performance of a deployed model by sending multiple inferences concurrently"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png" width="20px">&nbsp;<span class="name">Model_Performance_Analyzer</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 402px; top: 212px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-125.52084350585938px;left:-321.3975524902344px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_1" style="top: 130.528px; left: 326.405px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Analyze the performance of a deployed model by sending multiple inferences concurrently"><img src="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png" width="20px">&nbsp;<span class="name">Model_Performance_Analyzer</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 403.405px; top: 160.528px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
