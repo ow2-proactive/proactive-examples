@@ -1,0 +1,746 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Azure_CycleCloud_Delete" onTaskError="continueJobExecution" priority="normal" projectName="1. Azure CycleCloud" tags="Azure,Slurm,HPC,CycleCloud" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable description="The subscription id of your Microsoft Azure account." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="SUBSCRIPTION_ID" value="change-it-and-put-your-azure-subscription-id"/>
+    <variable advanced="true" description="The tenant id of your Microsoft Azure account." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="TENANT_ID" value="change-it-and-put-your-azure-tenant-id"/>
+    <variable advanced="true" description="ID of a Azure client application." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="APP_ID" value="change-it-and-put-your-azure-client-application-id"/>
+    <variable advanced="true" description="Secret key of the Azure client application." group="Subscription Parameters" model="PA:HIDDEN" name="PASSWORD" value="ENC(L/ks1WBUEKZZ2K0wm+3i1A==)"/>
+    <variable description="Hidden variable that contains the authentication endpoint of Azure REST API." hidden="true" model="PA:URL" name="AUTHENTICATION_ENDPOINT" value="https://login.microsoftonline.com"/>
+    <variable description="Hidden variable that contains the REST endpoint for managing Azure HDInsight clusters." hidden="true" model="PA:URL" name="MANAGEMENT_ENDPOINT" value="https://management.azure.com"/>
+    <variable advanced="false" description="Name of the CycleCloud Resource Group to be deleted" group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="RESOURCE_GROUP_NAME" value="RG-of-activeeon-cyclecloud-${PA_JOB_ID}"/>
+    <variable advanced="true" description="The region of Azure Cloud where the Resource Group will be created" group="Deployment Parameters" model="PA:NOT_EMPTY_STRING" name="RESOURCE_GROUP_LOCATION" value="westus2"/>
+    <variable advanced="true" description="Name of the CycleCloud Deployment to be deleted" group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="DEPLOYMENT_NAME" value="Deployment-of-activeeon-cyclecloud-${PA_JOB_ID}"/>
+    <variable advanced="true" description="Name of ProActive Node Source  to be removed (this Node Source is used to connect ProActive nodes running in the CycleCloud VM)." group="ProActive Node Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="PROACTIVE_NODE_SOURCE_NAME" value="Activeeon-CycleCloud-${PA_JOB_ID}"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that uses Azure REST API to delete CycleCloud and its underlying resources. The workflow is synchronous, which means that it waits until CycleCloud is effectively deleted. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="activeeon-microsoft"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png"/>
+<info name="submission.mode" value="studio"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="azure_authenticate">
+      <description>
+        <![CDATA[ A task performing a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="${AUTHENTICATION_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/${TENANT_ID}/oauth2/token"/>
+        <variable advanced="false" description="If true, disable SSL certificate verification" hidden="false" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="Content-Type of the request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/x-www-form-urlencoded"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." hidden="false" inherited="false" name="REQUEST_BODY" value="&amp;grant_type=client_credentials&amp;client_id=${APP_ID}&amp;client_secret=%PASSWORD%&amp;resource=https%3A%2F%2Fmanagement.azure.com%2F"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY").replace("%PASSWORD%",variables.get("PASSWORD")))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+
+variables.put("ACCESS_TOKEN",result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+// =========== Manage Azure Access token ============
+def slurper = new JsonSlurper()
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+access_token=jsonData.access_token
+variables.put("ACCESS_TOKEN",access_token)
+println variables.get("ACCESS_TOKEN")
+
+expires_on=jsonData.expires_on
+variables.put("EXPIRES_ON",expires_on)
+println variables.get("EXPIRES_ON")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            178.5
+        </positionTop>
+        <positionLeft>
+            598.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="cyclecloud_delete_deployment">
+      <description>
+        <![CDATA[ A task performing a DELETE request to Azure REST API in order to remove a CycleCloud deployment, which name is given as input.
+This task requires the Azure authentication token provided the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable description="Path of the request (relative to the base url)" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Resources/deployments/${DEPLOYMENT_NAME}?api-version=2020-10-01"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="Content-Type of the request" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable description="A JSON parameter containing the request body." inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{}"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" inherited="false" name="RESPONSE_PATH" value=""/>
+        <variable description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="azure_authenticate"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("AZURE_PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("AZURE_PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.delete(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            306.515625
+        </positionTop>
+        <positionLeft>
+            598.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="cyclecloud_delete_resource_group">
+      <description>
+        <![CDATA[ A task performing a DELETE request to Azure REST API in order to remove a CycleCloud resource group, which name is given as input.
+This task requires the Azure authentication token provided the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable description="Path of the request (relative to the base url)" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}?api-version=2020-10-01"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="Content-Type of the request" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable description="A JSON parameter containing the request body." inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{}"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" inherited="false" name="RESPONSE_PATH" value=""/>
+        <variable description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="cyclecloud_delete_deployment"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("AZURE_PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("AZURE_PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.delete(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <metadata>
+        <positionTop>
+            435.515625
+        </positionTop>
+        <positionLeft>
+            598.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" maxNumberOfExecution="1" name="check_delete_operation">
+      <description>
+        <![CDATA[ A task that performs iteratively a GET request to Azure REST API, in order to get information about the CycleCloud deletion status. 
+This task requires the Azure authentication token provided the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable description="Base URL of the server or service that will be queried." inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}?api-version=2020-10-01"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable description="If true, print the full request and response content in the task output." inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="cyclecloud_delete_resource_group"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.head(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+if (response.statusCode==HttpStatus.SC_NOT_FOUND) {
+    variables.put("CLUSTER_STATE","NOT_FOUND")
+} else {
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_NO_CONTENT)
+  .extract();
+}
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="check_delete_operation">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+loop=variables.get("LOOP")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+loop = "* * * * *"
+
+if (variables.get("CLUSTER_STATE")=="NOT_FOUND"){
+	loop = "false"
+}
+
+variables.put("LOOP", loop)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            561.5
+        </positionTop>
+        <positionLeft>
+            598.765625
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="remove_node_source">
+      <description>
+        <![CDATA[ A task that removes a Node Source used to connect ProActive nodes running in the CycleCloud VM. ]]>
+      </description>
+      <depends>
+        <task ref="check_delete_operation"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Remove the NodeSource for ProActive Nodes deployed in Spark cluster
+def nodeSourceName = variables.get("NODE_SOURCE_NAME")
+
+try{
+    rmapi.connect()
+    def nsMap = rmapi.getExistingNodeSources()
+    def ns = nsMap.find{ it.key == nodeSourceName }
+
+    if(ns){
+        rmapi.removeNodeSource(nodeSourceName, true)
+        println " NodeSource '${nodeSourceName}' deleted."
+    }
+
+} catch(Exception e){
+	throw e
+} finally {
+	rmapi.disconnect()
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            702
+        </positionTop>
+        <positionLeft>
+            616.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2725px;
+            height:3120px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-173.5px;left:-593.75px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1119" style="top: 178.5px; left: 598.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png" width="20px">&nbsp;<span class="name">azure_authenticate</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1122" style="top: 306.516px; left: 598.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a DELETE request to Azure REST API in order to remove a CycleCloud deployment, which name is given as input.
+This task requires the Azure authentication token provided the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png" width="20px">&nbsp;<span class="name">cyclecloud_delete_deployment</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1125" style="top: 435.516px; left: 598.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a DELETE request to Azure REST API in order to remove a CycleCloud resource group, which name is given as input.
+This task requires the Azure authentication token provided the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png" width="20px">&nbsp;<span class="name">cyclecloud_delete_resource_group</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1128" style="top: 561.5px; left: 598.766px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs iteratively a GET request to Azure REST API, in order to get information about the CycleCloud deletion status. 
+This task requires the Azure authentication token provided the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png" width="20px">&nbsp;<span class="name">check_delete_operation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_1131" style="top: 702px; left: 616.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that removes a Node Source used to connect ProActive nodes running in the CycleCloud VM."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">remove_node_source</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:651px;top:218.5px" width="47" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 26 88 C 36 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M26.509342000000004,65.8307285 L25.911972524203918,44.649530476531474 L21.51374988524985,52.752347123734594 L12.833591147938504,49.64512259128163 L26.509342000000004,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M26.509342000000004,65.8307285 L25.911972524203918,44.649530476531474 L21.51374988524985,52.752347123734594 L12.833591147938504,49.64512259128163 L26.509342000000004,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:677px;top:346.5px" width="30" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9 89 C 19 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,67.21769599999999 L15.056660173205415,46.40761595875948 L9.011824562262685,53.368934974339695 L1.2078991475451177,48.459887396496796 L11.064096,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,67.21769599999999 L15.056660173205415,46.40761595875948 L9.011824562262685,53.368934974339695 L1.2078991475451177,48.459887396496796 L11.064096,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:662px;top:475.5px" width="45" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 86 C -10 36 34 50 24 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.7810560000000011,64.474304 L12.535621776582733,47.99200764922814 L3.925858777433235,51.28927638235807 L-0.6494058410592052,43.2850928717949 L-0.7810560000000011,64.474304" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.7810560000000011,64.474304 L12.535621776582733,47.99200764922814 L3.925858777433235,51.28927638235807 L-0.6494058410592052,43.2850928717949 L-0.7810560000000011,64.474304" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:735.5px;top:551.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1148" style="position: absolute; transform: translate(-50%, -50%); left: 760.5px; top: 581.5px;">loop</div><svg style="position:absolute;left:662px;top:601.5px" width="34" height="101" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 13 100 C 23 50 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M14.582454250000001,75.71226250000001 L17.752487701902382,54.761107689015965 L11.986454684423675,61.95505398026289 L3.9952791821652642,57.357107254592286 L14.582454250000001,75.71226250000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M14.582454250000001,75.71226250000001 L17.752487701902382,54.761107689015965 L11.986454684423675,61.95505398026289 L3.9952791821652642,57.357107254592286 L14.582454250000001,75.71226250000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 651.5px; top: 209px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677.5px; top: 337px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677.5px; top: 297px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 686.5px; top: 466px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 686.5px; top: 426px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 662.5px; top: 592px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 662.5px; top: 552px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 736px; top: 552px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 736px; top: 592px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 675.5px; top: 732px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 675.5px; top: 692px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
