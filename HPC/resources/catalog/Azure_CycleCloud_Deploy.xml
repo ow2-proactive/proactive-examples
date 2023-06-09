@@ -1,0 +1,1580 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Azure_CycleCloud_Deploy" onTaskError="continueJobExecution" priority="normal" projectName="1. Azure CycleCloud" tags="Azure,HPC,CycleCloud,Slurm" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable description="The subscription id of your Microsoft Azure account." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="SUBSCRIPTION_ID" value="change-it-and-put-your-azure-subscription-id"/>
+    <variable advanced="true" description="The tenant id of your Microsoft Azure account." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="TENANT_ID" value="change-it-and-put-your-azure-tenant-id"/>
+    <variable advanced="true" description="ID of a Azure client application." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="APP_ID" value="change-it-and-put-your-azure-client-application-id"/>
+    <variable advanced="true" description="Secret key of the Azure client application." group="Subscription Parameters" model="PA:HIDDEN" name="SECRET" value="ENC(L/ks1WBUEKZZ2K0wm+3i1A==)"/>
+    <variable description="Hidden variable that contains the authentication endpoint of Azure REST API." hidden="true" model="PA:URL" name="AUTHENTICATION_ENDPOINT" value="https://login.microsoftonline.com"/>
+    <variable description="Hidden variable that contains the REST endpoint for managing Azure HDInsight clusters." hidden="true" model="PA:URL" name="MANAGEMENT_ENDPOINT" value="https://management.azure.com"/>
+    <variable description="Name of the Resource Group where CycleCloud and its underlying resources will be deployed. If the value of this variable is changed, it must be also changed in the workflow 'Azure_CycleCloud_Delete'" group="Deployment Parameters" model="PA:NOT_EMPTY_STRING" name="RESOURCE_GROUP_NAME" value="RG-of-activeeon-cyclecloud-${PA_JOB_ID}"/>
+    <variable advanced="true" description="The region of Azure Cloud where the Resource Group will be created" group="Deployment Parameters" model="PA:NOT_EMPTY_STRING" name="RESOURCE_GROUP_LOCATION" value="westus2"/>
+    <variable advanced="true" description="Name of the CycleCloud Deployment. If the value of this variable is changed, it must be also changed in the workflows 'Azure_CycleCloud_Delete'" group="Deployment Parameters" model="PA:NOT_EMPTY_STRING" name="DEPLOYMENT_NAME" value="Deployment-of-activeeon-cyclecloud-${PA_JOB_ID}"/>
+    <variable description="Microsoft Azure ARM template (a JSON file), which is used to deploy CycleCloud and its underlying resources. This file must be placed in the global data space." group="CycleCloud Parameters" model="PA:GLOBAL_FILE" name="ARM_TEMPLATE" value="Azure_CycleCloud/Cycle_Cloud_ARM.json"/>
+    <variable advanced="true" description="Size of the CycleCloud VM." group="CycleCloud Parameters" model="PA:LIST(Standard_A4_v2,Standard_A8_v2,Standard_E2_v3, Standard_E4_v3,Standard_E8_v3,Standard_E16_v3,Standard_E20_v3,Standard_E32_v3,Standard_E48_v3,Standard_D4lds_v5)" name="VM_SIZE" value="Standard_D4lds_v5"/>
+    <variable advanced="false" description="Your Activeeon user login." group="Activeeon User Credentials" hidden="false" model="PA:NOT_EMPTY_STRING" name="USER_LOGIN" value="put-here-your-activeeon-login"/>
+    <variable advanced="false" description="Your Activeeon password must be added to the third-party credentials vault (the user login is the key and the password is the credential). This password is used: (i) for the user to connect to CycleCloud Web UI, and (ii) for ProActive nodes running in the CycleCloud VM to connect to ProActive Resource Manager." group="Activeeon User Credentials" hidden="false" model="PA:CREDENTIAL" name="USER_PASSWORD" value="${USER_LOGIN}"/>
+    <variable advanced="true" description="Name of the Node Source  which manages ProActive nodes running in the CycleCloud VM." group="Activeeon Node Parameters" hidden="false" name="NODE_SOURCE_NAME" value="Activeeon-CycleCloud-${PA_JOB_ID}"/>
+    <variable advanced="true" description="Number of ProActive nodes to run in the CycleCloud VM." group="Activeeon Node Parameters" model="PA:INTEGER" name="NUMBER_OF_NODES" value="3"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that uses Azure REST API to deploy CycleCloud and its underlying resources. It requires as main input the variable ARM_TEMPLATE, which takes as value an Azure ARM template for CycleCloud deployment. A ready-to-use template called "Azure_CycleCloud/Cycle_Cloud_ARM.json" is provided in the global dataspace. Furthermore, the workflow customizes the ARM template with respect to the provided input variables. 
+Once CycleCloud is deployed successfully, the workflow displays an endpoint that allow users to access the its Web UI. The workflow also exposes two signals/actions that allow users to, respectively: (i) Deploy a Slurm cluster via, and (ii) Delete CycleCloud when it is not needed anymore. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="activeeon-microsoft"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png"/>
+<info name="PYTHON_COMMAND" value="python3"/>
+<info name="Documentation" value="https://github.com/CycleCloudCommunity/cyclecloud_arm"/>
+<info name="submission.mode" value="studio"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="deploy_cycle_cloud">
+      <description>
+        <![CDATA[ A task that performs a PUT request to Azure REST API in order to deploy CycleCloud and its underlying resources.
+This task requires the Azure authentication token generated by the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Resources/deployments/${DEPLOYMENT_NAME}?api-version=2020-10-01"/>
+        <variable advanced="false" description="If true, disable SSL certificate verification" hidden="false" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="Content-Type of the request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." hidden="false" inherited="false" name="REQUEST_BODY" value="${ARM_TEMPLATE_CONTENT}"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" hidden="false" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="azure-create_resource_group"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+requestBody = variables.get("REQUEST_BODY")
+if (requestBody != null && !requestBody.isEmpty()) {
+
+    if (!requestBody.startsWith("{")){
+        File jsonFile = new File(requestBody);
+        restCall = restCall.body(jsonFile)
+    }
+    else{
+        restCall = restCall.body(requestBody)
+    }
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.put(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            668
+        </positionTop>
+        <positionLeft>
+            659.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="check_cycle_cloud_deployment">
+      <description>
+        <![CDATA[ A task that performs a Get request to Azure REST API in order to  check the status of the CycleCloud deployment.
+This task requires the Azure authentication token generated by the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Resources/deployments/${DEPLOYMENT_NAME}?api-version=2020-10-01"/>
+        <variable advanced="false" description="If true, disable SSL certificate verification" hidden="false" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" hidden="false" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="deploy_cycle_cloud"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = restCall.param(entry.getKey().replace("PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="check_cycle_cloud_deployment">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+action=variables.get("ACTION")
+if (action=="continue"){
+   loop= "* * * * *"
+} else if (action=="stop"){
+   loop=false
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+def slurper = new JsonSlurper()
+
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+// Extract provisioning state
+cyclecloudState=jsonData.properties.provisioningState
+println cyclecloudState
+
+if (cyclecloudState=="Running" || cyclecloudState=="Accepted" || cyclecloudState=="Created" || cyclecloudState=="Creating" || cyclecloudState=="Updating") {
+   variables.put("ACTION","continue")
+} else if (cyclecloudState=="Canceled" || cyclecloudState=="Failed" || cyclecloudState=="NotSpecified"){
+   throw new Exception("CycleCloud deployment "+ cyclecloudState)
+} else if (cyclecloudState=="Deleted" || cyclecloudState=="Deleting"){
+   throw new Exception("CycleCloud deployment "+ cyclecloudState +" via an external action")
+} else if (cyclecloudState=="Succeeded" || cyclecloudState=="Ready") {
+   variables.put("ACTION","stop")
+
+    LinkedHashMap resMap = [:]
+
+    PUBLIC_IP_ADDRESS=jsonData.properties.outputs.ipaddress.value
+    FQDN=jsonData.properties.outputs.fqdn.value
+    HTTPS_Endpoint="https://"+FQDN
+
+    resMap.put("CycleCloud FQDN",FQDN)
+    resMap.put("CycleCloud Public IP Address",PUBLIC_IP_ADDRESS)
+
+    schedulerapi.connect()
+	schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "CycleCloud Web UI", HTTPS_Endpoint , "https://techcommunity.microsoft.com/t5/image/serverpage/image-id/234249iBEFA27BCC28902AA/image-size/medium?v=v2&px=400")
+    schedulerapi.addExternalEndpointUrl(variables.get("PA_JOB_ID"), "Azure Portal", "https://portal.azure.com/" , "/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png")
+
+    resultMap.putAll(resMap)
+
+    variables.put("CYCLE_CLOUD_PUBLIC_IP",PUBLIC_IP_ADDRESS)
+    variables.put("CYCLE_CLOUD_FQDN",FQDN)
+}
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            796
+        </positionTop>
+        <positionLeft>
+            659.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="azure-create_resource_group">
+      <description>
+        <![CDATA[ A task that performs a PUT request to Azure REST API in order to create a Resource Group, which name is given as input.
+This task requires the Azure authentication token generated by the task "azure_authenticate". ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="${MANAGEMENT_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/${RESOURCE_GROUP_NAME}?api-version=2020-10-01"/>
+        <variable advanced="false" description="If true, disable SSL certificate verification" hidden="false" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="Content-Type of the request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." hidden="false" inherited="false" name="REQUEST_BODY" value="{&quot;location&quot;: &quot;${RESOURCE_GROUP_LOCATION}&quot;}"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="HTTP Authorization request header that contains the credentials to authenticate the user to the server" hidden="false" inherited="false" name="HEADER_Authorization" value="Bearer ${ACCESS_TOKEN}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_resource_group.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="edit_cycle_cloud_arm_template"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.put(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            541
+        </positionTop>
+        <positionLeft>
+            658.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="wait_for_user_action">
+      <description>
+        <![CDATA[ A task that waits for a user action among the following actions: (i) Create_Slurm_Cluster and (ii) Delete_CycleCloud. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <depends>
+        <task ref="configure_ssh_keys"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.scheduler.common.job.JobVariable
+import org.apache.commons.lang3.RandomStringUtils;
+
+def signals = ['Create_Slurm_Cluster','Delete_CycleCloud']
+
+// Manage the signal 'Delete_CycleCloud'
+signalapi.readyForSignal("Delete_CycleCloud")
+
+// Manage the signal 'Create_Slurm_Cluster'
+jobID=variables.get("PA_JOB_ID")
+randomString = RandomStringUtils.randomAlphanumeric(3);
+region=variables.get("RESOURCE_GROUP_LOCATION")
+rgName=variables.get("RESOURCE_GROUP_NAME")
+vnet=variables.get("CYCLE_CLOUD_VNET")
+nodeToken=variables.get("NODE_SOURCE_NAME")
+
+List <JobVariable> submitJobVariables = new java.util.ArrayList<JobVariable>()
+
+submitJobVariables.add(new JobVariable("REGION", "${region}", "PA:LIST(westus,westus2,westeurope)", "Azure region where the Slurm cluster will be deployed", "Deployment Parameters", false, false))
+submitJobVariables.add(new JobVariable("SUBNET_ID", "${rgName}/${vnet}/compute", "PA:NOT_EMPTY_STRING", "Subnet ID to be used for the communication of Slurm nodes", "Deployment Parameters", true, false))
+submitJobVariables.add(new JobVariable("CREDENTIALS", "azure", "PA:NOT_EMPTY_STRING", "Credentials used by CycleCloud for the creation of Slurm cluster", "Deployment Parameters", true, false))
+submitJobVariables.add(new JobVariable("CYCLECLOUD_CLI_NODE", "${nodeToken}", "PA:NOT_EMPTY_STRING", "Token used to target the CycleCloud VM", "Deployment Parameters", true, false))
+
+submitJobVariables.add(new JobVariable("CLUSTER_NAME", "Activeeon-Slurm-${randomString}-${jobID}", "PA:NOT_EMPTY_STRING", "Slurm cluster name", "Slurm Cluster Parameters", false, false))
+submitJobVariables.add(new JobVariable("AUTOSCALING", "true", "PA:BOOLEAN", "Enable the auto-scaling feature of Slurm", "Slurm Cluster Parameters", true, false))
+submitJobVariables.add(new JobVariable("HPC_MAX_SCALE_SET_SIZE", "10", "PA:NOT_EMPTY_STRING", "Maximal size of Slurm HPC scaleset", "Slurm Cluster Parameters", false, false))
+submitJobVariables.add(new JobVariable("SCHEDULER_IMAGE_NAME", "Canonical:0001-com-ubuntu-server-focal:20_04-lts:latest", "PA:NOT_EMPTY_STRING", "VM image to be used for the creation of Slurm nodes", "Slurm Cluster Parameters", true, false))
+submitJobVariables.add(new JobVariable("SCHEDULER_MACHINE_TYPE", "Standard_D4lds_v5", "PA:LIST(Standard_A4_v2,Standard_A8_v2,Standard_E2_v3, Standard_E4_v3,Standard_E8_v3,Standard_E16_v3,Standard_E20_v3,Standard_E32_v3,Standard_E48_v3,Standard_D4lds_v5)", "VM type to be used for the creation of Slurm nodes", "Slurm Cluster Parameters", true, false))
+
+signalapi.readyForSignal("Create_Slurm_Cluster", submitJobVariables)
+
+// Receive the signal
+receivedSignal = signalapi.waitForAny(signals.toSet())
+println(receivedSignal)
+
+signals.each {  signalapi.removeSignal("ready_"+it) }
+
+if (receivedSignal.getName() == "Delete_CycleCloud") {
+    variables.put("SIGNAL_ACTION","Delete_CycleCloud")
+    println("Deleting CycleCloud resources ...")
+    
+} else if (receivedSignal.getName() == "Create_Slurm_Cluster"){
+    variables.put("SIGNAL_ACTION","Create_Slurm_Cluster")
+    
+    variables.put("REGION",receivedSignal.getUpdatedVariables().get("REGION"))
+    variables.put("SUBNET_ID",receivedSignal.getUpdatedVariables().get("SUBNET_ID"))
+    variables.put("CREDENTIALS",receivedSignal.getUpdatedVariables().get("CREDENTIALS"))
+    variables.put("CYCLECLOUD_CLI_NODE",receivedSignal.getUpdatedVariables().get("CYCLECLOUD_CLI_NODE"))
+    
+    variables.put("CLUSTER_NAME",receivedSignal.getUpdatedVariables().get("CLUSTER_NAME"))
+    variables.put("AUTOSCALING",receivedSignal.getUpdatedVariables().get("AUTOSCALING"))
+    variables.put("HPC_MAX_SCALE_SET_SIZE",receivedSignal.getUpdatedVariables().get("HPC_MAX_SCALE_SET_SIZE"))    
+    variables.put("SCHEDULER_IMAGE_NAME",receivedSignal.getUpdatedVariables().get("SCHEDULER_IMAGE_NAME"))
+    variables.put("SCHEDULER_MACHINE_TYPE",receivedSignal.getUpdatedVariables().get("SCHEDULER_MACHINE_TYPE"))
+    
+    println("Creating new Slurm cluster ...")
+    
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start">
+        <if continuation="Continuation" else="submit_slurm_cluster_creation" target="submit_cyclecloud_deletion">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+action = variables.get("SIGNAL_ACTION")
+
+if (action == "Delete_CycleCloud") {
+    branch = "if"
+} else  if ( action == "Create_Slurm_Cluster" ) {
+    branch = "else"
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            1050
+        </positionTop>
+        <positionLeft>
+            659.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Continuation">
+      <description>
+        <![CDATA[ A task that is executed after both the 'if' and 'else' branches. It allows for executing the loop that manages user actions. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end">
+        <loop target="wait_for_user_action">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+signalAction=variables.get("SIGNAL_ACTION")
+
+loop = signalAction=="Delete_CycleCloud" ? false : true
+
+variables.put("SIGNAL_ACTION","")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            1210.984375
+        </positionTop>
+        <positionLeft>
+            931.484375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="submit_cyclecloud_deletion">
+      <description>
+        <![CDATA[ A task that submits a workflow referenced in the ProActive Catalog (or accessible by url) and wait for its termination by checking every minute if the job is terminated. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="The workflow (in ProActive catalog) to be executed when the action 'Undeploy_Databricks_Resources' is triggered." hidden="false" inherited="false" model="PA:CATALOG_OBJECT" name="DELETE_CYCLE_CLOUD_WORKFLOW" value="activeeon-microsoft/Azure_CycleCloud_Delete"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_submit_job_and_wait.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_chaining_workflows_submit_a_workflow_from_another_workflow"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+schedulerapi.connect()
+    def jobid
+    def called_workflow = null
+    def workflow_variables = new HashMap<>()
+
+    if( !variables.get("jobSubmitted") ){    
+        
+        workflow_variables.put("SUBSCRIPTION_ID",variables.get("SUBSCRIPTION_ID"))
+        workflow_variables.put("TENANT_ID",variables.get("TENANT_ID"))
+        workflow_variables.put("APP_ID",variables.get("APP_ID"))
+        workflow_variables.put("PASSWORD",variables.get("SECRET"))
+                
+        workflow_variables.put("RESOURCE_GROUP_NAME",variables.get("RESOURCE_GROUP_NAME"))    
+        workflow_variables.put("RESOURCE_GROUP_LOCATION",variables.get("RESOURCE_GROUP_LOCATION"))    
+        workflow_variables.put("DEPLOYMENT_NAME",variables.get("DEPLOYMENT_NAME"))        
+        workflow_variables.put("NODE_SOURCE_NAME",variables.get("NODE_SOURCE_NAME"))
+        
+        called_workflow = variables.get("DELETE_CYCLE_CLOUD_WORKFLOW")    
+
+        // submitting the job
+        def generic_infos_map = ["PARENT_JOB_ID" : variables.get("PA_JOB_ID")]
+        jobid = schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"), called_workflow, workflow_variables, generic_infos_map)
+        variables.put("jobSubmitted", true)
+
+        // alternatively you can submit a workflow from a direct url
+
+        // // add sessionId to request header map
+        // requestHeader = Collections.singletonMap("sessionId", schedulerapi.getSession()
+        // jobUrl = "https://try.activeeon.com/catalog/buckets/basic-examples/resources/distributed_computing_Pi/raw"
+        // jobid = schedulerapi.submit(jobURL, variables, generic_infos_map, requestHeader)
+
+        println "Job submitted with job id " + jobid
+        variables.put("jobID", jobid)
+    }
+
+    if( jobid == null ){
+        jobid = variables.get("jobID")
+    }
+    isFinished = schedulerapi.isJobFinished(jobid)
+
+    if(isFinished){
+        resultMap.putAll(schedulerapi.getJobResult(jobid).getResultMap())
+    }
+
+    variables.put("isFinished", isFinished)
+
+    result = jobid
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="submit_cyclecloud_deletion">
+          <script>
+            <code language="javascript">
+              <![CDATA[
+// You can use a Cron Expression here
+              // examples http://www.sauronsoftware.it/projects/cron4j/manual.php#p02
+if(!variables.get("isFinished")){
+	loop = '* * * * *';
+}else{
+    variables.put("jobSubmitted", false);
+	loop = false;
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+if(variables.get("SIGNAL_ACTION")=="Delete_CycleCloud"){//Remove External Endpoint Url
+    schedulerapi.connect()
+    schedulerapi.removeExternalEndpointUrl(variables.get("PA_JOB_ID"), "Azure Portal")
+        schedulerapi.removeExternalEndpointUrl(variables.get("PA_JOB_ID"), "CycleCloud Web UI")
+}
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            1217
+        </positionTop>
+        <positionLeft>
+            358.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="azure_authenticate">
+      <description>
+        <![CDATA[ A task that performs a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="${AUTHENTICATION_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/${TENANT_ID}/oauth2/token"/>
+        <variable advanced="false" description="If true, disable SSL certificate verification" hidden="false" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="Content-Type of the request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/x-www-form-urlencoded"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." hidden="false" inherited="false" name="REQUEST_BODY" value="&amp;grant_type=client_credentials&amp;client_id=${APP_ID}&amp;client_secret=%SECRET%&amp;resource=https%3A%2F%2Fmanagement.azure.com%2F"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="CycleCloud_SSH_Private_Key"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY").replace("%SECRET%",variables.get("SECRET")))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+
+variables.put("ACCESS_TOKEN",result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+import static io.restassured.RestAssured.*;	
+import static io.restassured.matcher.RestAssuredMatchers.*;	
+import static io.restassured.config.EncoderConfig.*;	
+import static org.hamcrest.Matchers.*;	
+import org.apache.commons.httpclient.HttpStatus;	
+import io.restassured.http.ContentType;	
+import io.restassured.RestAssured;	
+import com.google.common.base.Strings;
+
+// =========== Manage Azure Access token ============
+def slurper = new JsonSlurper()
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+access_token=jsonData.access_token
+variables.put("ACCESS_TOKEN",access_token)
+println variables.get("ACCESS_TOKEN")
+
+expires_on=jsonData.expires_on
+variables.put("EXPIRES_ON",expires_on)
+println variables.get("EXPIRES_ON")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            154
+        </positionTop>
+        <positionLeft>
+            687.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="edit_cycle_cloud_arm_template">
+      <description>
+        <![CDATA[ A task that customizes the CycleCloud deployment ARM based on the input variables provided by the user. ]]>
+      </description>
+      <depends>
+        <task ref="prepare_pa_node_params"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="${ARM_TEMPLATE}"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+jsonFile = new File(variables.get("ARM_TEMPLATE"))
+jsonSlurper = new JsonSlurper()
+jsonData = jsonSlurper.parse(jsonFile)
+
+jobId=variables.get("PA_JOB_ID")
+
+jsonData.properties.template.parameters.tenantId.defaultValue = variables.get("TENANT_ID")
+jsonData.properties.template.parameters.applicationId.defaultValue =  variables.get("APP_ID")
+jsonData.properties.template.parameters.applicationSecret.defaultValue = variables.get("SECRET")
+jsonData.properties.template.parameters.sshPublicKey.defaultValue = variables.get("SSH_PUBLIC_KEY")
+jsonData.properties.template.parameters.username.defaultValue= variables.get("PROACTIVE_USER")
+jsonData.properties.template.parameters.password.defaultValue= variables.get("PROACTIVE_PASSWORD")
+jsonData.properties.template.parameters.cyclecloudVmSize.defaultValue = variables.get("VM_SIZE")
+
+jsonData.properties.template.parameters.vnetName.defaultValue= "ae-cc-vnet-"+jobId
+jsonData.properties.template.parameters.storageAccountName.defaultValue= "aeccstorage"+jobId
+
+jsonData.properties.template.variables.cycleName="ae-cc-vm-"+jobId
+jsonData.properties.template.variables.cycleNic="ae-cc-nic-"+jobId
+jsonData.properties.template.variables.cycleNsgName="ae-cc-nsg-"+jobId
+jsonData.properties.template.variables.cycleIPName="ae-cc-ip-"+jobId
+
+jsonData.properties.template.parameters.installPANodeParameters.defaultValue = variables.get("CYCLECLOUD_NODE_SCRIPT_PARAMETERS")
+
+modifiedJson = JsonOutput.prettyPrint(JsonOutput.toJson(jsonData))
+variables.put("ARM_TEMPLATE_CONTENT",modifiedJson)
+println modifiedJson
+
+variables.put("CYCLE_CLOUD_VNET","ae-cc-vnet-"+jobId)
+variables.put("CYCLE_CLOUD_STORAGE","aeccstorage"+jobId)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            410
+        </positionTop>
+        <positionLeft>
+            659.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" maxNumberOfExecution="1" name="prepare_pa_node_params">
+      <description>
+        <![CDATA[ A task that: (i) creates a NodeSource for CycleCloud in ProActive Resource Manager, and (ii) prepares the parameters needed by ProActive nodes (running in CycleCloud) to connect to the Resource Manager. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" name="ENDPOINT" value="${PA_SCHEDULER_REST_URL}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/scheduler/createcredential/"/>
+        <variable advanced="false" description="Content-Type of the request" hidden="false" inherited="false" model="PA:LIST(application/x-www-form-urlencoded,multipart/form-data)" name="CONTENT_TYPE" value="multipart/form-data"/>
+        <variable advanced="false" description="If true, disable SSL certificate verification" hidden="false" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value=""/>
+        <variable advanced="false" description="ProActive login name" hidden="false" inherited="false" name="PARAM_username" value="${PA_USER}"/>
+        <variable advanced="false" description="ProActive login password" hidden="false" inherited="false" name="PARAM_password" value="${PROACTIVE_PASSWORD}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="azure_authenticate"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+// Prepare the NodeSource for ProActive Nodes that will be deployed in Spark cluster
+def nodeSourceName = variables.get("NODE_SOURCE_NAME")
+
+try{
+    rmapi.connect()
+    def nsMap = rmapi.getExistingNodeSources()
+    def ns = nsMap.find{ it.key == nodeSourceName }
+
+    if(ns){
+        println "NodeSource '${nodeSourceName}' already exists, thus the operation of NodeSource creation will be skipped."
+    } else {
+        // NS configuration settings
+        def infrastructureType = "org.ow2.proactive.resourcemanager.nodesource.infrastructure.DefaultInfrastructureManager"
+        def infrastructureParameters = [""]
+        def infrastructureFileParameters = [""]
+        def policyType = "org.ow2.proactive.resourcemanager.nodesource.policy.EmptyPolicy"
+        def poliyParameters = ["ALL","ME"]
+        def policyFileParameters = []
+        def nodesRecoverable = "true"
+
+        // Create and deploy NS
+        print "Creating the NodeSource '${nodeSourceName}' ..."
+        rmapi.defineNodeSource(nodeSourceName,infrastructureType,(String[]) infrastructureParameters.toArray(),(String[]) infrastructureFileParameters.toArray(), policyType,         (String[]) poliyParameters.toArray(), (String[]) policyFileParameters.toArray(),nodesRecoverable)
+        println " OK !"
+        print "Deploying the NodeSource '${nodeSourceName}' ..."
+        rmapi.deployNodeSource(nodeSourceName)
+        println " OK !"
+    }
+} catch(Exception e){
+	throw e
+} finally {
+	rmapi.disconnect()
+}
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+contentType = variables.get("CONTENT_TYPE")
+isMultiPart = contentType.equals("multipart/form-data")
+
+restCall = given().contentType(contentType + ";charset = UTF-8")
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = (isMultiPart ? restCall.multiPart(entry.getKey().replace("PARAM_",""), entry.getValue()) : restCall.formParam(entry.getKey().replace("PARAM_",""), entry.getValue()) )});
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import static io.restassured.RestAssured.*;	
+import static io.restassured.matcher.RestAssuredMatchers.*;	
+import static org.hamcrest.Matchers.*;	
+import org.apache.commons.httpclient.HttpStatus;	
+import com.google.common.base.Strings;	
+import groovy.json.JsonSlurper;	
+import io.restassured.specification.ProxySpecification	
+
+def restUrl = variables.get("PA_SCHEDULER_REST_PUBLIC_URL")	
+def nodeJarUrl = restUrl+"/node.jar"	
+def host = new URL(restUrl).getHost()	
+def protocol = variables.get("PA_NODE_URL").substring(0, restUrl.lastIndexOf("//")-2)	
+def nsName = variables.get("NODE_SOURCE_NAME")	
+
+response = given().relaxedHTTPSValidation().get(variables.get("PA_SCHEDULER_REST_URL")+"/rm/url/")	
+response = response.then().assertThat()	
+  .statusCode(HttpStatus.SC_OK)	
+  .extract();	
+rmURL = response.prettyPrint()	
+println("rmUrl: "+rmURL);	
+
+println "nodeJarUrl: "+nodeJarUrl
+println "rmHostname: "+host
+println "protocol: "+protocol
+println "nsName: "+nsName
+println "nodeNamingOption: "+variables.get("NODE_SOURCE_NAME")
+println "credentials: "+result
+println "numberOfNodesPerInstance: "+ 1
+println "additionalProperties: "+ "-Dproactive.useIPaddress=true"
+
+def nodeScriptParameters = restUrl + " " + protocol + " " + host + " " + rmURL + " " + nsName + " " + variables.get("NODE_SOURCE_NAME")+ " " + result + " " + variables.get("NUMBER_OF_NODES") + " -Dproactive.useIPaddress=true"
+
+println nodeScriptParameters
+variables.put ("CYCLECLOUD_NODE_SCRIPT_PARAMETERS",nodeScriptParameters)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            284
+        </positionTop>
+        <positionLeft>
+            659.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="submit_slurm_cluster_creation">
+      <description>
+        <![CDATA[ A task that submits  a workflow referenced in the ProActive Catalog (or accessible by url) without waiting for its termination ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Workflow to submit from the ProActive Catalog" hidden="false" inherited="false" model="PA:CATALOG_OBJECT" name="CREATE_HPC_CLUSTER_WORKFLOW" value="activeeon-microsoft/Azure_CycleCloud_Create_Slurm_Cluster"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_submit_job_no_wait.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_chaining_workflows_submit_a_workflow_from_another_workflow"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Submit a workflow referenced in the ProActive Catalog (or accessible by url)
+
+// Please add the bucket and workflow names that you want to execute as Task Variables 'called_workflow'
+
+// connect to the scheduler
+schedulerapi.connect()
+
+def workflow_variables = new HashMap<>()
+
+workflow_variables.put("SUBSCRIPTION_ID",variables.get("SUBSCRIPTION_ID"))
+workflow_variables.put("TENANT_ID",variables.get("TENANT_ID"))
+workflow_variables.put("APP_ID",variables.get("APP_ID"))
+workflow_variables.put("SECRET",variables.get("SECRET"))
+
+workflow_variables.put("REGION",variables.get("REGION"))
+workflow_variables.put("SUBNET_ID",variables.get("SUBNET_ID"))
+workflow_variables.put("STORAGE_NAME",variables.get("CYCLE_CLOUD_STORAGE"))
+workflow_variables.put("CREDENTIALS",variables.get("CREDENTIALS"))
+workflow_variables.put("CYCLECLOUD_CLI_NODE",variables.get("CYCLECLOUD_CLI_NODE"))
+        
+workflow_variables.put("CLUSTER_NAME",variables.get("CLUSTER_NAME"))        
+workflow_variables.put("AUTOSCALING",variables.get("AUTOSCALING"))
+workflow_variables.put("HPC_MAX_SCALE_SET_SIZE",variables.get("HPC_MAX_SCALE_SET_SIZE"))
+workflow_variables.put("SCHEDULER_IMAGE_NAME",variables.get("SCHEDULER_IMAGE_NAME"))        
+workflow_variables.put("SCHEDULER_MACHINE_TYPE",variables.get("SCHEDULER_MACHINE_TYPE"))
+
+workflow_variables.put("USER_LOGIN",variables.get("PROACTIVE_USER"))
+workflow_variables.put("USER_PRIVATE_KEY",variables.get("SSH_PRIVATE_KEY"))
+
+// get the workflow information from Task Variables
+calledWorkflow = variables.get("CREATE_HPC_CLUSTER_WORKFLOW")
+
+println "Submitting workflow " + calledWorkflow
+
+// submitting the job
+def generic_infos_map = ["PARENT_JOB_ID" : variables.get("PA_JOB_ID")]
+jobid = schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"), calledWorkflow, workflow_variables, generic_infos_map)
+
+// alternatively you can submit a workflow from a direct url
+
+// // add sessionId to request header map
+// requestHeader = Collections.singletonMap("sessionId", schedulerapi.getSession())
+// jobUrl = "https://try.activeeon.com/catalog/buckets/basic-examples/resources/distributed_computing_Pi/raw"
+// jobid = schedulerapi.submit(jobURL, variables, generic_infos_map, requestHeader)
+
+println "Job submitted with job id " + jobid
+
+result = jobid
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            1218.984375
+        </positionTop>
+        <positionLeft>
+            614.484375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="configure_ssh_keys">
+      <description>
+        <![CDATA[ A task that creates a file in the CycleCloud VM, which containing the SSH private key. This private key allows SSH connections from the CycleCloud VM to Slurm VMs. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="${NODE_SOURCE_NAME}"/>
+      </genericInformation>
+      <depends>
+        <task ref="check_cycle_cloud_deployment"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.io.File 
+    
+user=variables.get("PROACTIVE_USER")
+
+File sshDir = new File("/home/${user}/.ssh")
+if (!sshDir.exists()) {
+    sshDir.mkdirs()
+}
+
+byte[] decodedPrivateKey = variables.get("SSH_PRIVATE_KEY").decodeBase64()
+id_rsa=new File("/home/${user}/.ssh/id_rsa")
+id_rsa.newWriter().withWriter { w ->
+  w << new String(decodedPrivateKey) + System.getProperty("line.separator")
+}
+println(id_rsa.getText())
+
+//newLineCommand="echo \"\" >> /home/${user}/.ssh/id_rsa"
+//newLineCommand.execute().text
+
+PermissionCommand="chmod 600 /home/${user}/.ssh/id_rsa"
+PermissionCommand.execute().text
+
+ownershipCommand="chown -R ${user}:${user} /home/${user}/.ssh"
+ownershipCommand.execute().text
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            924
+        </positionTop>
+        <positionLeft>
+            659.484375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="CycleCloud_SSH_Private_Key" preciousResult="true">
+      <description>
+        <![CDATA[ A task that create a SSH keypair that be used to access both the CycleCloud VM and Slurm VMs ]]>
+      </description>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="bash">
+            <![CDATA[
+jobId=$variables_PA_JOB_ID
+ssh-keygen -f ./cycle_cloud_"$jobId"_id_rsa -t rsa -m PEM -N "" -b 4096
+ls -la
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import static io.restassured.RestAssured.*;	
+import static io.restassured.matcher.RestAssuredMatchers.*;	
+import static io.restassured.config.EncoderConfig.*;	
+import static org.hamcrest.Matchers.*;	
+import org.apache.commons.httpclient.HttpStatus;	
+import io.restassured.http.ContentType;	
+import io.restassured.RestAssured;	
+import com.google.common.base.Strings;
+
+
+// Check user password validity
+def username = variables.get("USER_LOGIN")
+
+def pwdVariable = variables.get("USER_PASSWORD")
+def pwd = credentials.get(pwdVariable)
+
+restCall = given().contentType("application/x-www-form-urlencoded;charset = UTF-8")	
+restCall = restCall.relaxedHTTPSValidation()	
+restCall=restCall.formParam("username", username) 	
+restCall=restCall.formParam("password", pwd) 	
+restUrl = variables.get("PA_SCHEDULER_REST_PUBLIC_URL")+"/scheduler/login/"	
+response = restCall.post(restUrl)	
+response = response.then().assertThat()	
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))	
+  .extract();
+
+// Check user SSH keypair
+def jobId=variables.get("PA_JOB_ID")
+
+def privateKeyFile=new File("cycle_cloud_${jobId}_id_rsa")
+def publicKeyFile=new File("cycle_cloud_${jobId}_id_rsa.pub")
+                   
+if (!publicKeyFile.exists() || !privateKeyFile.exists()) {
+    throw new RuntimeException("Error occurred during SSH keypair generation")
+}
+                   
+println(publicKeyFile.text)
+println(privateKeyFile.text)
+
+
+def publicKey = publicKeyFile.text
+
+def privateKey = privateKeyFile.text
+def encodedPrivateKey = privateKey.bytes.encodeBase64().toString()
+println encodedPrivateKey
+
+variables.put("PROACTIVE_USER",username)
+variables.put("PROACTIVE_PASSWORD",pwd)
+variables.put("SSH_PUBLIC_KEY",publicKey)
+variables.put("SSH_PRIVATE_KEY",encodedPrivateKey)
+
+result = privateKey.getBytes()
+resultMetadata.put("file.name", "CycleCloud_SSH_Private_Key_"+jobId)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            27
+        </positionTop>
+        <positionLeft>
+            659.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2725px;
+            height:3120px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-22px;left:-353.984375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_93" style="top: 668px; left: 659.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs a PUT request to Azure REST API in order to deploy CycleCloud and its underlying resources.
+This task requires the Azure authentication token generated by the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png" width="20px">&nbsp;<span class="name">deploy_cycle_cloud</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_96" style="top: 796px; left: 659.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs a Get request to Azure REST API in order to  check the status of the CycleCloud deployment.
+This task requires the Azure authentication token generated by the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_cyclecloud.png" width="20px">&nbsp;<span class="name">check_cycle_cloud_deployment</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_99" style="top: 541px; left: 658.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs a PUT request to Azure REST API in order to create a Resource Group, which name is given as input.
+This task requires the Azure authentication token generated by the task &quot;azure_authenticate&quot;."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_resource_group.png" width="20px">&nbsp;<span class="name">azure-create_resource_group</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_102" style="top: 1050px; left: 659.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that waits for a user action among the following actions: (i) Create_Slurm_Cluster and (ii) Delete_CycleCloud."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">wait_for_user_action</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_105" style="top: 1210.98px; left: 931.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that is executed after both the 'if' and 'else' branches. It allows for executing the loop that manages user actions."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_108" style="top: 1217px; left: 358.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that submits a workflow referenced in the ProActive Catalog (or accessible by url) and wait for its termination by checking every minute if the job is terminated."><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_submit_job_and_wait.png" width="20px">&nbsp;<span class="name">submit_cyclecloud_deletion</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_111" style="top: 154px; left: 687.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png" width="20px">&nbsp;<span class="name">azure_authenticate</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_114" style="top: 410px; left: 659.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that customizes the CycleCloud deployment ARM based on the input variables provided by the user."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">edit_cycle_cloud_arm_template</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_117" style="top: 284px; left: 659.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that: (i) creates a NodeSource for CycleCloud in ProActive Resource Manager, and (ii) prepares the parameters needed by ProActive nodes (running in CycleCloud) to connect to the Resource Manager."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">prepare_pa_node_params</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_120" style="top: 1218.98px; left: 614.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that submits  a workflow referenced in the ProActive Catalog (or accessible by url) without waiting for its termination"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_submit_job_no_wait.png" width="20px">&nbsp;<span class="name">submit_slurm_cluster_creation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_123" style="top: 924px; left: 659.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that creates a file in the CycleCloud VM, which containing the SSH private key. This private key allows SSH connections from the CycleCloud VM to Slurm VMs."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">configure_ssh_keys</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_126" style="top: 27px; left: 659.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that create a SSH keypair that be used to access both the CycleCloud VM and Slurm VMs"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">CycleCloud_SSH_Private_Key</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:713.5px;top:580.5px" width="42" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 87 C -10 37 31 50 21 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.037664000000001,65.388768 L11.604719578086716,48.383764693192816 L3.1346680218199907,52.02494947759797 L-1.759098944315311,44.21143267137282 L-1.037664000000001,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.037664000000001,65.388768 L11.604719578086716,48.383764693192816 L3.1346680218199907,52.02494947759797 L-1.759098944315311,44.21143267137282 L-1.037664000000001,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:713.5px;top:707.5px" width="48" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 27 88 C 37 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.41933025,65.8307285 L26.57638206964205,44.65788177677379 L22.27241606430647,52.81115575873439 L13.556809328376433,49.804795962467324 L27.41933025,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.41933025,65.8307285 L26.57638206964205,44.65788177677379 L22.27241606430647,52.81115575873439 L13.556809328376433,49.804795962467324 L27.41933025,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:831.5px;top:785.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_140" style="position: absolute; transform: translate(-50%, -50%); left: 856.5px; top: 815.5px;">loop</div><svg style="position:absolute;left:734.5px;top:449.5px" width="26.5" height="92" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 91 C -10 41 15.5 50 5.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.363472,69.046624 L6.594095010834184,49.84344735532959 L-0.9688006150203319,55.11626536398782 L-7.336263625177989,48.448775970349914 L-2.363472,69.046624" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.363472,69.046624 L6.594095010834184,49.84344735532959 L-0.9688006150203319,55.11626536398782 L-7.336263625177989,48.448775970349914 L-2.363472,69.046624" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:713px;top:963.5px" width="24" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 3 86 C 13 36 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.571843749999999,64.94400000000002 L11.175370310174007,44.50872436962438 L4.605987235683539,50.97735683874783 L-2.7912728510781797,45.47458088394084 L5.571843749999999,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M5.571843749999999,64.94400000000002 L11.175370310174007,44.50872436962438 L4.605987235683539,50.97735683874783 L-2.7912728510781797,45.47458088394084 L5.571843749999999,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:348.5px;top:1089.5px" width="322" height="128" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 127 C -10 77 311 50 301 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M51.25955400000001,90.62468199999999 L72.44402139630651,91.09195187365627 L64.57234535542125,86.29229393716196 L68.11163333346846,77.77916051823503 L51.25955400000001,90.62468199999999" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M51.25955400000001,90.62468199999999 L72.44402139630651,91.09195187365627 L64.57234535542125,86.29229393716196 L68.11163333346846,77.77916051823503 L51.25955400000001,90.62468199999999" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_152" style="position: absolute; transform: translate(-50%, -50%); left: 509px; top: 1153px;">if</div><svg style="position:absolute;left:603.5px;top:1089.5px" width="67" height="130" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 129 C -10 79 56 50 46 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.0611249999999988,97.96096875 L17.80451324375866,82.7414909963516 L8.933374194643385,85.25204710432094 L5.0955915980795865,76.86924180170821 L3.0611249999999988,97.96096875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.0611249999999988,97.96096875 L17.80451324375866,82.7414909963516 L8.933374194643385,85.25204710432094 L5.0955915980795865,76.86924180170821 L3.0611249999999988,97.96096875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_156" style="position: absolute; transform: translate(-50%, -50%); left: 636.5px; top: 1154px;">else</div><svg style="position:absolute;left:649.5px;top:1089.5px" width="292" height="122" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 271 121 C 281 71 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M225.120466,85.700686 L208.42711143320616,72.64955910201515 L211.86178066658175,81.205437038107 L203.93186247131314,85.90824443543339 L225.120466,85.700686" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M225.120466,85.700686 L208.42711143320616,72.64955910201515 L211.86178066658175,81.205437038107 L203.93186247131314,85.90824443543339 L225.120466,85.700686" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_160" style="position: absolute; transform: translate(-50%, -50%); left: 795px; top: 1150px;">continuation</div><svg style="position:absolute;left:792.5px;top:1039.5px" width="239" height="222" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 0 C 50 -50 228 171 238 121 " transform="translate(0.5,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M62.667432000000005,8.099514000000003 L83.3842207683078,12.550880433952166 L74.61501984988612,15.397126251226663 L76.08660851708113,24.498468283838292 L62.667432000000005,8.099514000000003" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M62.667432000000005,8.099514000000003 L83.3842207683078,12.550880433952166 L74.61501984988612,15.397126251226663 L76.08660851708113,24.498468283838292 L62.667432000000005,8.099514000000003" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_166" style="position: absolute; transform: translate(-50%, -50%); left: 926.5px; top: 1150px;">loop</div><svg style="position:absolute;left:511.5px;top:1206.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_172" style="position: absolute; transform: translate(-50%, -50%); left: 536.5px; top: 1236.5px;">loop</div><svg style="position:absolute;left:738px;top:66.5px" width="23" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 2 87 C 12 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.652999999999999,65.86284375000001 L10.542150038492773,45.508043042940244 L3.882825259434565,51.88404441425608 L-3.4366492972511575,46.27821778350568 L4.652999999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.652999999999999,65.86284375000001 L10.542150038492773,45.508043042940244 L3.882825259434565,51.88404441425608 L-3.4366492972511575,46.27821778350568 L4.652999999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:728.5px;top:323.5px" width="32.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 11.5 86 C 21.5 36 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.382015625000001,64.94400000000002 L16.67935389681602,44.01250315144144 L10.869694967872487,51.171264436003646 L2.9066183328196535,46.52482380856896 L13.382015625000001,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.382015625000001,64.94400000000002 L16.67935389681602,44.01250315144144 L10.869694967872487,51.171264436003646 L2.9066183328196535,46.52482380856896 L13.382015625000001,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:728.5px;top:193.5px" width="32.5" height="91" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 90 C -10 40 21.5 50 11.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.8502560000000003,68.13216 L8.552678741301968,49.67196095534686 L0.6079226663441957,54.34965813552233 L-5.229823123175695,47.213782289002665 L-1.8502560000000003,68.13216" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.8502560000000003,68.13216 L8.552678741301968,49.67196095534686 L0.6079226663441957,54.34965813552233 L-5.229823123175695,47.213782289002665 L-1.8502560000000003,68.13216" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:713px;top:835.5px" width="48.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 37.5 50 27.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.3743243750000017,65.8307285 L13.580255742706134,49.88489224916259 L4.8474807037876415,52.841011346838144 L0.5905385895442699,44.66308717037495 L-0.3743243750000017,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.3743243750000017,65.8307285 L13.580255742706134,49.88489224916259 L4.8474807037876415,52.841011346838144 L0.5905385895442699,44.66308717037495 L-0.3743243750000017,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 714px; top: 698px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 714px; top: 658px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 741px; top: 826px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 741px; top: 786px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 832px; top: 786px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 832px; top: 826px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 735px; top: 571px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 735px; top: 531px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 716.5px; top: 1080px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 716.5px; top: 1040px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 650px; top: 1080px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 783px; top: 1080px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 971px; top: 1241px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 921px; top: 1201px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 1021px; top: 1201px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 430.5px; top: 1247px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 349px; top: 1207px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 512px; top: 1207px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 512px; top: 1247px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 740.5px; top: 184px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 740.5px; top: 144px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 740.5px; top: 440px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 740.5px; top: 400px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 729px; top: 314px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 729px; top: 274px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 692px; top: 1249px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 604px; top: 1209px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 713.5px; top: 954px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 713.5px; top: 914px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 738.5px; top: 57px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

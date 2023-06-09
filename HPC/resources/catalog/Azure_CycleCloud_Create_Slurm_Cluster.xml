@@ -1,0 +1,1051 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="1" name="Azure_CycleCloud_Create_Slurm_Cluster" onTaskError="continueJobExecution" priority="normal" projectName="2. Azure Slurm" tags="Azure,HPC,CycleCloud,Slurm" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable description="The subscription id of your Microsoft Azure account." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="SUBSCRIPTION_ID" value="change-it-and-put-your-azure-subscription-id"/>
+    <variable advanced="true" description="The tenant id of your Microsoft Azure account." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="TENANT_ID" value="change-it-and-put-your-azure-tenant-id"/>
+    <variable advanced="true" description="ID of a Azure client application." group="Subscription Parameters" model="PA:NOT_EMPTY_STRING" name="APP_ID" value="change-it-and-put-your-azure-client-application-id"/>
+    <variable advanced="true" description="Secret key of the Azure client application." group="Subscription Parameters" hidden="false" model="PA:HIDDEN" name="SECRET" value="ENC(L/ks1WBUEKZZ2K0wm+3i1A==)"/>
+    <variable description="Authentication endpoint of Azure REST API." hidden="true" model="PA:URL" name="AUTHENTICATION_ENDPOINT" value="https://login.microsoftonline.com"/>
+    <variable advanced="false" description="Azure region where the Slurm cluster will be deployed" group="Deployment Parameters" hidden="false" model="PA:LIST(westus,westus2,westeurope)" name="REGION" value="westus2"/>
+    <variable advanced="true" description="Subnet ID to be used for networking the Slurm nodes" group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="SUBNET_ID" value="RG-of-activeeon-cyclecloud-${PA_JOB_ID}/ae-cyclecloud-vnet/compute"/>
+    <variable advanced="true" description="Name of CycleCloud Storage" group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="STORAGE_NAME" value="aeccstoragexxxx"/>
+    <variable advanced="true" description="Credentials used by CycleCloud for the creation of Slurm cluster" group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="CREDENTIALS" value="azure"/>
+    <variable advanced="true" description="Token used to target ProActive node running in the CycleCloud VM (where the CycleCloud CLI is installed)" group="Deployment Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="CYCLECLOUD_CLI_NODE" value="Activeeon-CycleCloud-${PA_JOB_ID}"/>
+    <variable advanced="false" description="Name of the Slurm cluster to be created" group="Slurm Cluster Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="CLUSTER_NAME" value="Activeeon-Surm-${PA_JOB_ID}"/>
+    <variable advanced="true" description="Enable the auto-scaling feature of Slurm" group="Slurm Cluster Parameters" hidden="false" model="PA:BOOLEAN" name="AUTOSCALING" value="true"/>
+    <variable advanced="true" description="Maximal size of Slurm HPC scaleset" group="Slurm Cluster Parameters" hidden="false" model="PA:INTEGER" name="HPC_MAX_SCALE_SET_SIZE" value="10"/>
+    <variable advanced="true" description="VM image to be used for the creation of Slurm nodes" group="Slurm Cluster Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="SCHEDULER_IMAGE_NAME" value="Canonical:0001-com-ubuntu-server-focal:20_04-lts:latest"/>
+    <variable advanced="true" description="VM type to be used for the creation of Slurm nodes" group="Slurm Cluster Parameters" hidden="false" model="PA:LIST(Standard_A4_v2,Standard_A8_v2,Standard_E2_v3, Standard_E4_v3,Standard_E8_v3,Standard_E16_v3,Standard_E20_v3,Standard_E32_v3,Standard_E48_v3,Standard_D4lds_v5)" name="SCHEDULER_MACHINE_TYPE" value="Standard_D4lds_v5"/>
+    <variable advanced="false" description="Your Activeeon user login." group="Activeeon User Credentials" hidden="false" model="PA:NOT_EMPTY_STRING" name="USER_LOGIN" value="put-here-your-activeeon-login"/>
+    <variable advanced="false" description="Your Activeeon password must be added to the third-party credentials vault (the user login is the key and the password is the credential). This password is used to connect ProActive nodes running in Slurm worker VMs to ProActive Resource Manager." group="Activeeon User Credentials" hidden="false" model="PA:CREDENTIAL" name="USER_PASSWORD" value="${USER_LOGIN}"/>
+    <variable advanced="false" description="SSH private key used to connect to Slurm VMs/nodes via SSH." group="Activeeon User Credentials" hidden="false" model="PA:HIDDEN" name="USER_PRIVATE_KEY" value="ENC(AI09Vuj9M2xjw3RJkW3IX/3uuADhin66)"/>
+    <variable advanced="false" description="Hidden variable used to determine the name of the zip archive of ProActive Linux node." group="Hidden Technical Parameters" hidden="true" model="PA:NOT_EMPTY_STRING" name="PROACTIVE_NODE_ARCHIVE_NAME" value="activeeon_enterprise-node-linux-x64-13.1.0-SNAPSHOT"/>
+    <variable advanced="false" description="Path where init scripts of Slurm nodes are uploaded in the CycleCloud storage" group="Deployment Parameters" hidden="true" model="PA:NOT_EMPTY_STRING" name="SLURM_INIT_PATH" value="cyclecloud/cache/projects/slurm/3.0.1/default/cluster-init/scripts"/>
+    <variable advanced="false" description="Name of the script used for the initialization of Slurm worker VMs. This script is used to install some dependencies (such as Docker) in Slurm worker VMs during their startup." group="Deployment Parameters" hidden="true" model="PA:NOT_EMPTY_STRING" name="NODE_INIT_SCRIPT_NAME" value="00-setup-node.sh"/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow runs in a machine where CycleCloud CLI is installed. It creates a Slurm cluster using Azure CycleCloud CLI. Slurm is configured based on the workflow input variables. The workflow further deletes the cluster when the user triggers the action 'Delete_Slurm_Cluster'. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="activeeon-microsoft"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/slurm.png"/>
+<info name="Documentation" value="https://learn.microsoft.com/en-us/azure/cyclecloud/cli?view=cyclecloud-8"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="create_slurm_cluster">
+      <description>
+        <![CDATA[ A task that creates a Slurm cluster using Azure CycleCloud CLI. Slurm is configured based on the workflow input variables. 
+This task uses a node access token (given as input) to target  a machine where Cycle Cloud CLI is installed. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/slurm.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="${CYCLECLOUD_CLI_NODE}"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+jobId=variables.get("PA_JOB_ID")
+configFile="slurm-config-${jobId}.json"
+variables.put("CONFIG_FILE",configFile)
+
+region=variables.get("REGION")
+subnetID=variables.get("SUBNET_ID")
+credentials=variables.get("CREDENTIALS")
+autoscaling=variables.get("AUTOSCALING")
+hpcMaxScaleSetSize=variables.get("HPC_MAX_SCALE_SET_SIZE")
+schedulerImageName=variables.get("SCHEDULER_IMAGE_NAME")
+schedulerImageType=variables.get("SCHEDULER_MACHINE_TYPE")
+
+def json_string = """{
+  "Region" : "${region}",  
+  "SubnetId" : "${subnetID}",
+  "Credentials" : "${credentials}",
+  "Autoscale" : "${autoscaling}",
+  "FilesystemSize" : 200,
+  "AdditionalNFSMountPoint" : "/data",
+  "NFSSharedExportPath" : "/shared",
+
+  "loginMachineType" : "Standard_D4lds_v5",
+  "NumberLoginNodes" : 0,  
+
+  "SchedulerImageName" : "${schedulerImageName}",
+  "SchedulerMachineType" : "${schedulerImageType}",
+  "SchedulerClusterInitSpecs" : null,
+
+  "DynamicImageName" : "Canonical:0001-com-ubuntu-server-focal:20_04-lts:latest",
+  "DynamicSpotMaxPrice" : -1,
+  "DynamicMachineType" : "Standard_F2s_v2",
+  "MaxDynamicExecuteCoreCount" : 100,
+
+  "HPCImageName" : "Canonical:0001-com-ubuntu-server-focal:20_04-lts:latest",
+  "HPCMachineType" : "Standard_D8lds_v5",
+  "MaxHPCExecuteCoreCount" : 80,
+  "HPCMaxScalesetSize" : "${hpcMaxScaleSetSize}",
+  "HPCClusterInitSpecs" : null,
+
+  "HTCImageName" : "Canonical:0001-com-ubuntu-server-focal:20_04-lts:latest",
+  "HTCMachineType" : "Standard_D8lds_v5",
+  "MaxHTCExecuteCoreCount" : 80, 
+  "HTCSpotMaxPrice" : -1,
+  "HTCClusterInitSpecs" : null
+}"""
+
+new File(configFile).write(json_string)
+
+println(json_string)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+/usr/local/bin/cyclecloud create_cluster slurm_template_3.0.1  $variables_CLUSTER_NAME -p $variables_CONFIG_FILE 
+sleep 30
+/usr/local/bin/cyclecloud start_cluster $variables_CLUSTER_NAME
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            150
+        </positionTop>
+        <positionLeft>
+            621
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="delete_slurm_cluster">
+      <description>
+        <![CDATA[ A task that terminates and deletes the Slurm cluster. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/slurm.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="${CYCLECLOUD_CLI_NODE}"/>
+      </genericInformation>
+      <depends>
+        <task ref="remove_node_source"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+/usr/local/bin/cyclecloud terminate_cluster $variables_CLUSTER_NAME
+/usr/local/bin/cyclecloud delete_cluster --force $variables_CLUSTER_NAME
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            1174
+        </positionTop>
+        <positionLeft>
+            619
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="wait_for_user_action">
+      <description>
+        <![CDATA[ A task that waits for a user signal/action to terminate and delete the Slurm cluster. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="List of comma-separated signals expected by this task." hidden="false" inherited="false" name="SIGNALS" value="Delete_Slurm_Cluster"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="TASK.DOCUMENTATION" value="user/ProActiveUserGuide.html#_task_signal_api"/>
+      </genericInformation>
+      <depends>
+        <task ref="create_slurm_node_source"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/control-signal/resources/check_and_remove_many_signals/raw">
+            <arguments>
+              <argument value="${SIGNALS}"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="wait_for_user_action">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+if (result!=null){
+    loop = false
+} else {
+    loop = "* * * * *"
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            919
+        </positionTop>
+        <positionLeft>
+            618.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="check_slurm_cluster">
+      <description>
+        <![CDATA[ A loop task that checks every minute the status of the deployment of the Slurm cluster. It finishes when Slurm is up and running. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/slurm.png"/>
+        <info name="NODE_ACCESS_TOKEN" value="${CYCLECLOUD_CLI_NODE}"/>
+      </genericInformation>
+      <depends>
+        <task ref="create_slurm_cluster"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+
+// Get cluster info
+clusterName=variables.get("CLUSTER_NAME")
+command="/usr/local/bin/cyclecloud show_nodes -c ${clusterName} --format=json"
+println(clusterName)
+result=command.execute().text
+println(result)
+
+// Extract cluster
+def slurper = new JsonSlurper()
+def clusterList = new JsonSlurper().parseText( slurper.parseText(JsonOutput.toJson(result)) )
+cluster=clusterList.first()
+
+// Extract provisioning state
+clusterState=cluster.State
+println clusterState
+
+if (clusterState=="Started") {
+    variables.put("ACTION","stop")
+
+    nodeName=cluster.Instance.Tags.Name
+    println nodeName
+
+    if(nodeName=="scheduler"){
+    	publicIP=cluster.Instance.PublicIp
+        println publicIP
+        resultMap.put("Slurm scheduler public IP",publicIP)
+        variables.put("SLURM_SCHEDULER_PUBLIC_IP",publicIP)
+    }
+    
+} else {
+    variables.put("ACTION","continue")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="check_slurm_cluster">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+action=variables.get("ACTION")
+if (action=="continue"){
+   loop= "* * * * *"
+} else if (action=="stop"){
+   loop=false
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            277
+        </positionTop>
+        <positionLeft>
+            622
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="configure_slurm_scheduler_node">
+      <description>
+        <![CDATA[ A task that connects via SSH to the manager node of Slurm, then installs ProActive libraries in the '/shared' folder, which is accessible by all Slurm nodes. These libraries are needed to run ProActive nodes inside Slurm worker VMs. ]]>
+      </description>
+      <genericInformation>
+        <info name="NODE_ACCESS_TOKEN" value="${CYCLECLOUD_CLI_NODE}"/>
+      </genericInformation>
+      <depends>
+        <task ref="check_slurm_cluster"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def username = variables.get("USER_LOGIN")
+
+def pwdVariable = variables.get("USER_PASSWORD")
+def pwd = credentials.get(pwdVariable)
+
+variables.put("PROACTIVE_PASSWORD",pwd)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+usr=$variables_USER_LOGIN
+paURL=$variables_PA_SCHEDULER_REST_PUBLIC_URL
+slurmPublicIP=$variables_SLURM_SCHEDULER_PUBLIC_IP
+archiveName=$variables_PROACTIVE_NODE_ARCHIVE_NAME
+
+impersonationCMD="sudo -H -u $usr bash -c"
+echo $impersonationCMD
+
+sshCMD="ssh -o StrictHostKeyChecking=no $usr@$slurmPublicIP" 
+echo $sshCMD
+
+scriptName="setup_scheduler_$variables_PA_JOB_ID.sh"
+
+touch scriptName
+echo "sudo mkdir -p /shared/proactive" > scriptName
+echo "sudo apt install -y unzip" >> scriptName
+echo "sudo wget -P /shared/proactive $paURL/$archiveName.zip" >> scriptName
+echo "sudo unzip /shared/proactive/$archiveName.zip -d /shared/proactive/" >> scriptName
+echo "nodeDir=\$(sudo find /shared/proactive -type d -name '$archiveName*') && echo \$nodeDir && sudo ln -s \$nodeDir /shared/proactive/default" >> scriptName
+
+echo "sudo mkdir -p /shared/proactive/default/data" >> scriptName
+echo "sudo mkdir -p /shared/proactive/default/logs" >> scriptName
+echo "sudo chmod 777 /shared/proactive/default/data" >> scriptName
+echo "sudo chmod 777 /shared/proactive/default/logs" >> scriptName
+
+cat scriptName
+
+$impersonationCMD "cat scriptName | $sshCMD"
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            406
+        </positionTop>
+        <positionLeft>
+            618.984375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" maxNumberOfExecution="1" name="create_slurm_node_source">
+      <description>
+        <![CDATA[ A task that creates a Node Source for Slurm in ProActive Resource Manager. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" name="ENDPOINT" value="${PA_SCHEDULER_REST_URL}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/scheduler/createcredential/"/>
+        <variable advanced="false" description="Content-Type of the request" hidden="false" inherited="false" model="PA:LIST(application/x-www-form-urlencoded,multipart/form-data)" name="CONTENT_TYPE" value="multipart/form-data"/>
+        <variable description="If true, disable SSL certificate verification" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value=""/>
+        <variable advanced="false" description="ProActive login name" hidden="false" inherited="false" name="PARAM_username" value="${USER_LOGIN}"/>
+        <variable advanced="false" description="ProActive login password" hidden="false" inherited="false" name="PARAM_password" value="${PROACTIVE_PASSWORD}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="upload_node_init_script"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+contentType = variables.get("CONTENT_TYPE")
+isMultiPart = contentType.equals("multipart/form-data")
+
+restCall = given().contentType(contentType + ";charset = UTF-8")
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = (isMultiPart ? restCall.multiPart(entry.getKey().replace("PARAM_",""), entry.getValue()) : restCall.formParam(entry.getKey().replace("PARAM_",""), entry.getValue()) )});
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+    
+// Prepare the NodeSource for ProActive Nodes that will be deployed in Spark cluster
+def nodeSourceName = variables.get("CLUSTER_NAME")
+def user = variables.get("USER_LOGIN")
+def privateKey = new String(variables.get("USER_PRIVATE_KEY").decodeBase64())+System.getProperty("line.separator")
+
+def slurmPublicIP = variables.get("SLURM_SCHEDULER_PUBLIC_IP")
+def proactiveScheduler = new URI(variables.get("PA_SCHEDULER_REST_PUBLIC_URL")).getHost()
+def schedulerCredentialPath = result
+                               
+try{
+    rmapi.connect()
+    def nsMap = rmapi.getExistingNodeSources()
+    def ns = nsMap.find{ it.key == nodeSourceName }
+
+    if(ns){
+        println "NodeSource '${nodeSourceName}' already exists, thus the operation of NodeSource creation will be skipped."
+    } else {
+        // NS configuration settings
+        def infrastructureType = "org.ow2.proactive.resourcemanager.nodesource.infrastructure.NativeSchedulerInfrastructure"
+       // def infrastructureParameters = ["RMCredentialsPath",NSFrontalHostAddress","NSSchedulerHome","javaHome","jvmParameters","sshOptions","NSNodeTimeoutInSeconds",impersonationMethod", "alternateRMUrl","sshPort","nsPreCommand", "nsSubmitCommand", "nsKillCommand", "submitReturnsJobId", "nsJobName", "maxDeploymentFailure", "singleConnectionUserName", "singleConnectionPassword", "singleConnectionPrivateKey","impersonationCommand", "nativeSchedulerMetricsCommandFile","nativeSchedulerMetricsPeriod"]
+        
+        def infrastructureParameters = ["${slurmPublicIP}","/shared/proactive/default","/shared/proactive/default/jre","-Dproactive.communication.protocol=pamr -Dproactive.pamr.router.address=${proactiveScheduler}","","2147483647","none","","22","", "sbatch -J %NS_JOBNAME% -o %LOG_FILE% -n 1 %NS_BATCH%", "scancel -n %NS_JOBNAME%", "false", "proactive_%PA_TASKID%_%PA_USERNAME%", "5", "${user}", "","sudo -i -u %PA_USERNAME% %COMMAND%","10"]
+        
+        def infrastructureFileParameters = ["","${privateKey}"+ System.getProperty("line.separator"),"# SLURM Metrics | Jobs\r\nsqueue"]
+        def policyType = "org.ow2.proactive.scheduler.resourcemanager.nodesource.policy.NativeSchedulerPolicy"
+        //def poliyParameters = ["ALL","ME","schedulerUrl","schedulerCredentialsPath","rearrangeTasks","autoScaling","refreshTime"]
+        def poliyParameters = ["ALL","ME","pamr://0/","false", "false","1000"]
+        def policyFileParameters = ["${schedulerCredentialPath}"]
+        def nodesRecoverable = "true"
+
+        // Create and deploy NS
+        print "Creating the NodeSource '${nodeSourceName}' ..."
+        rmapi.defineNodeSource(nodeSourceName,infrastructureType,(String[]) infrastructureParameters.toArray(),(String[]) infrastructureFileParameters.toArray(), policyType,         (String[]) poliyParameters.toArray(), (String[]) policyFileParameters.toArray(),nodesRecoverable)
+        println " OK !"
+        print "Deploying the NodeSource '${nodeSourceName}' ..."
+        rmapi.deployNodeSource(nodeSourceName)
+        println " OK !"
+        
+        resultMap.put("Slurm Node Source",variables.get("CLUSTER_NAME"))
+    }
+} catch(Exception e){
+	throw e
+} finally {
+	rmapi.disconnect()
+}
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            790
+        </positionTop>
+        <positionLeft>
+            619
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="remove_node_source">
+      <description>
+        <![CDATA[ A task that removes Slurm Node Source from ProActive Resource Manager. ]]>
+      </description>
+      <depends>
+        <task ref="wait_for_user_action"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Remove the NodeSource for ProActive Nodes deployed in Spark cluster
+def nodeSourceName = variables.get("CLUSTER_NAME")
+
+try{
+    rmapi.connect()
+    def nsMap = rmapi.getExistingNodeSources()
+    def ns = nsMap.find{ it.key == nodeSourceName }
+
+    if(ns){
+        rmapi.removeNodeSource(nodeSourceName, true)
+        println " NodeSource '${nodeSourceName}' deleted."
+    }
+
+} catch(Exception e){
+	throw e
+} finally {
+	rmapi.disconnect()
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            1046
+        </positionTop>
+        <positionLeft>
+            619
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="azure_authenticate">
+      <description>
+        <![CDATA[ A task that performs a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="${AUTHENTICATION_ENDPOINT}"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" hidden="false" inherited="false" name="PATH" value="/${TENANT_ID}/oauth2/token"/>
+        <variable advanced="false" description="If true, disable SSL certificate verification" hidden="false" inherited="false" model="PA:Boolean" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="false" description="Content-Type of the request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/x-www-form-urlencoded"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." hidden="false" inherited="false" name="REQUEST_BODY" value="&amp;grant_type=client_credentials&amp;client_id=${APP_ID}&amp;client_secret=%SECRET%&amp;resource=https%3A%2F%2Fstorage.azure.com%2F"/>
+        <variable advanced="false" description="If true, print the full request and response content in the task output." hidden="false" inherited="false" model="PA:Boolean" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="configure_slurm_scheduler_node"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY").replace("%SECRET%",variables.get("SECRET")))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+
+variables.put("ACCESS_TOKEN",result)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+
+// =========== Manage Azure Access token ============
+def slurper = new JsonSlurper()
+jsonData = slurper.parseText(JsonOutput.toJson(result))
+
+access_token=jsonData.access_token
+variables.put("ACCESS_TOKEN",access_token)
+println variables.get("ACCESS_TOKEN")
+
+//Prepare the date header 
+def date = OffsetDateTime.now().format(DateTimeFormatter.RFC_1123_DATE_TIME); //RFC_1123 == RFC_2822
+println(date)
+variables.put("DATE",date)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            533
+        </positionTop>
+        <positionLeft>
+            619
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="upload_node_init_script">
+      <description>
+        <![CDATA[ A task that executes a REST request using the method PUT in order to upload a shell script in Azure BLOB Storage of CycleCloud. The shell script is used to install some dependencies (such as Docker) in Slurm worker VMs during their startup. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" model="PA:URL" name="ENDPOINT" value="https://${STORAGE_NAME}.blob.core.windows.net"/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/${SLURM_INIT_PATH}/${NODE_INIT_SCRIPT_NAME}"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="text/plain;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{ }"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{&#10;&quot;Authorization&quot;: &quot;Bearer ${ACCESS_TOKEN}&quot;,&#10;&quot;x-ms-version&quot; : &quot;2019-12-12&quot;,&#10;&quot;x-ms-blob-type&quot;: &quot;BlockBlob&quot;,&#10;&quot;x-ms-write&quot;:&quot;update&quot;&#10;}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="azure_authenticate"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+user=variables.get("USER_LOGIN")
+
+scriptContent="""#!/usr/bin/env bash
+sudo apt-get update
+sudo  apt-get install -y curl apt-transport-https ca-certificates gnupg-agent software-properties-common python3 python3-pip python3-numpy python3-virtualenv python3-venv python3-dev gnuplot jwm
+sudo /usr/bin/pip3 install py4j
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - 
+sudo add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/ubuntu \$(lsb_release -cs) stable\"
+sudo apt-get update
+sudo groupadd -f docker
+sudo usermod -aG docker ${user}
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io 
+sudo chmod 666 /var/run/docker.sock
+sudo systemctl restart docker
+"""
+
+println scriptContent
+
+variables.put("SCRIPT_CONTENT",scriptContent)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given().contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+restCall = restCall.body(variables.get("SCRIPT_CONTENT"))
+
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.put(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            648
+        </positionTop>
+        <positionLeft>
+            612.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2725px;
+            height:3120px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-145px;left:-607.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_185" style="top: 150px; left: 621px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that creates a Slurm cluster using Azure CycleCloud CLI. Slurm is configured based on the workflow input variables. 
+This task uses a node access token (given as input) to target  a machine where Cycle Cloud CLI is installed."><img src="/automation-dashboard/styles/patterns/img/wf-icons/slurm.png" width="20px">&nbsp;<span class="name">create_slurm_cluster</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_188" style="top: 1174px; left: 619px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that terminates and deletes the Slurm cluster."><img src="/automation-dashboard/styles/patterns/img/wf-icons/slurm.png" width="20px">&nbsp;<span class="name">delete_slurm_cluster</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_191" style="top: 919px; left: 618.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that waits for a user signal/action to terminate and delete the Slurm cluster."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">wait_for_user_action</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_194" style="top: 277px; left: 622px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A loop task that checks every minute the status of the deployment of the Slurm cluster. It finishes when Slurm is up and running."><img src="/automation-dashboard/styles/patterns/img/wf-icons/slurm.png" width="20px">&nbsp;<span class="name">check_slurm_cluster</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_197" style="top: 406px; left: 618.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that connects via SSH to the manager node of Slurm, then installs ProActive libraries in the '/shared' folder, which is accessible by all Slurm nodes. These libraries are needed to run ProActive nodes inside Slurm worker VMs."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">configure_slurm_scheduler_node</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_200" style="top: 790px; left: 619px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that creates a Node Source for Slurm in ProActive Resource Manager."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">create_slurm_node_source</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_203" style="top: 1046px; left: 619px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that removes Slurm Node Source from ProActive Resource Manager."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">remove_node_source</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_206" style="top: 533px; left: 619px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that performs a POST request to Azure REST API in order to authenticate to Azure and acquire an authentication token."><img src="/automation-dashboard/styles/patterns/img/wf-icons/azure_icon.png" width="20px">&nbsp;<span class="name">azure_authenticate</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_209" style="top: 648px; left: 612.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a REST request using the method PUT in order to upload a shell script in Azure BLOB Storage of CycleCloud. The shell script is used to install some dependencies (such as Docker) in Slurm worker VMs during their startup."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">upload_node_init_script</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:675px;top:1085.5px" width="23" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 12 50 2 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.6529999999999996,66.78168750000002 L5.422684726887218,47.19129913754225 L-1.8927913941925154,52.80234263424697 L-8.556660138865833,46.431090531734775 L-2.6529999999999996,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.6529999999999996,66.78168750000002 L5.422684726887218,47.19129913754225 L-1.8927913941925154,52.80234263424697 L-8.556660138865833,46.431090531734775 L-2.6529999999999996,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:675px;top:829.5px" width="35.5" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 24.5 50 14.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.5936480000000006,67.21769599999999 L9.534061034747022,49.185111835826255 L1.409838150646191,53.54366693235221 L-4.139968032900762,46.18162568518006 L-1.5936480000000006,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.5936480000000006,67.21769599999999 L9.534061034747022,49.185111835826255 L1.409838150646191,53.54366693235221 L-4.139968032900762,46.18162568518006 L-1.5936480000000006,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:741.5px;top:908.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_223" style="position: absolute; transform: translate(-50%, -50%); left: 766.5px; top: 938.5px;">loop</div><svg style="position:absolute;left:677px;top:189.5px" width="21.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0.5 87 C 10.5 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.274734375,65.86284375000001 L9.563361425103546,45.62789453274952 L2.779835824306115,51.87159379066753 L-4.4278885342289325,46.12279308344341 L3.274734375,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M3.274734375,65.86284375000001 L9.563361425103546,45.62789453274952 L2.779835824306115,51.87159379066753 L-4.4278885342289325,46.12279308344341 L3.274734375,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:743.5px;top:266.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_232" style="position: absolute; transform: translate(-50%, -50%); left: 768.5px; top: 296.5px;">loop</div><svg style="position:absolute;left:677.5px;top:316.5px" width="46" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 25 89 C 35 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.59935375,66.74071675 L25.340552132835132,45.552677158689235 L20.813402006671225,53.58417214624753 L12.18400752908266,50.338628902018 L25.59935375,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M25.59935375,66.74071675 L25.340552132835132,45.552677158689235 L20.813402006671225,53.58417214624753 L12.18400752908266,50.338628902018 L25.59935375,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:675.5px;top:687.5px" width="35" height="103" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 14 102 C 24 52 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.483209000000002,77.513772 L18.508412081869196,56.54121501918698 L12.792220756801111,63.7748279985505 L4.769468080419689,59.232203262385866 L15.483209000000002,77.513772" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.483209000000002,77.513772 L18.508412081869196,56.54121501918698 L12.792220756801111,63.7748279985505 L4.769468080419689,59.232203262385866 L15.483209000000002,77.513772" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:675px;top:958.5px" width="23" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 2 87 C 12 37 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.652999999999999,65.86284375000001 L10.542150038492773,45.508043042940244 L3.882825259434565,51.88404441425608 L-3.4366492972511575,46.27821778350568 L4.652999999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.652999999999999,65.86284375000001 L10.542150038492773,45.508043042940244 L3.882825259434565,51.88404441425608 L-3.4366492972511575,46.27821778350568 L4.652999999999999,65.86284375000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:671px;top:445.5px" width="52.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 87 C -10 37 41.5 50 31.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.014277375000002201,64.92074025000001 L14.722722586281325,49.69507664734564 L5.852637894707444,52.20935538374434 L2.011337720025658,43.82816137763819 L-0.014277375000002201,64.92074025000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.014277375000002201,64.92074025000001 L14.722722586281325,49.69507664734564 L5.852637894707444,52.20935538374434 L2.011337720025658,43.82816137763819 L-0.014277375000002201,64.92074025000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:671px;top:572.5px" width="25.5" height="76" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4.5 75 C 14.5 25 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.933023999999999,56.14560000000001 L12.132747613105176,35.6038650599489 L5.692116622593409,42.200703124056545 L-1.8121492628382914,36.84477243735549 L6.933023999999999,56.14560000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.933023999999999,56.14560000000001 L12.132747613105176,35.6038650599489 L5.692116622593409,42.200703124056545 L-1.8121492628382914,36.84477243735549 L6.933023999999999,56.14560000000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677.5px; top: 180px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 675.5px; top: 1204px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 675.5px; top: 1164px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 675.5px; top: 949px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 675.5px; top: 909px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 742px; top: 909px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 742px; top: 949px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 678px; top: 307px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 678px; top: 267px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 744px; top: 267px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 744px; top: 307px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 703px; top: 436px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 703px; top: 396px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 690px; top: 820px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 690px; top: 780px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677.5px; top: 1076px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677.5px; top: 1036px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 671.5px; top: 563px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 671.5px; top: 523px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 676px; top: 678px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 676px; top: 638px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
