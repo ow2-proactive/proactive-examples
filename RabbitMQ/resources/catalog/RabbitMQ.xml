@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="RabbitMQ" onTaskError="continueJobExecution" priority="normal" projectName="2. Big Data" tags="RabbitMQ,AMQP,Message Broker,Service Automation" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" group="RabbitMQ configuration" hidden="false" model="PA:NOT_EMPTY_STRING" name="RABBITMQ_USER" value="activeeon"/>
+    <variable advanced="false" group="RabbitMQ configuration" hidden="false" model="PA:HIDDEN" name="RABBITMQ_PASSWORD" value="ENC(1Sfy/xV/q1VSJj33bVwWroTUThCZOuH9)"/>
+    <variable advanced="true" description="The name of the service to be deployed." group="RabbitMQ configuration" hidden="false" name="INSTANCE_NAME" value="rabbitmq-$PA_JOB_ID"/>
+    <variable advanced="false" description="The endpoint identifier that will be used." group="RabbitMQ configuration" hidden="true" name="ENDPOINT_ID" value="rabbitmq-endpoint-$PA_JOB_ID"/>
+    <variable advanced="true" description="True if a proxy is needed to protect the access to the service endpoint." group="RabbitMQ configuration" hidden="false" model="PA:Boolean" name="PROXYFIED" value="True"/>
+    <variable advanced="true" description="True if RabbitMQ exposes a secure HTTPS endpoint." group="RabbitMQ configuration" hidden="true" model="PA:BOOLEAN" name="HTTPS_ENABLED" value="False"/>
+  </variables>
+  <description>
+    <![CDATA[ Deploy a RabbitMQ service ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="service-automation"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png"/>
+<info name="NODE_SOURCE" value="Server-Static-Nodes"/>
+<info name="pca.states" value="(VOID,RUNNING)"/>
+<info name="Documentation" value="PSA/PSAUserGuide.html#_jupyterlab"/>
+<info name="pca.service.id" value="RabbitMQ"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Start_RabbitMQ" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ Pull RabbitMQ image and start a container ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png"/>
+        <info name="Documentation" value="PSA/PSAUserGuide.html"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Pre_Start_Service/raw"/>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo BEGIN "$variables_PA_TASK_NAME"
+
+################################################################################
+### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
+
+DOCKER_IMAGE=rabbitmq:3.12.0-rc.4-management
+RABBITMQ_INTERNAL_PORT=15672
+
+################################################################################
+
+# Manually find a free random port to preserve it in case if docker (re)start (Pause/Resume)
+GET_RANDOM_PORT(){
+    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
+        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+    else
+        read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
+    fi
+    while :
+    do
+        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
+        ss -lpn | grep -q ":$RND_PORT " || break
+    done
+    echo $RND_PORT
+}
+
+RABBITMQ_HOST_PORT=$(GET_RANDOM_PORT)
+
+echo "The service will be initialized on port $RABBITMQ_HOST_PORT"
+
+INSTANCE_NAME=$variables_INSTANCE_NAME
+
+if [ -z "$INSTANCE_NAME" ]; then
+    echo ERROR: The INSTANCE_NAME is not provided by the user. Empty value is not allowed.
+    exit 1
+fi
+
+echo "Pulling "$variables_PA_JOB_NAME" image"
+docker pull $DOCKER_IMAGE
+
+if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
+    echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
+    exit 128
+fi
+
+echo "Running $INSTANCE_NAME container in HTTP"
+
+user=$variables_RABBITMQ_USER
+pwd=$variables_RABBITMQ_PASSWORD
+
+docker run -d --hostname $INSTANCE_NAME --name $INSTANCE_NAME -p $RABBITMQ_HOST_PORT:$RABBITMQ_INTERNAL_PORT -e RABBITMQ_DEFAULT_USER=$user -e RABBITMQ_DEFAULT_PASS=$pwd $DOCKER_IMAGE
+
+if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
+        RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+        if [ "${RUNNING,,}" = "true" ]; then
+            echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+        fi
+else
+        echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
+fi
+
+RABBITMQ_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$RABBITMQ_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
+echo "$RABBITMQ_PORT" > $INSTANCE_NAME"_port"
+
+containerID=$(docker ps -aqf "name=^$INSTANCE_NAME$")
+echo "$containerID" > $INSTANCE_NAME"_containerID"
+
+echo END "$variables_PA_TASK_NAME"
+
+sleep 10
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Post_Start_Service/raw"/>
+        </script>
+      </post>
+      <cleaning>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Clean_Start_Service/raw"/>
+        </script>
+      </cleaning>
+      <metadata>
+        <positionTop>
+            337
+        </positionTop>
+        <positionLeft>
+            571.75
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Loop_Over_Instance_Status">
+      <description>
+        <![CDATA[ Loop over service instance status and fetch docker container logs.
+It will run every minute. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png"/>
+        <info name="Documentation" value="PSA/PSAUserGuide.html"/>
+        <info name="NODE_ACCESS_TOKEN" value="$INSTANCE_NAME"/>
+      </genericInformation>
+      <depends>
+        <task ref="Start_RabbitMQ"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Check_Instance_Status/raw"/>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="Loop_Over_Instance_Status">
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Fetch_Logs/raw"/>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            465
+        </positionTop>
+        <positionLeft>
+            571.75
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2725px;
+            height:3120px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-332px;left:-566.75px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable active-task" id="jsPlumb_1_307" style="top: 337px; left: 571.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Pull RabbitMQ image and start a container"><img src="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png" width="20px">&nbsp;<span class="name">Start_RabbitMQ</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_310" style="top: 465px; left: 571.75px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Loop over service instance status and fetch docker container logs.
+It will run every minute."><img src="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png" width="20px">&nbsp;<span class="name">Loop_Over_Instance_Status</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><svg style="position:absolute;left:617.5px;top:376.5px" width="48.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 27.5 88 C 37.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,65.8307285 L26.909461410455734,44.66308717037495 L22.65251929621236,52.841011346838144 L13.919744257293866,49.88489224916259 L27.874324375,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,65.8307285 L26.909461410455734,44.66308717037495 L22.65251929621236,52.841011346838144 L13.919744257293866,49.88489224916259 L27.874324375,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:728.5px;top:454.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_321" style="position: absolute; transform: translate(-50%, -50%); left: 753.5px; top: 484.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 618px; top: 367px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 645.5px; top: 495px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 645.5px; top: 455px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 729px; top: 455px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 729px; top: 495px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
