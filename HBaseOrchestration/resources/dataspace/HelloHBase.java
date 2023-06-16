@@ -15,7 +15,7 @@ public class HelloHBase {
     private String family1 = "PersonalData";
     private String family2 = "ProfessionalData";
 
-    public void createHbaseTable() throws IOException {
+    public void createHBaseTable() throws IOException {
         Configuration conf = HBaseConfiguration.create();
         conf.set("hbase.zookeeper.quorum","ZOOKEEPER-replacement");
         Connection connection = ConnectionFactory.createConnection(conf);
@@ -76,6 +76,6 @@ public class HelloHBase {
 
     public static void main(String[] args) throws IOException {
         HelloHBase admin = new HelloHBase();
-        admin.createHbaseTable();
+        admin.createHBaseTable();
     }
 }
