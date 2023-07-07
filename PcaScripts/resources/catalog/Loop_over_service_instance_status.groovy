@@ -8,20 +8,21 @@ if (new File(localspace, "arguments.txt").exists()) {
     arguments_array = args
 }
 
-if (arguments_array.length != 3) {
-    println("[Loop_over_service_instance_status] ERROR Number of arguments must be == 3")
-    throw new IllegalArgumentException("Number of arguments must be 3")
+if (arguments_array.length != 4) {
+    println("[Loop_over_service_instance_status] ERROR Number of arguments must be == 4")
+    throw new IllegalArgumentException("Number of arguments must be 4")
 }
 
 def i = 0
 def status_is_ok = Boolean.parseBoolean(arguments_array[i++])
 def is_docker_based_service = Boolean.parseBoolean(arguments_array[i++])
 def token_name = arguments_array[i++]
+def container_name = arguments_array[i++]
+
 
 // Retrieve variables
 def pca_url = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
 def instance_id = variables.get("PCA_INSTANCE_ID") as long
-def instance_name = variables.get("INSTANCE_NAME")
 def channel = "Service_Instance_" + instance_id
 def credentials_key = variables.get("CREDENTIALS_KEY")
 
@@ -93,7 +94,7 @@ if (current_status.equals("FINISHED")){
     } else if (is_docker_based_service) {
         // Fetch all logs or only new logs since last fetch time mark
         def lastTime=variables.get('LAST_TIME_MARKER')
-        def fetchLogsCmd = lastTime ? ["docker", "logs", "--since", lastTime, instance_name] : ["docker", "logs", instance_name]
+        def fetchLogsCmd = lastTime ? ["docker", "logs", "--since", lastTime, container_name] : ["docker", "logs", container_name]
         fetchLogsCmd.execute().waitForProcessOutput(System.out, System.err)
     }
 }
