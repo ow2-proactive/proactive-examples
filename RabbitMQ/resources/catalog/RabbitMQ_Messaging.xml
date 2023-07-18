@@ -1,0 +1,1321 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="RabbitMQ_Messaging" onTaskError="continueJobExecution" priority="normal" projectName="05. RabbitMQ" tags="RabbitMQ,Message Broker,REST API" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" description="Name of the RabbitMQ instance to deploy" group="Service parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="RabbitMQ-${PA_JOB_ID}"/>
+    <variable advanced="false" description="Indicates whether to use the ProActive proxy in order to access to the Web UI of RabbitMQ" group="Service parameters" hidden="false" model="PA:BOOLEAN" name="PROXYFIED" value="TRUE"/>
+    <variable advanced="false" description="User login to be used to access the Web UI of RabbitMQ" group="Service parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="USER" value="activeeon"/>
+    <variable advanced="false" description="Password to be used to access the Web UI of RabbitMQ. Its default value is 'activeeon'." group="Service parameters" hidden="false" model="PA:HIDDEN" name="PASSWORD" value="ENC(e5bZ1ZqClDcte6FNFHBE/to8QywjJMY3)"/>
+    <variable advanced="false" description="Exchange to be created in RabbitMQ in order to send messages" group="Messaging parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="EXCHANGE" value="rabbitmq-exchange"/>
+    <variable advanced="false" description="Queue to be created in RabbitMQ in order to send and receive messages" group="Messaging parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="QUEUE" value="rabbitmq-queue"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that starts a RabbitMQ service (based on Docker), then uses the REST API of RabbitMQ to create an exchange and a queue given as input. The workflow further exposes user actions in order to send/read messages to/from RabbitMQ, respecively. Finally, when RabbitMQ is no longer needed, the user can terminate it via the action 'Stop_RabbitMQ'. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="data-big-data"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="false" name="start_rabbitmq" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ Start RabbitMQ as a service. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Name of the Tensorboard service instance to use." hidden="false" inherited="false" model="PA:NOT_EMPTY_STRING" name="RABBITMQ_INSTANCE_NAME" value="rabbitmq-${PA_JOB_ID}"/>
+        <variable advanced="false" description="The Tensorboard service activation workflow. Please keep the default value for this variable." hidden="false" inherited="false" model="PA:CATALOG_OBJECT(Workflow/psa,,,RabbitMQ%)" name="SERVICE_ACTIVATION_WORKFLOW" value="service-automation/RabbitMQ"/>
+        <variable advanced="false" description="Instance name of RabbitMQ" hidden="false" inherited="true" name="INSTANCE_NAME" value=""/>
+        <variable advanced="false" description="If True, requests to RabbitMQ are sent via a proxy server." hidden="false" inherited="true" name="PROXYFIED" value=""/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png"/>
+        <info name="task.documentation" value="PSA/PSAUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Service_Start/raw">
+            <arguments>
+              <argument value="true"/>
+              <argument value="true"/>
+              <argument value="INSTANCE_NAME"/>
+              <argument value="PROXYFIED"/>
+              <argument value="USER"/>
+              <argument value="PASSWORD"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def endpoint=variables.get("ENDPOINT_"+variables.get("INSTANCE_NAME"))
+
+variables.put("RABBITMQ_ENDPOINT",endpoint)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            51.5
+        </positionTop>
+        <positionLeft>
+            706.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="wait_for_user_action">
+      <description>
+        <![CDATA[ Wait for a user action to: (i) send a message, (ii) read messages, or (iii) stop RabbitMQ. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <depends>
+        <task ref="cerate_binding"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.scheduler.common.job.JobVariable
+
+def signals = ['Stop_RabbitMQ','Send_Message', 'Read_Messages']
+
+signalapi.readyForSignal("Stop_RabbitMQ")
+
+List <JobVariable> sendingMessageVariables = new java.util.ArrayList<JobVariable>()
+sendingMessageVariables.add(new JobVariable("MESSAGE_TO_SEND", "put-here-your-message", "PA:NOT_EMPTY_STRING", "Message to send to RabbitMQ", "Message sending", false, false))
+
+signalapi.readyForSignal("Send_Message", sendingMessageVariables)
+
+List <JobVariable> readingMessageVariables = new java.util.ArrayList<JobVariable>()
+readingMessageVariables.add(new JobVariable("NUMBER_OF_MESSAGES", "1", "PA:INTEGER", "Number of messages to read", "Message reading", false, false))
+readingMessageVariables.add(new JobVariable("ACKNOWLEDGE_MODE", "ack_requeue_false", "PA:LIST(ack_requeue_false,ack_requeue_true)", "Acknowledge mode of the read messages", "Message reading", false, false))
+
+signalapi.readyForSignal("Read_Messages", readingMessageVariables)
+
+println("Waiting for user action ... ")
+receivedSignal = signalapi.waitForAny(signals.toSet())
+println(receivedSignal)
+
+signals.each {  signalapi.removeSignal("ready_"+it) }
+
+if (receivedSignal.getName() == "Stop_RabbitMQ") {
+    variables.put("SIGNAL_ACTION","Stop_RabbitMQ")
+    println("Stopping RabbitMQ ...")
+} else if (receivedSignal.getName() == "Send_Message"){
+    message = receivedSignal.getUpdatedVariables().get("MESSAGE_TO_SEND")
+
+    variables.put("SIGNAL_ACTION","Send_Message")
+    variables.put("MESSAGE_TO_SEND",message)
+
+    println("Sending message $message to RabbitMQ ...")
+} else if (receivedSignal.getName() == "Read_Messages"){
+    numberOfMessages = receivedSignal.getUpdatedVariables().get("NUMBER_OF_MESSAGES")
+    ackMode = receivedSignal.getUpdatedVariables().get("ACKNOWLEDGE_MODE")
+
+    variables.put("SIGNAL_ACTION","Read_Messages")
+    variables.put("NUMBER_OF_MESSAGES",numberOfMessages)
+    variables.put("ACKNOWLEDGE_MODE",ackMode)
+
+    println("Reading messages to RabbitMQ ...")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start">
+        <if continuation="stop_rabbitmq" else="read_messages" target="write_message">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+action = variables.get("SIGNAL_ACTION")
+
+if ( action == "Send_Message" ||  action == "Stop_RabbitMQ" ) {
+    branch = "if"
+} else  if ( action == "Read_Messages" ) {
+    branch = "else"
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            561.5
+        </positionTop>
+        <positionLeft>
+            705.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="stop_rabbitmq">
+      <description>
+        <![CDATA[ Terminates the RabbitMQ service. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Service instance ID." hidden="false" inherited="false" name="INSTANCE_ID" value=""/>
+        <variable advanced="false" description="Service instance name." hidden="false" inherited="true" name="INSTANCE_NAME" value=""/>
+        <variable advanced="false" description="The action that will be processed regarding the service status." hidden="false" inherited="false" model="PA:CATALOG_OBJECT(Workflow/psa,,,%RabbitMQ)" name="SERVICE_ACTION_WORKFLOW" value="service-automation/Finish_RabbitMQ"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.CatalogRestApi
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+import java.util.concurrent.TimeoutException
+import com.google.common.base.Strings
+
+signalAction=variables.get("SIGNAL_ACTION")
+
+if ( signalAction == "Stop_RabbitMQ" ) {
+    
+	println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+
+    try {
+    // Get schedulerapi access
+    schedulerapi.connect()
+
+    // Acquire session id
+    def sessionId = schedulerapi.getSession()
+
+    // Define PCA URL
+    def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+
+    // Connect to APIs
+    def apiClient = new ApiClient()
+    apiClient.setBasePath(pcaUrl)
+    //apiClient.setDebugging(true)
+    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+    def instanceName = variables.get("INSTANCE_NAME")
+    def instanceId = (!variables.get("INSTANCE_ID") && instanceName)? variables.get("INSTANCE_ID_" + instanceName) : variables.get("INSTANCE_ID")
+    if (!instanceId && !instanceName){
+        throw new IllegalArgumentException("You have to specify an INSTANCE_NAME or an INSTANCE_ID. Empty value for both is not allowed.");
+    }
+
+    println("INSTANCE_ID: " + instanceId)
+	println(instanceName)
+    println(variables.get("INSTANCE_ID_" + instanceName))
+
+    def bucketName
+    def isActionExists = false
+    def catalogRestApi = new CatalogRestApi(apiClient)
+    def actionVariables = new HashMap()
+
+    def action = variables.get("ACTION")
+    def serviceActionWorkflow = variables.get("SERVICE_ACTION_WORKFLOW")
+
+    if (Strings.isNullOrEmpty(action) && Strings.isNullOrEmpty(serviceActionWorkflow)) {
+        throw new IllegalArgumentException("You have to provide an ACTION value or a SERVICE_ACTION_WORKFLOW. Empty value is not allowed.");
+    }
+
+    if (!Strings.isNullOrEmpty(action)) {
+        List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceIdUsingGET(sessionId, instanceId.toString()).get(instanceId.toString())
+        for (CloudAutomationWorkflow actionIterator : listExecutableActions) {
+            if (actionIterator.getName().equals(action)){
+                bucketName = actionIterator.getBucket()
+                //retrieve default action variables
+                actionVariables = actionIterator.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+                isActionExists = true
+                break
+            }
+        }
+    } else if (!Strings.isNullOrEmpty(serviceActionWorkflow)) {
+        def serviceActionWorkflowSplits = serviceActionWorkflow.split('/')
+        bucketName = serviceActionWorkflowSplits[0]
+        action = serviceActionWorkflowSplits[1]
+        CloudAutomationWorkflow executableAction = catalogRestApi.getExecutableActionByCatalogObjectUsingGET(sessionId, instanceId, bucketName, action)
+        println("Action Bucket_name: " + bucketName + ", Action_workflow_name: " + action)
+        if (executableAction != null) {
+            actionVariables = executableAction.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+            isActionExists = true
+        }
+    }
+    if(!isActionExists){
+        throw new IllegalArgumentException("The provided ACTION: " + action + " does not belong to the existing possible actions that can be applied to the current state of the service. You have to specify a valid action.")
+    }
+
+    // Retrieve and update workflow variables
+    if (binding.variables["args"]){
+        for (String var: args){
+            actionVariables.put(var, variables.get(var))
+        }
+    }
+
+    // Execute action on service
+    ServiceDescription service = new ServiceDescription()
+    service.setBucketName(bucketName)
+    service.setWorkflowName(action)
+    if( !actionVariables.isEmpty() ){
+        actionVariables.each{ k, v -> service.putVariablesItem("${k}", "${v}") }
+    }
+    def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId as int, service, variables.get("PA_JOB_ID"))
+
+    if (action.toLowerCase().contains("finish")) {
+        try {
+            schedulerapi.waitForJob(serviceInstanceData.getJobSubmissions().get(0).getJobId().toString(), 180000)
+        } catch (TimeoutException toe) {
+            println("[warning] Timeout reached. Disable to wait until the PCA service " + instanceId + " finishes." )
+        }
+    }}
+    catch (Exception ex) {
+        println("[error] Unable to finalize the PCA service. It was already finished?" )
+        ex.printStackTrace();
+    }
+
+
+	println("END " + variables.get("PA_TASK_NAME"))
+}
+]]>
+          </code>
+          <arguments>
+            <argument value="INSTANCE_NAME"/>
+          </arguments>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end">
+        <loop target="wait_for_user_action">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+signalAction=variables.get("SIGNAL_ACTION")
+
+loop = signalAction=="Stop_RabbitMQ" ? false : true
+
+variables.put("SIGNAL_ACTION","")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            803.5
+        </positionTop>
+        <positionLeft>
+            959.484375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="create_exchange" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ A task that executes a REST request using the method PUT in order to create a RabbitMQ exchange. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" name="ENDPOINT" value="${RABBITMQ_ENDPOINT}"/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a username." group="Http Connection" hidden="false" inherited="true" name="USER" value=""/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a password." group="Http Connection" hidden="false" inherited="true" model="PA:HIDDEN" name="PASSWORD" value=""/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="true" description="The hostname of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_HOST" value=""/>
+        <variable advanced="true" description="The port of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_PORT" value=""/>
+        <variable advanced="true" description="The scheme of the proxy" group="Proxy Connection" hidden="false" inherited="false" model="PA:LIST(http,https)" name="PROXY_SCHEME" value="http"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/api/exchanges/%2f/${EXCHANGE}"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{&quot;type&quot;:&quot;direct&quot;,&quot;auto_delete&quot;:false,&quot;durable&quot;:true,&quot;internal&quot;:false,&quot;arguments&quot;:{}}"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;content-type&quot;:&quot;application/json&quot;}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="start_rabbitmq"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given().urlEncodingEnabled(false).contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.put(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            181.5
+        </positionTop>
+        <positionLeft>
+            706.234375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="create_queue" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ A task that executes a REST request using the method PUT in order to create a RabbitMQ queue. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" name="ENDPOINT" value="${RABBITMQ_ENDPOINT}"/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a username." group="Http Connection" hidden="false" inherited="true" name="USER" value=""/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a password." group="Http Connection" hidden="false" inherited="true" model="PA:HIDDEN" name="PASSWORD" value=""/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="true" description="The hostname of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_HOST" value=""/>
+        <variable advanced="true" description="The port of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_PORT" value=""/>
+        <variable advanced="true" description="The scheme of the proxy" group="Proxy Connection" hidden="false" inherited="false" model="PA:LIST(http,https)" name="PROXY_SCHEME" value="http"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/api/queues/%2f/${QUEUE}"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="REQUEST_BODY" value="{&quot;auto_delete&quot;:false,&quot;durable&quot;:true,&quot;arguments&quot;:{}}"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;content-type&quot;:&quot;application/json&quot;}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="create_exchange"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given().urlEncodingEnabled(false).contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.put(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            309.5
+        </positionTop>
+        <positionLeft>
+            705.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="cerate_binding" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ A task that executes a REST request using the method POST in order to create a binding between the RabbitMQ exchange and queue. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" name="ENDPOINT" value="${RABBITMQ_ENDPOINT}"/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a username." group="Http Connection" hidden="false" inherited="true" name="USER" value=""/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a password." group="Http Connection" hidden="false" inherited="true" model="PA:HIDDEN" name="PASSWORD" value=""/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="true" description="The hostname of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_HOST" value=""/>
+        <variable advanced="true" description="The port of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_PORT" value=""/>
+        <variable advanced="true" description="The scheme of the proxy" group="Proxy Connection" hidden="false" inherited="false" model="PA:LIST(http,https)" name="PROXY_SCHEME" value="http"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/api/bindings/%2f/e/${EXCHANGE}/q/${QUEUE}"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" name="REQUEST_BODY" value="{&quot;routing_key&quot;:&quot;${QUEUE}&quot;,&quot;arguments&quot;:{}}"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;content-type&quot;:&quot;application/json&quot;}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="create_queue"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given().urlEncodingEnabled(false).contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            437.5
+        </positionTop>
+        <positionLeft>
+            705.234375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="write_message">
+      <description>
+        <![CDATA[ A task that executes a REST request using the method POST in order to write a message to RabbitMQ. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" name="ENDPOINT" value="${RABBITMQ_ENDPOINT}"/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a username." group="Http Connection" hidden="false" inherited="true" name="USER" value=""/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a password." group="Http Connection" hidden="false" inherited="true" model="PA:HIDDEN" name="PASSWORD" value=""/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="true" description="The hostname of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_HOST" value=""/>
+        <variable advanced="true" description="The port of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_PORT" value=""/>
+        <variable advanced="true" description="The scheme of the proxy" group="Proxy Connection" hidden="false" inherited="false" model="PA:LIST(http,https)" name="PROXY_SCHEME" value="http"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/api/exchanges/%2f/${EXCHANGE}/publish"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" name="REQUEST_BODY" value="{&quot;properties&quot;:{},&quot;routing_key&quot;:&quot;${QUEUE}&quot;,&quot;payload&quot;: &quot;${MESSAGE_TO_SEND}&quot;,&quot;payload_encoding&quot;:&quot;string&quot;}"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="string"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;content-type&quot;:&quot;application/json&quot;}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+action = variables.get("SIGNAL_ACTION")
+
+if ( action == "Send_Message") {
+    
+    debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+    if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+      proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+      RestAssured.proxy(proxySpecification)
+    }
+
+    restCall = given().urlEncodingEnabled(false).contentType(variables.get("CONTENT_TYPE"))
+
+    if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+        restCall = restCall.relaxedHTTPSValidation()
+    }
+
+    if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+        restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+    }
+
+    def jsonSlurper = new JsonSlurper()
+    if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+        headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+        if (!headersObject instanceof Map) {
+            throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+        } else {
+            headersObject.each { restCall = restCall.header(it.key, it.value) }
+        }
+    }
+
+    if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+        paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+        if (!paramsObject instanceof Map) {
+            throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+        } else {
+            paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+        }
+    }
+
+    if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+        cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+        if (!cookiesObject instanceof Map) {
+            throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+        } else {
+            cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+        }
+    }
+
+    if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+        restCall = restCall.body(variables.get("REQUEST_BODY"))
+    }
+
+    if (debug) {
+        println "-------------- REQUEST -----------------"
+        restCall = restCall.log().all()
+    }
+    response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+    if (debug) {
+        println "-------------- RESPONSE -----------------"
+        println response.statusLine()
+        println response.prettyPrint()
+    } else {
+        println response.statusLine()
+    }
+
+    response = response.then().assertThat()
+      .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+      .extract();
+
+    if (debug) {
+        println "-------------- RESULT -------------------"
+    }
+
+    if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+    } else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+        result = true;
+        // response has no content
+        return;
+    }
+
+    switch (variables.get("RESPONSE_FORMAT")) {
+        case "json":
+        if (variables.get("RESPONSE_PATH").isEmpty()) {
+            throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+        }
+        result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+        println result
+        break;
+
+        case "xml":
+        if (variables.get("RESPONSE_PATH").isEmpty()) {
+            throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+        }
+        // html parsing results are not serializable and thus can be returned only in string format
+        result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+        println result
+        break;
+
+        case "html":
+        if (variables.get("RESPONSE_PATH").isEmpty()) {
+            throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+        }
+        // html parsing results are not serializable and thus can be returned only in string format
+        result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+        println result
+        break;
+
+        case "contentView":
+        result = response.asByteArray();
+        resultMetadata.put("content.type", response.contentType())
+        // uncomment the following line to allow saving the result as a file on the scheduler portal
+        // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+        // resultMetadata.put("file.extension",".png")
+        println "See result in \"Task Preview\" tab with content " + response.contentType()
+        break;
+
+        case "string":
+        result = response.prettyPrint()
+        break;
+    }
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            809
+        </positionTop>
+        <positionLeft>
+            419.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="read_messages">
+      <description>
+        <![CDATA[ A task that executes a REST request using the method POST in order to read messages to RabbitMQ. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Base URL of the server or service that will be queried." group="Http Connection" hidden="false" inherited="false" name="ENDPOINT" value="${RABBITMQ_ENDPOINT}"/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a username." group="Http Connection" hidden="false" inherited="true" name="USER" value=""/>
+        <variable advanced="true" description="If the service requires basic http authentication, enter a password." group="Http Connection" hidden="false" inherited="true" model="PA:HIDDEN" name="PASSWORD" value=""/>
+        <variable advanced="true" description="If true, disable SSL certificate verification" group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="SSL_DISABLE_CHECK" value="true"/>
+        <variable advanced="true" description="If true, print the full request and response content in the task output." group="Http Connection" hidden="false" inherited="false" model="PA:BOOLEAN" name="DEBUG" value="true"/>
+        <variable advanced="true" description="The hostname of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_HOST" value=""/>
+        <variable advanced="true" description="The port of the proxy" group="Proxy Connection" hidden="false" inherited="false" name="PROXY_PORT" value=""/>
+        <variable advanced="true" description="The scheme of the proxy" group="Proxy Connection" hidden="false" inherited="false" model="PA:LIST(http,https)" name="PROXY_SCHEME" value="http"/>
+        <variable advanced="false" description="Path of the request (relative to the base url)" group="Http Request" hidden="false" inherited="false" name="PATH" value="/api/queues/%2f/${QUEUE}/get"/>
+        <variable advanced="true" description="Content-Type of the request, should be &quot;application/json&quot; with eventual encoding." group="Http Request" hidden="false" inherited="false" name="CONTENT_TYPE" value="application/json;charset = UTF-8"/>
+        <variable advanced="false" description="A JSON parameter containing the request body." group="Http Request" hidden="false" inherited="false" name="REQUEST_BODY" value="{&quot;count&quot;:${NUMBER_OF_MESSAGES},&quot;ackmode&quot;:&quot;${ACKNOWLEDGE_MODE}&quot;,&quot;encoding&quot;:&quot;auto&quot;,&quot;truncate&quot; :50000}"/>
+        <variable advanced="false" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" hidden="false" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" name="RESPONSE_FORMAT" value="json"/>
+        <variable advanced="false" description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" hidden="false" inherited="false" name="RESPONSE_PATH" value="."/>
+        <variable advanced="false" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" hidden="false" inherited="false" model="PA:JSON" name="HEADERS" value="{ &quot;content-type&quot;:&quot;application/json&quot;}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="cacheFromGlobalSpace" includes="rest-assured-fat-3.3.0.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given().urlEncodingEnabled(false).contentType(variables.get("CONTENT_TYPE"))
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (variables.get("REQUEST_BODY") != null && !variables.get("REQUEST_BODY").isEmpty()) {
+    restCall = restCall.body(variables.get("REQUEST_BODY"))
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.*
+import java.time.Instant
+
+    
+def slurper = new JsonSlurper()
+    
+// Parse the response
+def messageList = slurper.parseText( JsonOutput.toJson(result) )
+
+// Iterate over messages
+messages = ''
+messageList.each { 
+    messageObject = slurper.parseText(JsonOutput.toJson(it))
+    message = messageObject.payload
+    println message 
+    messages = ((messages.isEmpty()) ? messages.concat(message) : messages.concat(', ').concat(message));
+}
+
+// Add messages to the result map
+LinkedHashMap resMap = [:]
+resMap.put("[${Instant.now()}]".toString(),messages)
+resultMap.putAll(resMap)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            808
+        </positionTop>
+        <positionLeft>
+            684.5
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2725px;
+            height:3120px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-46.5px;left:-414.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_3290" style="top: 51.5px; left: 706.25px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Start RabbitMQ as a service."><img src="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png" width="20px">&nbsp;<span class="name">start_rabbitmq</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_3293" style="top: 561.5px; left: 705.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Wait for a user action to: (i) send a message, (ii) read messages, or (iii) stop RabbitMQ."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">wait_for_user_action</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3296" style="top: 803.5px; left: 959.484px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Terminates the RabbitMQ service."><img src="/automation-dashboard/styles/patterns/img/wf-icons/rabbitmq.png" width="20px">&nbsp;<span class="name">stop_rabbitmq</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3299" style="top: 181.5px; left: 706.234px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a REST request using the method PUT in order to create a RabbitMQ exchange."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">create_exchange</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3302" style="top: 309.5px; left: 705.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a REST request using the method PUT in order to create a RabbitMQ queue."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">create_queue</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3305" style="top: 437.5px; left: 705.234px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a REST request using the method POST in order to create a binding between the RabbitMQ exchange and queue."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">cerate_binding</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3308" style="top: 809px; left: 419.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a REST request using the method POST in order to write a message to RabbitMQ."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">write_message</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_3311" style="top: 808px; left: 684.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a REST request using the method POST in order to read messages to RabbitMQ."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">read_messages</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:747.734375px;top:477px" width="34.265625" height="85.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 13.265625 84.5 C 23.265625 34.5 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.00434912109375,63.565734375000005 L17.74178913176503,42.55368016347713 L12.125288743050804,49.864967559249024 L4.041022316014053,45.43274054152008 L15.00434912109375,63.565734375000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.00434912109375,63.565734375000005 L17.74178913176503,42.55368016347713 L12.125288743050804,49.864967559249024 L4.041022316014053,45.43274054152008 L15.00434912109375,63.565734375000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:409.5px;top:601.5px" width="306" height="208" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 207 C -10 157 295 50 285 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M50.11359375000001,155.18896875 L70.81257565066451,150.65552102492776 L62.032161801512224,147.84405652442015 L63.46766342508468,138.73695297341553 L50.11359375000001,155.18896875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M50.11359375000001,155.18896875 L70.81257565066451,150.65552102492776 L62.032161801512224,147.84405652442015 L63.46766342508468,138.73695297341553 L50.11359375000001,155.18896875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_3322" style="position: absolute; transform: translate(-50%, -50%); left: 562px; top: 705px;">if</div><svg style="position:absolute;left:674.5px;top:601.5px" width="41" height="207" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 206 C -10 156 30 50 20 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M0.3125,159.75 L9.965089945805655,140.8866093361206 L2.214755901481971,145.87983696976573 L-3.9050730844285964,138.98435343463865 L0.3125,159.75" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M0.3125,159.75 L9.965089945805655,140.8866093361206 L2.214755901481971,145.87983696976573 L-3.9050730844285964,138.98435343463865 L0.3125,159.75" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_3326" style="position: absolute; transform: translate(-50%, -50%); left: 694.5px; top: 704.5px;">else</div><svg style="position:absolute;left:694.5px;top:601.5px" width="275.484375" height="202.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 254.484375 201.5 C 264.484375 151.5 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M211.56665409374997,151.764299 L198.85074816930666,134.81420352768163 L199.93733780169802,143.96949287159532 L191.05594204090198,146.44351981973358 L211.56665409374997,151.764299" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M211.56665409374997,151.764299 L198.85074816930666,134.81420352768163 L199.93733780169802,143.96949287159532 L191.05594204090198,146.44351981973358 L211.56665409374997,151.764299" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_3330" style="position: absolute; transform: translate(-50%, -50%); left: 831.742px; top: 702.25px;">continuation</div><svg style="position:absolute;left:837.5px;top:551.5px" width="226.484375" height="302.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 0 C 50 -50 215.484375 251.5 225.484375 201.5 " transform="translate(0.5,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M60.422954906250006,22.535901000000003 L79.54400155961045,31.667471230798938 L70.35391076442959,32.4038347119221 L69.67606784768836,41.59842708897851 L60.422954906250006,22.535901000000003" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M60.422954906250006,22.535901000000003 L79.54400155961045,31.667471230798938 L70.35391076442959,32.4038347119221 L69.67606784768836,41.59842708897851 L60.422954906250006,22.535901000000003" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_3336" style="position: absolute; transform: translate(-50%, -50%); left: 965.242px; top: 702.25px;">loop</div><svg style="position:absolute;left:747.75px;top:91px" width="27.25" height="91.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 6.25 90.5 C 16.25 40.5 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.54932,68.58939199999999 L13.314150987915014,47.94244584187276 L7.014246398930369,54.6738054496853 L-0.6014355623996765,49.47751944294239 L8.54932,68.58939199999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.54932,68.58939199999999 L13.314150987915014,47.94244584187276 L7.014246398930369,54.6738054496853 L-0.6014355623996765,49.47751944294239 L8.54932,68.58939199999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:745.5px;top:221.5px" width="29.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 18.5 50 8.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.1068640000000003,66.303232 L7.664175659289976,47.500924057181315 L-0.11740982136979405,52.44530747750635 L-6.1937488632036715,45.511469878551104 L-2.1068640000000003,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.1068640000000003,66.303232 L7.664175659289976,47.500924057181315 L-0.11740982136979405,52.44530747750635 L-6.1937488632036715,45.511469878551104 L-2.1068640000000003,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:745.5px;top:349.5px" width="23.234375" height="88.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 2.234375 87.5 C 12.234375 37.5 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.86835400390625,66.32226562500001 L10.702661599929755,45.951677639500375 L4.060533300805172,52.34559128123564 L-3.2740127438346196,46.75949834260145 L4.86835400390625,66.32226562500001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M4.86835400390625,66.32226562500001 L10.702661599929755,45.951677639500375 L4.060533300805172,52.34559128123564 L-3.2740127438346196,46.75949834260145 L4.86835400390625,66.32226562500001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 748.25px; top: 81.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 761.5px; top: 592px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 761.5px; top: 552px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 695px; top: 592px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 828px; top: 592px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1001.48px; top: 833.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 949.484px; top: 793.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 1053.48px; top: 793.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 754.5px; top: 212px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 754.5px; top: 172px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 746px; top: 340px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 746px; top: 300px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 748.234px; top: 467.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 748.234px; top: 427.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 464px; top: 839px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 410px; top: 799px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 731px; top: 838px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 675px; top: 798px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
