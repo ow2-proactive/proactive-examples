@@ -47,10 +47,10 @@ resource "local_file" "private_key" {
 # Store the public DNS of each VM locally (to be used for SSH access)
 resource "local_file" "activeeon_aws_ec2_instance_dns" {
   count           = var.aws_instances_count
-  filename        = "${path.module}/artefacts/aws_instance_dns_${count.index}"
+  filename        = "${path.module}/artefacts/aws_instance_${count.index}"
   file_permission = "0777"
   content         = <<EOF
-${aws_instance.activeeon_aws_ec2_instances[count.index].public_dns}
+${aws_instance.activeeon_aws_ec2_instances[count.index].public_ip}
   EOF
 }
 
