@@ -42,6 +42,6 @@ if (schedulerapi.getJobState(submittedMainJobId.toString()).isFinished()) {
     // Add token to the current node
     nodeUrl = variables.get("PA_NODE_URL")
     rmapi.connect()
-    rmapi.removeNodeToken(nodeUrl, instanceName)
-    println("Token " + instanceName + " cleaned from node " + nodeUrl)
+    rmapi.removeNodeToken(nodeUrl, "PSA_" + instanceName)
+    println("Token " + "PSA_" + instanceName + " cleaned from node " + nodeUrl)
 }
