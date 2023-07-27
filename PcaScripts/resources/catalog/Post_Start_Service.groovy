@@ -140,7 +140,7 @@ try {
     synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
 
     // Add token to the current node
-    token = instanceName
+    token = "PSA_" + instanceName
     nodeUrl = variables.get("PA_NODE_URL")
     println("Current nodeUrl: " + nodeUrl)
     println("Adding token:    " + token)
