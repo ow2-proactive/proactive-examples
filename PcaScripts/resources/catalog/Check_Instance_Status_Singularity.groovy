@@ -34,7 +34,7 @@ if (currentStatus.equals("FINISHED")){
         }
     }
     // Remove token in the current node
-    token = instanceName
+    token = "PSA_" + instanceName
     nodeUrl = variables.get("PA_NODE_URL")
     println("Current nodeUrl: " + nodeUrl)
     println("Removing token:  " + token)
