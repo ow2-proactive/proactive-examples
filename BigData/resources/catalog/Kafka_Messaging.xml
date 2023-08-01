@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Kafka_Messaging" onTaskError="continueJobExecution" priority="normal" projectName="04. Kafka" tags="Big Data,Message Broker,Kafka" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" description="Name of the Kafka instance to deploy" group="Service parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="kafka-server-${PA_JOB_ID}"/>
+    <variable advanced="false" description="Exchange to be created in the Kafka broker in order to exchange messages" group="Messaging parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="TOPIC" value="kafka-topic-${PA_JOB_ID}"/>
+    <variable advanced="true" description="Number of partitions to be created in the Kafka topic" group="Messaging parameters" hidden="false" model="PA:INTEGER" name="NUMBER_OF_PARTITIONS" value="1"/>
+    <variable advanced="true" description="Replication factor of the partitions to be created in the Kafka topic" group="Messaging parameters" hidden="false" model="PA:INTEGER" name="REPLICATION_FACTOR" value="1"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that starts a Kafka service (based on Docker), then uses a Kafka client to create a topic which name is given as input. The workflow further exposes user actions in order to send/read messages to/from Kafka, respectively. Finally, when the Kafka broker is no longer needed, the user can terminate it via the action 'Stop_Kafka'. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="data-big-data"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="false" name="start_kafka" onTaskError="cancelJob">
+      <description>
+        <![CDATA[ A task that starts Kafka as a service. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="The Kafka service activation workflow. Please keep the default value for this variable." hidden="false" inherited="false" model="PA:CATALOG_OBJECT(Workflow/psa,,,Kafka%)" name="SERVICE_ACTIVATION_WORKFLOW" value="service-automation/Kafka"/>
+        <variable advanced="false" description="Name of the Kafka instance to start" hidden="false" inherited="true" name="INSTANCE_NAME" value=""/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png"/>
+        <info name="task.documentation" value="PSA/PSAUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Service_Start/raw">
+            <arguments>
+              <argument value="true"/>
+              <argument value="false"/>
+              <argument value="INSTANCE_NAME"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def endpoint=variables.get("ENDPOINT_"+variables.get("INSTANCE_NAME")).replace("kafka://","")
+
+variables.put("KAFKA_ENDPOINT",endpoint)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            244.5
+        </positionTop>
+        <positionLeft>
+            695.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="wait_for_user_action">
+      <description>
+        <![CDATA[ A task that waits for a user action to: (i) send a message, (ii) read messages, or (iii) stop Kafka. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <depends>
+        <task ref="create_topic"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.scheduler.common.job.JobVariable
+
+def signals = ['Stop_Kafka','Send_Message', 'Read_Messages']
+
+signalapi.readyForSignal("Stop_Kafka")
+
+JobVariable messageToSend = new JobVariable("MESSAGE_TO_SEND", "put-here-your-message", "PA:NOT_EMPTY_STRING", "Message to send to Kafka", "Message sending", false, false)
+signalapi.readyForSignal("Send_Message", Arrays.asList(messageToSend)); 
+
+List <JobVariable> readingMessageVariables = new java.util.ArrayList<JobVariable>()
+readingMessageVariables.add(new JobVariable("FROM_BEGINNING", "True", "PA:BOOLEAN", "When set to false, only the upcoming messages (during the specified reading period) are read. Otherwise, all the messages already sent to Kafka broker are read", "Message reading", false, false))
+readingMessageVariables.add(new JobVariable("READING_DURATION_SECONDS", "10", "PA:INTEGER", "Message reading duration in seconds", "Message reading", false, false))
+
+signalapi.readyForSignal("Read_Messages", readingMessageVariables)
+
+println("Waiting for user action ... ")
+receivedSignal = signalapi.waitForAny(signals.toSet())
+println(receivedSignal)
+
+signals.each {  signalapi.removeSignal("ready_"+it) }
+
+if (receivedSignal.getName() == "Stop_Kafka") {
+    variables.put("SIGNAL_ACTION","Stop_Kafka")
+    println("Stopping Kafka broker ...")
+} else if (receivedSignal.getName() == "Send_Message"){
+    message = receivedSignal.getUpdatedVariables().get("MESSAGE_TO_SEND")
+
+    variables.put("SIGNAL_ACTION","Send_Message")
+    variables.put("MESSAGE_TO_SEND",message)
+
+    println("Sending message $message to Kafka broker ...")
+} else if (receivedSignal.getName() == "Read_Messages"){
+    fromBeginning = receivedSignal.getUpdatedVariables().get("FROM_BEGINNING")
+    readingDuration = receivedSignal.getUpdatedVariables().get("READING_DURATION_SECONDS")
+
+    variables.put("SIGNAL_ACTION","Read_Messages")
+    variables.put("FROM_BEGINNING",fromBeginning)
+    variables.put("READING_DURATION_SECONDS",readingDuration)
+
+    println("Reading messages from Kafka broker ...")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start">
+        <if continuation="stop_kafka" else="read_messages" target="write_message">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+action = variables.get("SIGNAL_ACTION")
+
+if ( action == "Send_Message" ||  action == "Stop_Kafka" ) {
+    branch = "if"
+} else  if ( action == "Read_Messages" ) {
+    branch = "else"
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            541.5
+        </positionTop>
+        <positionLeft>
+            700.25
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="stop_kafka">
+      <description>
+        <![CDATA[ A task that terminates the Kafka service. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="Service instance ID." hidden="false" inherited="false" name="INSTANCE_ID" value=""/>
+        <variable advanced="false" description="Service instance name." hidden="false" inherited="true" name="INSTANCE_NAME" value=""/>
+        <variable advanced="false" description="The action that will be processed regarding the service status." hidden="false" inherited="false" model="PA:CATALOG_OBJECT(Workflow/psa,,,%Kafka)" name="SERVICE_ACTION_WORKFLOW" value="service-automation/Finish_Kafka"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.CatalogRestApi
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+import java.util.concurrent.TimeoutException
+import com.google.common.base.Strings
+
+signalAction=variables.get("SIGNAL_ACTION")
+
+if ( signalAction == "Stop_Kafka" ) {
+    
+	println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+
+    try {
+    // Get schedulerapi access
+    schedulerapi.connect()
+
+    // Acquire session id
+    def sessionId = schedulerapi.getSession()
+
+    // Define PCA URL
+    def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+
+    // Connect to APIs
+    def apiClient = new ApiClient()
+    apiClient.setBasePath(pcaUrl)
+    //apiClient.setDebugging(true)
+    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+    def instanceName = variables.get("INSTANCE_NAME")
+    def instanceId = (!variables.get("INSTANCE_ID") && instanceName)? variables.get("INSTANCE_ID_" + instanceName) : variables.get("INSTANCE_ID")
+    if (!instanceId && !instanceName){
+        throw new IllegalArgumentException("You have to specify an INSTANCE_NAME or an INSTANCE_ID. Empty value for both is not allowed.");
+    }
+
+    println("INSTANCE_ID: " + instanceId)
+	println(instanceName)
+    println(variables.get("INSTANCE_ID_" + instanceName))
+
+    def bucketName
+    def isActionExists = false
+    def catalogRestApi = new CatalogRestApi(apiClient)
+    def actionVariables = new HashMap()
+
+    def action = variables.get("ACTION")
+    def serviceActionWorkflow = variables.get("SERVICE_ACTION_WORKFLOW")
+
+    if (Strings.isNullOrEmpty(action) && Strings.isNullOrEmpty(serviceActionWorkflow)) {
+        throw new IllegalArgumentException("You have to provide an ACTION value or a SERVICE_ACTION_WORKFLOW. Empty value is not allowed.");
+    }
+
+    if (!Strings.isNullOrEmpty(action)) {
+        List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceIdUsingGET(sessionId, instanceId.toString()).get(instanceId.toString())
+        for (CloudAutomationWorkflow actionIterator : listExecutableActions) {
+            if (actionIterator.getName().equals(action)){
+                bucketName = actionIterator.getBucket()
+                //retrieve default action variables
+                actionVariables = actionIterator.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+                isActionExists = true
+                break
+            }
+        }
+    } else if (!Strings.isNullOrEmpty(serviceActionWorkflow)) {
+        def serviceActionWorkflowSplits = serviceActionWorkflow.split('/')
+        bucketName = serviceActionWorkflowSplits[0]
+        action = serviceActionWorkflowSplits[1]
+        CloudAutomationWorkflow executableAction = catalogRestApi.getExecutableActionByCatalogObjectUsingGET(sessionId, instanceId, bucketName, action)
+        println("Action Bucket_name: " + bucketName + ", Action_workflow_name: " + action)
+        if (executableAction != null) {
+            actionVariables = executableAction.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+            isActionExists = true
+        }
+    }
+    if(!isActionExists){
+        throw new IllegalArgumentException("The provided ACTION: " + action + " does not belong to the existing possible actions that can be applied to the current state of the service. You have to specify a valid action.")
+    }
+
+    // Retrieve and update workflow variables
+    if (binding.variables["args"]){
+        for (String var: args){
+            actionVariables.put(var, variables.get(var))
+        }
+    }
+
+    // Execute action on service
+    ServiceDescription service = new ServiceDescription()
+    service.setBucketName(bucketName)
+    service.setWorkflowName(action)
+    if( !actionVariables.isEmpty() ){
+        actionVariables.each{ k, v -> service.putVariablesItem("${k}", "${v}") }
+    }
+    def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId as int, service, variables.get("PA_JOB_ID"))
+
+    if (action.toLowerCase().contains("finish")) {
+        try {
+            schedulerapi.waitForJob(serviceInstanceData.getJobSubmissions().get(0).getJobId().toString(), 180000)
+        } catch (TimeoutException toe) {
+            println("[warning] Timeout reached. Disable to wait until the PCA service " + instanceId + " finishes." )
+        }
+    }}
+    catch (Exception ex) {
+        println("[error] Unable to finalize the PCA service. It was already finished?" )
+        ex.printStackTrace();
+    }
+
+
+	println("END " + variables.get("PA_TASK_NAME"))
+}
+]]>
+          </code>
+          <arguments>
+            <argument value="INSTANCE_NAME"/>
+          </arguments>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end">
+        <loop target="wait_for_user_action">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+signalAction=variables.get("SIGNAL_ACTION")
+
+loop = signalAction=="Stop_Kafka" ? false : true
+
+variables.put("SIGNAL_ACTION","")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            811.5
+        </positionTop>
+        <positionLeft>
+            973.484375
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="write_message">
+      <description>
+        <![CDATA[ A task that writes a message to Kafka. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+action=$variables_SIGNAL_ACTION
+send_message="Send_Message"
+
+if [ "$action" == "$send_message" ]; then
+docker run -i --rm bitnami/kafka:3.5 /opt/bitnami/kafka/bin/kafka-console-producer.sh --bootstrap-server $variables_KAFKA_ENDPOINT --topic $variables_TOPIC --producer.config /opt/bitnami/kafka/config/producer.properties  <<< $variables_MESSAGE_TO_SEND
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            805
+        </positionTop>
+        <positionLeft>
+            426.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="read_messages">
+      <description>
+        <![CDATA[ A task that reads messages from Kafka. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+ALL=""
+
+if [ "$variables_FROM_BEGINNING" == "true" ] ; then
+	ALL="--from-beginning"
+fi
+
+timeout $variables_READING_DURATION_SECONDS  docker run -i --rm bitnami/kafka:3.5 /opt/bitnami/kafka/bin/kafka-console-consumer.sh --bootstrap-server  $variables_KAFKA_ENDPOINT --consumer.config /opt/bitnami/kafka/config/consumer.properties --topic $variables_TOPIC $ALL > "read_messages_"$variables_PA_JOB_ID
+
+cat read_messages_$variables_PA_JOB_ID
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.time.Instant
+
+messages = ''
+new File("read_messages_"+variables.get("PA_JOB_ID")).eachLine { message ->
+    println message
+    if (message?.trim()) {
+    	messages = ((messages.isEmpty()) ? messages.concat(message) : messages.concat(', ').concat(message));
+	}
+}
+
+// Add messages to the result map
+LinkedHashMap resMap = [:]
+resMap.put("[${Instant.now()}]".toString(),messages)
+resultMap.putAll(resMap)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            813
+        </positionTop>
+        <positionLeft>
+            688.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="create_topic">
+      <description>
+        <![CDATA[ A task that creates a topic in Kafka, which name is given as input variable. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="start_kafka"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+docker run -i --rm bitnami/kafka:3.5 kafka-topics.sh --create --bootstrap-server $variables_KAFKA_ENDPOINT --topic $variables_TOPIC --partitions $variables_NUMBER_OF_PARTITIONS --replication-factor $variables_REPLICATION_FACTOR
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            400.890625
+        </positionTop>
+        <positionLeft>
+            683.28125
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2740px;
+            height:3248px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-239.5px;left:-421.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_631" style="top: 244.5px; left: 695.25px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that starts Kafka as a service."><img src="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png" width="20px">&nbsp;<span class="name">start_kafka</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_634" style="top: 541.5px; left: 700.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that waits for a user action to: (i) send a message, (ii) read messages, or (iii) stop Kafka."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">wait_for_user_action</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_637" style="top: 811.5px; left: 973.484px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that terminates the Kafka service."><img src="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png" width="20px">&nbsp;<span class="name">stop_kafka</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_640" style="top: 805px; left: 426.5px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that writes a message to Kafka."><img src="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png" width="20px">&nbsp;<span class="name">write_message</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_643" style="top: 813px; left: 688.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that reads messages from Kafka."><img src="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png" width="20px">&nbsp;<span class="name">read_messages</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_646" style="top: 400.891px; left: 683.281px; z-index: 24;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that creates a topic in Kafka, which name is given as input variable."><img src="/automation-dashboard/styles/patterns/img/wf-icons/kafka.png" width="20px">&nbsp;<span class="name">create_topic</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:722.78125px;top:440.390625px" width="54.21875" height="102.109375" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 33.21875 101.109375 C 43.21875 51.109375 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M32.644,76.19400000000002 L31.20210732483431,55.05349514525959 L27.130638252091412,63.32532321344972 L18.333430538284013,60.56685689316818 L32.644,76.19400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M32.644,76.19400000000002 L31.20210732483431,55.05349514525959 L27.130638252091412,63.32532321344972 L18.333430538284013,60.56685689316818 L32.644,76.19400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:416px;top:581.5px" width="294.5" height="224" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 223 C -10 173 283.5 50 273.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.982859375000004,168.22446875 L68.38565032183496,162.50379382655353 L59.45759283294217,160.2038395933077 L60.36502116514267,151.02906036861134 L47.982859375000004,168.22446875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.982859375000004,168.22446875 L68.38565032183496,162.50379382655353 L59.45759283294217,160.2038395933077 L60.36502116514267,151.02906036861134 L47.982859375000004,168.22446875" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_657" style="position: absolute; transform: translate(-50%, -50%); left: 562.75px; top: 693px;">if</div><svg style="position:absolute;left:678.5px;top:581.5px" width="32" height="232" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 231 C -10 181 21 50 11 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.0115977499999997,179.63510775 L7.521392173322647,160.2395391074344 L0.07631194166795541,165.6774413081203 L-6.43627426855706,159.15162941576645 L-1.0115977499999997,179.63510775" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.0115977499999997,179.63510775 L7.521392173322647,160.2395391074344 L0.07631194166795541,165.6774413081203 L-6.43627426855706,159.15162941576645 L-1.0115977499999997,179.63510775" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_661" style="position: absolute; transform: translate(-50%, -50%); left: 694px; top: 697px;">else</div><svg style="position:absolute;left:689.5px;top:581.5px" width="294.484375" height="230.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 273.484375 229.5 C 283.484375 179.5 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M225.50441064453122,173.52014062499998 L213.39029227826725,156.1348555767718 L214.1553882006999,165.32259894658122 L205.1927505998485,167.48387802060316 L225.50441064453122,173.52014062499998" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M225.50441064453122,173.52014062499998 L213.39029227826725,156.1348555767718 L214.1553882006999,165.32259894658122 L205.1927505998485,167.48387802060316 L225.50441064453122,173.52014062499998" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_665" style="position: absolute; transform: translate(-50%, -50%); left: 836.242px; top: 696.25px;">continuation</div><svg style="position:absolute;left:832.5px;top:531.5px" width="241.484375" height="330.5" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 0 C 50 -50 230.484375 279.5 240.484375 229.5 " transform="translate(0.5,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M64.59443310546875,29.064234375000005 L83.443011999287,38.745715340405546 L74.23545082408648,39.21562725230009 L73.29161912198691,48.38673305902328 L64.59443310546875,29.064234375000005" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M64.59443310546875,29.064234375000005 L83.443011999287,38.745715340405546 L74.23545082408648,39.21562725230009 L73.29161912198691,48.38673305902328 L64.59443310546875,29.064234375000005" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_671" style="position: absolute; transform: translate(-50%, -50%); left: 967.742px; top: 696.25px;">loop</div><svg style="position:absolute;left:722.78125px;top:284px" width="32.96875" height="117.390625" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 116.390625 C -10 66.390625 21.96875 50 11.96875 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.5248795625000005,88.71463246875 L8.510551820474502,70.05210003186967 L0.6599592090336037,74.88616619289701 L-5.317914455378491,67.86726126033606 L-1.5248795625000005,88.71463246875" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.5248795625000005,88.71463246875 L8.510551820474502,70.05210003186967 L0.6599592090336037,74.88616619289701 L-5.317914455378491,67.86726126033606 L-1.5248795625000005,88.71463246875" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 735.25px; top: 274.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 756.5px; top: 572px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 756.5px; top: 532px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 690px; top: 572px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 823px; top: 572px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 1013.48px; top: 841.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 963.484px; top: 801.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 1063.48px; top: 801.5px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 470.5px; top: 835px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 416.5px; top: 795px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 735px; top: 843px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 679px; top: 803px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 723.281px; top: 430.891px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 723.281px; top: 390.891px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
