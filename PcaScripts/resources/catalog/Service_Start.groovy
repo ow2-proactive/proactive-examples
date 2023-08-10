@@ -18,6 +18,7 @@ import org.ow2.proactive.pca.service.client.model.ServiceDescription
 import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
 import org.ow2.proactive.pca.service.client.api.CatalogRestApi
 import com.google.common.base.Strings;
+import java.util.concurrent.TimeoutException
 
 println("BEGIN " + variables.get("PA_TASK_NAME"))
 
@@ -54,12 +55,16 @@ if (serviceActivationWorkflow != null) {
 
 def publishService = false
 def enableServiceActions = true
+def waitServiceRunningtimeOutInSec = -1
 if (binding.variables["args"]) {
     if (args.length > 0) {
         publishService = Boolean.parseBoolean(args[0])
     }
     if (args.length > 1) {
         enableServiceActions = Boolean.parseBoolean(args[1])
+    }
+    if (args.length > 2) {
+        waitServiceRunningtimeOutInSec = Integer.parseInt(args[2]) * 1000
     }
 }
 
@@ -160,7 +165,21 @@ if (!instance_exists){
     def channel = "Service_Instance_" + serviceInstanceId
     println("CHANNEL: " + channel)
     synchronizationapi.createChannelIfAbsent(channel, false)
-    synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}")
+
+    // If the timeout is set
+    if (waitServiceRunningtimeOutInSec != -1) {
+        try {
+            synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}", waitServiceRunningtimeOutInSec)
+        } catch (TimeoutException e) {
+            println "TIMEOUT REACHED: stopping the service and exiting."
+            serviceInstanceData.setInstanceStatus("FINISHED")
+            serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, serviceInstanceId, serviceInstanceData)
+            synchronizationapi.put(channel, "FINISH_DONE", true)
+            exit(1)
+        }
+    } else {
+        synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}")
+    }
 
     // Acquire service endpoint
     serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
