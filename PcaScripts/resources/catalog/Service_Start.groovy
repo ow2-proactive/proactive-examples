@@ -41,6 +41,9 @@ def catalogRestApi = new CatalogRestApi(apiClient)
 def serviceId = variables.get("SERVICE_ID")
 def instanceName = variables.get("INSTANCE_NAME")
 def serviceActivationWorkflow = variables.get("SERVICE_ACTIVATION_WORKFLOW")
+def waitServiceRunningtimeOutInSec = variables.get("WAIT_SERVICE_RUNNING_TIMEMOUT_IN_SEC")
+def serviceTokenName = variables.get("SERVICE_TOKEN_NAME")
+
 
 def bucketName
 def startingWorkflowName
@@ -55,16 +58,12 @@ if (serviceActivationWorkflow != null) {
 
 def publishService = false
 def enableServiceActions = true
-def waitServiceRunningtimeOutInSec = -1
 if (binding.variables["args"]) {
     if (args.length > 0) {
         publishService = Boolean.parseBoolean(args[0])
     }
     if (args.length > 1) {
         enableServiceActions = Boolean.parseBoolean(args[1])
-    }
-    if (args.length > 2) {
-        waitServiceRunningtimeOutInSec = Integer.parseInt(args[2]) * 1000
     }
 }
 
@@ -167,15 +166,30 @@ if (!instance_exists){
     synchronizationapi.createChannelIfAbsent(channel, false)
 
     // If the timeout is set
-    if (waitServiceRunningtimeOutInSec != -1) {
+    if (waitServiceRunningtimeOutInSec != null) {
         try {
-            synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}", waitServiceRunningtimeOutInSec)
+            synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}", Integer.parseInt(waitServiceRunningtimeOutInSec) * 1000)
         } catch (TimeoutException e) {
-            println "TIMEOUT REACHED: stopping the service and exiting."
+            println "TIMEOUT REACHED: stopping the service, removing tokens and exiting..."
+            // Update service status
             serviceInstanceData.setInstanceStatus("FINISHED")
             serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, serviceInstanceId, serviceInstanceData)
+            // Update channel status
             synchronizationapi.put(channel, "FINISH_DONE", true)
-            exit(1)
+            // Remove tokens
+            if(serviceTokenName != null) {
+                rmapi.connect()
+                def deploymentsIterator = serviceInstanceData.getDeployments().iterator()
+                i = 0
+                while (deploymentsIterator.hasNext()) {
+                    def paNodeUrlToRemoveToken = deploymentsIterator.next().getNode().getUrl()
+                    println "Removing token " + serviceTokenName + " from node " + paNodeUrlToRemoveToken
+                    rmapi.removeNodeToken(paNodeUrlToRemoveToken, serviceTokenName)
+                    i++
+                }
+            }
+            // Throw Exception
+            throw e
         }
     } else {
         synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}")
