@@ -45,11 +45,9 @@ if (is_finished) {
 
     rmapi.connect()
     def deploymentsIterator = service_instance_data.getDeployments().iterator()
-    i = 0
     while (deploymentsIterator.hasNext()) {
         def pa_node_url_to_remove_token = deploymentsIterator.next().getNode().getUrl()
         println "[Update_service_and_remove_tokens] Removing token " + token_name + " from node " + pa_node_url_to_remove_token
         rmapi.removeNodeToken(pa_node_url_to_remove_token, token_name)
-        i++
     }
 }

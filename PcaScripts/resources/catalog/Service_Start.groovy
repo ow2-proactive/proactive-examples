@@ -180,12 +180,10 @@ if (!instance_exists){
             if(serviceTokenName != null) {
                 rmapi.connect()
                 def deploymentsIterator = serviceInstanceData.getDeployments().iterator()
-                i = 0
                 while (deploymentsIterator.hasNext()) {
                     def paNodeUrlToRemoveToken = deploymentsIterator.next().getNode().getUrl()
                     println "Removing token " + serviceTokenName + " from node " + paNodeUrlToRemoveToken
                     rmapi.removeNodeToken(paNodeUrlToRemoveToken, serviceTokenName)
-                    i++
                 }
             }
             // Throw Exception
