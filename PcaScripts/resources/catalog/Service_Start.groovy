@@ -18,7 +18,6 @@ import org.ow2.proactive.pca.service.client.model.ServiceDescription
 import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
 import org.ow2.proactive.pca.service.client.api.CatalogRestApi
 import com.google.common.base.Strings;
-import java.util.concurrent.TimeoutException
 
 println("BEGIN " + variables.get("PA_TASK_NAME"))
 
@@ -41,9 +40,6 @@ def catalogRestApi = new CatalogRestApi(apiClient)
 def serviceId = variables.get("SERVICE_ID")
 def instanceName = variables.get("INSTANCE_NAME")
 def serviceActivationWorkflow = variables.get("SERVICE_ACTIVATION_WORKFLOW")
-def waitServiceRunningtimeOutInSec = variables.get("WAIT_SERVICE_RUNNING_TIMEMOUT_IN_SEC")
-def serviceTokenName = variables.get("SERVICE_TOKEN_NAME")
-
 
 def bucketName
 def startingWorkflowName
@@ -107,16 +103,11 @@ if (!Strings.isNullOrEmpty(serviceId)) {
 println("SERVICE_ID: " + serviceId)
 println("INSTANCE_NAME: " + instanceName)
 
-def startingState = variables.get("STARTING_STATE")
-if (!startingState) {
-    startingState = "RUNNING"
-}
-
 // Check existing service instances
 boolean instance_exists = false
 List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId, null)
 for (ServiceInstanceData serviceInstanceData : service_instances) {
-    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == startingState)){
+    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
         if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
             instance_exists = true
             def instanceId = serviceInstanceData.getInstanceId()
@@ -165,54 +156,39 @@ if (!instance_exists){
     println("CHANNEL: " + channel)
     synchronizationapi.createChannelIfAbsent(channel, false)
 
-    // If the timeout is set
-    if (waitServiceRunningtimeOutInSec != null) {
-        try {
-            synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}", Integer.parseInt(waitServiceRunningtimeOutInSec) * 1000)
-        } catch (TimeoutException e) {
-            println "TIMEOUT REACHED: stopping the service, removing tokens and exiting..."
-            // Update service status
-            serviceInstanceData.setInstanceStatus("FINISHED")
-            serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, serviceInstanceId, serviceInstanceData)
-            // Update channel status
-            synchronizationapi.put(channel, "FINISH_DONE", true)
-            // Remove tokens
-            if(serviceTokenName != null) {
-                rmapi.connect()
-                def deploymentsIterator = serviceInstanceData.getDeployments().iterator()
-                while (deploymentsIterator.hasNext()) {
-                    def paNodeUrlToRemoveToken = deploymentsIterator.next().getNode().getUrl()
-                    println "Removing token " + serviceTokenName + " from node " + paNodeUrlToRemoveToken
-                    rmapi.removeNodeToken(paNodeUrlToRemoveToken, serviceTokenName)
-                }
-            }
-            // Throw Exception
-            throw e
+    // Wait until the service is RUNNING or in ERROR
+    synchronizationapi.waitUntil(channel, "RUNNING_STATE", "{k,x -> x > 0}")
+
+
+    // If RUNNING
+    if ((synchronizationapi.get(channel, "RUNNING_STATE") as int) == 1) {
+
+        // Acquire service endpoint
+        serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
+        def instanceId = serviceInstanceData.getInstanceId()
+        endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
+
+        // Acquire service job id
+        serviceJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId().toString()
+        variables.put("SERVICE_JOB_ID", serviceJobId)
+        println("SERVICE_JOB_ID: " + serviceJobId)
+
+        if (publishService) {
+            schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
         }
-    } else {
-        synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}")
+
+        println("INSTANCE_ID: " + instanceId)
+        println("ENDPOINT: " + endpoint)
+        variables.put("INSTANCE_ID_" + instanceName, instanceId)
+        variables.put("ENDPOINT_" + instanceName, endpoint)
+        result = endpoint
+
+        // If in ERROR
+    } else if ((synchronizationapi.get(channel, "RUNNING_STATE") as int) == 2) {
+
+        // Make the task in error
+        throw new Exception("Service in ERROR")
     }
-
-    // Acquire service endpoint
-    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
-    def instanceId = serviceInstanceData.getInstanceId()
-    endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
-    
-    // Acquire service job id
-    serviceJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId().toString()
-    variables.put("SERVICE_JOB_ID", serviceJobId)
-    println("SERVICE_JOB_ID: " + serviceJobId)
-
-    if (publishService) {
-        schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
-    }
-
-    println("INSTANCE_ID: " + instanceId)
-    println("ENDPOINT: " + endpoint)
-
-    variables.put("INSTANCE_ID_" + instanceName, instanceId)
-    variables.put("ENDPOINT_" + instanceName, endpoint)
-    result = endpoint
 }
 
 println("END " + variables.get("PA_TASK_NAME"))
