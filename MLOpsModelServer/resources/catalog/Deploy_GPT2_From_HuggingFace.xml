@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Deploy_GPT2_From_HuggingFace" onTaskError="continueJobExecution" priority="normal" projectName="5. MLOps Workflows Example" tags="Samples,Big Data,Machine Learning,Analytics" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="true" description="Working directory for the data space used to transfer files automatically between the workflow tasks." hidden="false" model="PA:LIST(.,$HOME/,$WORK/,$SCRATCH/)" name="WORK_DIR" value="."/>
+    <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
+    <variable advanced="true" description="If True, it will activate the use of GPU for the workflow tasks on the selected container platform." group="Container Parameters" hidden="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="False"/>
+    <variable advanced="true" description="Name of the container image being used." group="Container Parameters" hidden="false" model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda,docker://activeeon/cuda2,docker://activeeon/rapidsai,docker://activeeon/nvidia:rapidsai)" name="CONTAINER_IMAGE" value=""/>
+    <variable advanced="false" description="Name of the model to be deployed" group="Model Deployment" hidden="false" name="MODEL_NAME" value="gpt2-model-${PA_JOB_ID}"/>
+    <variable advanced="false" description="Version of the model to be deployed." group="Model Deployment" hidden="false" model="PA:Integer" name="MODEL_VERSION" value="1"/>
+    <variable advanced="false" description="ID of the model server used to deploy the trained model" group="Model Deployment" hidden="false" model="PA:Integer?" name="MODEL_SERVER_ID" value=""/>
+    <variable advanced="false" hidden="false" name="HUGGING_FACE_MODEL_NAME" value="distilgpt2"/>
+  </variables>
+  <description>
+    <![CDATA[ Download, Package and Deploy a GPT2 model from the HuggingFace repository to a MLOps Model Server. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="ai-mlops-dashboard"/>
+<info name="workflow.icon" value="https://huggingface.co/front/assets/huggingface_logo-noborder.svg"/>
+<info name="Documentation" value="PAIO/PAIOUserGuide.html#_mlops_dashboard"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Download_and_Package_HuggingFace_Model" preciousResult="true">
+      <description>
+        <![CDATA[ Download and Package a GPT2 model from the HuggingFace repository. ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="If False, the task will be ignored, it will not be executed." inherited="false" model="PA:Boolean" name="TASK_ENABLED" value="True"/>
+        <variable advanced="false" hidden="false" inherited="false" name="CONTAINER_IMAGE" value="activeeon/dlm4"/>
+        <variable advanced="false" hidden="false" inherited="true" name="MODEL_NAME" value="model-${PA_JOB_ID}"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="https://huggingface.co/front/assets/huggingface_logo-noborder.svg"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import os
+import sys
+import zipfile
+import requests
+import json
+import ssl
+import urllib.request
+import joblib
+import pickle
+import bz2
+import onnx
+import uuid
+import pandas as pd
+import torch
+
+from os import remove, listdir, makedirs
+from os.path import basename, splitext, exists, join, isfile
+from urllib.parse import urlparse
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from pathlib import Path
+
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+# -------------------------------------------------------------
+# Get schedulerapi access and acquire session id
+schedulerapi.connect()
+sessionid = schedulerapi.getSession()
+connection_info = schedulerapi.getConnectionInfo()
+ci_url = connection_info.getUrl()
+url = urlparse(ci_url)
+proactive_url = url.scheme + "://" + url.hostname + ":" + str(url.port)
+print("proactive_url: ", proactive_url)
+
+# -------------------------------------------------------------
+# Import an external python script containing a collection of
+# common utility Python functions and classes
+PA_CATALOG_REST_URL = variables.get("PA_CATALOG_REST_URL")
+PA_PYTHON_UTILS_URL = PA_CATALOG_REST_URL + "/buckets/ai-machine-learning/resources/Utils_Script/raw"
+req = urllib.request.Request(PA_PYTHON_UTILS_URL)
+req.add_header('sessionid', sessionid)
+if PA_PYTHON_UTILS_URL.startswith('https'):
+    content = urllib.request.urlopen(req, context=ssl._create_unverified_context()).read()
+else:
+    content = urllib.request.urlopen(req).read()
+exec(content, globals())
+
+# -------------------------------------------------------------
+# Check if the Python task is enabled or not
+check_task_is_enabled()
+
+# -------------------------------------------------------------
+# Get data from the propagated variables
+#
+MODEL_NAME = variables.get("MODEL_NAME")
+assert_not_none_not_empty(MODEL_NAME, "MODEL_NAME should be defined!")
+
+MODEL_VERSION = variables.get("MODEL_VERSION")
+assert_not_none_not_empty(MODEL_VERSION, "MODEL_VERSION should be defined!")
+
+MODEL_SERVER_ID = variables.get("MODEL_SERVER_ID")
+assert_not_none_not_empty(MODEL_VERSION, "MODEL_SERVER_ID should be defined!")
+
+HUGGING_FACE_MODEL_NAME = variables.get("HUGGING_FACE_MODEL_NAME")
+assert_not_none_not_empty(MODEL_NAME, "HUGGING_FACE_MODEL_NAME should be defined!")
+
+def get_instance_name_and_model_registry_path(sessionid, proactive_url, instance_id):
+    headers = {'sessionid': sessionid}
+    url = f"{proactive_url}/cloud-automation-service/serviceInstances/{instance_id}"
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = json.loads(response.text)
+        instance_name = data.get('variables', {}).get('INSTANCE_NAME')
+        model_registry_path = data.get('variables', {}).get('MODEL_REGISTRY_PATH')
+        return instance_name, model_registry_path
+    else:
+        print(f"Failed to get data, status code: {response.status_code}")
+        return None, None
+instance_name, model_registry_path = get_instance_name_and_model_registry_path(sessionid, proactive_url, MODEL_SERVER_ID)
+MODEL_SERVER_TOKEN = 'PSA_' + instance_name
+print('MODEL_SERVER_TOKEN', MODEL_SERVER_TOKEN)
+print('MODEL_SERVER_REGISTRY', model_registry_path)
+variables.put('MODEL_SERVER_TOKEN', MODEL_SERVER_TOKEN)
+variables.put('MODEL_SERVER_REGISTRY', model_registry_path)
+
+tokenizer = AutoTokenizer.from_pretrained(HUGGING_FACE_MODEL_NAME)
+model = AutoModelForCausalLM.from_pretrained(HUGGING_FACE_MODEL_NAME)
+
+# Set the model to evaluation mode
+model.eval()
+
+# Create an example input for the model
+input_ids = tokenizer.encode("Hello, how are you?", return_tensors="pt")
+
+# Use torch.onnx to export the model to ONNX format
+output_path = Path(HUGGING_FACE_MODEL_NAME+".onnx")
+dynamic_axes = {
+    "input_ids": {0: "batch_size", 1: "sequence_length"},
+    "output": {0: "batch_size", 1: "sequence_length"},
+}
+
+torch.onnx.export(
+    model,
+    (input_ids,),
+    output_path,
+    export_params=True,
+    opset_version=12,
+    do_constant_folding=True,
+    input_names=["input_ids"],
+    output_names=["output"],
+    dynamic_axes=dynamic_axes)
+
+# Load the ONNX model from the file
+onnx_model = onnx.load(output_path)
+
+def create_triton_config(model, config_path, model_name, max_batch_size=0):
+    # Extract input information
+    input_tensors = []
+    for i in model.graph.input:
+        shape = [dim.dim_value if dim.dim_value >= 1 else -1 for dim in i.type.tensor_type.shape.dim]
+        if i.type.tensor_type.elem_type == onnx.TensorProto.INT64:
+            data_type = "TYPE_INT64"
+        else:
+            data_type = "TYPE_FP32"
+        input_tensors.append({"name": i.name, "data_type": data_type, "dims": shape})
+    # Extract output information
+    output_tensors = []
+    for o in model.graph.output:
+        shape = [dim.dim_value if dim.dim_value >= 1 else -1 for dim in o.type.tensor_type.shape.dim]
+        if o.type.tensor_type.elem_type == onnx.TensorProto.INT64:
+            data_type = "TYPE_INT64"
+        else:
+            data_type = "TYPE_FP32"
+        output_tensors.append({"name": o.name, "data_type": data_type, "dims": shape})
+    # Create the Triton configuration
+    config = {
+        "name": model_name,
+        "backend": "onnxruntime",
+        "max_batch_size": max_batch_size,
+        "input": input_tensors,
+        "output": output_tensors,
+        "instance_group": [{"count": 1, "kind": "KIND_CPU"}],
+    }
+    # Save the configuration as a JSON file
+    with open(config_path, 'w') as f:
+        f.write("name: \"" + config['name'] + "\"\n")
+        f.write("backend: \"" + config['backend'] + "\"\n")
+        f.write("max_batch_size: " + str(config['max_batch_size']) + "\n")
+        for input_tensor in config['input']:
+            f.write("input {\n")
+            f.write("  name: \"" + input_tensor['name'] + "\"\n")
+            f.write("  data_type: " + input_tensor['data_type'] + "\n")
+            f.write("  dims: [ " + ", ".join([str(dim) for dim in input_tensor['dims']]) + " ]\n")
+            f.write("}\n")
+        for output_tensor in config['output']:
+            f.write("output {\n")
+            f.write("  name: \"" + output_tensor['name'] + "\"\n")
+            f.write("  data_type: " + output_tensor['data_type'] + "\n")
+            f.write("  dims: [ " + ", ".join([str(dim) for dim in output_tensor['dims']]) + " ]\n")
+            f.write("}\n")
+        for instance_group in config['instance_group']:
+            f.write("instance_group {\n")
+            f.write("  count: " + str(instance_group['count']) + "\n")
+            f.write("  kind: " + instance_group['kind'] + "\n")
+            f.write("}\n")
+    print(f"The configuration file has been saved to '{config_path}'")
+    
+# Define localspace
+os.makedirs(MODEL_NAME, exist_ok=True)
+
+MODEL_VERSION_DIR = os.path.join(MODEL_NAME, MODEL_VERSION)
+os.makedirs(MODEL_VERSION_DIR, exist_ok=True)
+
+config_path = os.path.join(MODEL_NAME, "config.pbtxt")
+create_triton_config(onnx_model, config_path, MODEL_NAME, max_batch_size=0)
+
+model_path = os.path.join(MODEL_VERSION_DIR, "model.onnx")
+with open(model_path, "wb") as f:
+    f.write(onnx_model.SerializeToString())
+
+def zip_directory(directory_path):
+    # Create a zipfile object and write files to it
+    zip_file_path = directory_path + ".zip"
+    with zipfile.ZipFile(zip_file_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for root, dirs, files in os.walk(directory_path):
+            for file in files:
+                # Keep the directory_path inside the zip so when unzipped it creates a folder and extracts the files inside it
+                zip_file.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), os.path.dirname(directory_path)))
+                # zip_file.write(os.path.join(root, file), 
+                #                os.path.relpath(os.path.join(root, file), 
+                #                directory_path))
+    print(f"The zip file '{zip_file_path}' has been created.")
+    return zip_file_path
+
+# Test the function
+zip_file_path = zip_directory(MODEL_NAME) # replace with your directory
+
+# -------------------------------------------------------------
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"/>
+      <outputFiles>
+        <files accessMode="transferToUserSpace" includes="${MODEL_NAME}.zip"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            302.484375
+        </positionTop>
+        <positionLeft>
+            344.28125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Deploy_Model">
+      <description>
+        <![CDATA[ Deploy a packaged GPT2 model to a MLOps Model Server. ]]>
+      </description>
+      <genericInformation>
+        <info name="NODE_ACCESS_TOKEN" value="${MODEL_SERVER_TOKEN}"/>
+      </genericInformation>
+      <depends>
+        <task ref="Download_and_Package_HuggingFace_Model"/>
+      </depends>
+      <inputFiles>
+        <files accessMode="transferFromUserSpace" includes="${MODEL_NAME}.zip"/>
+      </inputFiles>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+# Assign variables
+MODEL_NAME=$variables_MODEL_NAME
+MODEL_VERSION=$variables_MODEL_VERSION
+MODEL_SERVER_REGISTRY=$variables_MODEL_SERVER_REGISTRY
+
+echo "MODEL_NAME: $MODEL_NAME"
+echo "MODEL_VERSION: $MODEL_VERSION"
+echo "MODEL_SERVER_REGISTRY: $MODEL_SERVER_REGISTRY"
+
+# Construct the target path
+TARGET_PATH="$MODEL_SERVER_REGISTRY/$MODEL_NAME/$MODEL_VERSION"
+
+# Check if the MODEL_NAME directory exists in the MODEL_SERVER_REGISTRY
+if [ ! -d "$MODEL_SERVER_REGISTRY/$MODEL_NAME" ]; then
+    # If not, unzip the full content
+    unzip $MODEL_NAME.zip -d $MODEL_SERVER_REGISTRY
+else
+    # If MODEL_NAME directory exists, check if MODEL_VERSION directory exists
+    if [ ! -d "$TARGET_PATH" ]; then
+        # If MODEL_VERSION directory does not exist, create it
+        mkdir -p $TARGET_PATH
+    fi
+    # Extract the model.onnx file to the target directory, overwrite if exists
+    unzip -o $MODEL_NAME.zip $MODEL_NAME/$MODEL_VERSION/model.onnx -d $MODEL_SERVER_REGISTRY
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            437.484375
+        </positionTop>
+        <positionLeft>
+            467.28125
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:1956px;
+            height:4892px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-297.484375px;left:-339.28125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1" style="top: 302.484px; left: 344.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Download and Package a GPT2 model from the HuggingFace repository."><img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" width="20px">&nbsp;<span class="name">Download_and_Package_HuggingFace_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4" style="top: 437.484px; left: 467.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Deploy a packaged GPT2 model to a MLOps Model Server."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">Deploy_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:458px;top:341.5px" width="71.5" height="96" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 50.5 95 C 60.5 45 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.887997625000004,70.23646125 L42.274430412126065,49.80394150459056 L39.92767300438792,58.719811045427626 L30.75778020755369,57.764266125202646 L47.887997625000004,70.23646125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.887997625000004,70.23646125 L42.274430412126065,49.80394150459056 L39.92767300438792,58.719811045427626 L30.75778020755369,57.764266125202646 L47.887997625000004,70.23646125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 458.5px; top: 332px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 467px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 427px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
