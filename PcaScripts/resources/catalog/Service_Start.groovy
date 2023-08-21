@@ -158,10 +158,10 @@ if (!instance_exists){
 
     // Wait until the service is RUNNING or in ERROR
     synchronizationapi.waitUntil(channel, "RUNNING_STATE", "{k,x -> x > 0}")
-
+    def runningState = synchronizationapi.get(channel, "RUNNING_STATE") as int
 
     // If RUNNING
-    if ((synchronizationapi.get(channel, "RUNNING_STATE") as int) == 1) {
+    if (runningState == 1) {
 
         // Acquire service endpoint
         serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
@@ -184,7 +184,7 @@ if (!instance_exists){
         result = endpoint
 
         // If in ERROR
-    } else if ((synchronizationapi.get(channel, "RUNNING_STATE") as int) == 2) {
+    } else if (runningState == 2) {
 
         // Make the task in error
         throw new Exception("Service in ERROR")
