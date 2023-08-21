@@ -103,16 +103,11 @@ if (!Strings.isNullOrEmpty(serviceId)) {
 println("SERVICE_ID: " + serviceId)
 println("INSTANCE_NAME: " + instanceName)
 
-def startingState = variables.get("STARTING_STATE")
-if (!startingState) {
-    startingState = "RUNNING"
-}
-
 // Check existing service instances
 boolean instance_exists = false
 List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId, null)
 for (ServiceInstanceData serviceInstanceData : service_instances) {
-    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == startingState)){
+    if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
         if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
             instance_exists = true
             def instanceId = serviceInstanceData.getInstanceId()
@@ -160,28 +155,40 @@ if (!instance_exists){
     def channel = "Service_Instance_" + serviceInstanceId
     println("CHANNEL: " + channel)
     synchronizationapi.createChannelIfAbsent(channel, false)
-    synchronizationapi.waitUntil(channel, startingState, "{k,x -> x == true}")
 
-    // Acquire service endpoint
-    serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
-    def instanceId = serviceInstanceData.getInstanceId()
-    endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
-    
-    // Acquire service job id
-    serviceJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId().toString()
-    variables.put("SERVICE_JOB_ID", serviceJobId)
-    println("SERVICE_JOB_ID: " + serviceJobId)
+    // Wait until the service is RUNNING or in ERROR
+    synchronizationapi.waitUntil(channel, "RUNNING_STATE", "{k,x -> x > 0}")
+    def runningState = synchronizationapi.get(channel, "RUNNING_STATE") as int
 
-    if (publishService) {
-        schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
+    // If RUNNING
+    if (runningState == 1) {
+
+        // Acquire service endpoint
+        serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
+        def instanceId = serviceInstanceData.getInstanceId()
+        endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
+
+        // Acquire service job id
+        serviceJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId().toString()
+        variables.put("SERVICE_JOB_ID", serviceJobId)
+        println("SERVICE_JOB_ID: " + serviceJobId)
+
+        if (publishService) {
+            schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
+        }
+
+        println("INSTANCE_ID: " + instanceId)
+        println("ENDPOINT: " + endpoint)
+        variables.put("INSTANCE_ID_" + instanceName, instanceId)
+        variables.put("ENDPOINT_" + instanceName, endpoint)
+        result = endpoint
+
+        // If in ERROR
+    } else if (runningState == 2) {
+
+        // Make the task in error
+        throw new Exception("Service in ERROR")
     }
-
-    println("INSTANCE_ID: " + instanceId)
-    println("ENDPOINT: " + endpoint)
-
-    variables.put("INSTANCE_ID_" + instanceName, instanceId)
-    variables.put("ENDPOINT_" + instanceName, endpoint)
-    result = endpoint
 }
 
 println("END " + variables.get("PA_TASK_NAME"))

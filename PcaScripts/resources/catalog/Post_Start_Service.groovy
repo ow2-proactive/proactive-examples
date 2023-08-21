@@ -136,7 +136,7 @@ try {
     // Inform other platforms that service is running through Synchronization API
     channel = "Service_Instance_" + instanceId
     synchronizationapi.createChannelIfAbsent(channel, true)
-    synchronizationapi.put(channel, "RUNNING", true)
+    synchronizationapi.put(channel, "RUNNING_STATE", 1)
     synchronizationapi.put(channel, "INSTANCE_NAME", instanceName)
 
     // Add token to the current node

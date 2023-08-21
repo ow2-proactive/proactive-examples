@@ -16,7 +16,7 @@ variables.put("CREDENTIALS_KEY", credentialsKey)
 
 // Inform other platforms that service is running through Synchronization API
 if(action.equals("RESUME_LAUNCHED")){
-    synchronizationapi.put(channel, "RUNNING", true)
+    synchronizationapi.put(channel, "RUNNING_STATE", 1)
     synchronizationapi.put(channel, "RESUMED", true)
     synchronizationapi.put(channel, "PAUSE_LAUNCHED", false)
 }

@@ -4,7 +4,6 @@ import org.ow2.proactive.pca.service.client.model.Deployment
 import org.ow2.proactive.pca.service.client.model.Container
 import org.ow2.proactive.pca.service.client.model.Endpoint
 import org.ow2.proactive.pca.service.client.model.Node
-import org.codehaus.groovy.runtime.StackTraceUtils
 import groovy.json.JsonSlurper
 
 if (args.length != 2) {
@@ -86,17 +85,38 @@ for (i = 0; i < nb_deployments; i++) {
     }
 }
 
-// Set the service instance status
-service_instance_data.setInstanceStatus("RUNNING")
+if (nb_deployments > 0) {
 
-// Update service instance (SERVICE INSTANCE REST API)
-service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, service_instance_data)
+    // Set the service instance status
+    service_instance_data.setInstanceStatus("RUNNING")
 
-// Register the service (SCHEDULER API)
-schedulerapi.registerService(pa_job_id, instance_id as int, true)
+    // Update service instance (SERVICE INSTANCE REST API)
+    service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, service_instance_data)
 
-// Inform other platforms that service is RUNNING (SYNCHRONIZATION API)
-def channel = "Service_Instance_" + instance_id
-synchronizationapi.createChannelIfAbsent(channel, true)
-synchronizationapi.put(channel, "RUNNING", true)
-synchronizationapi.put(channel, "INSTANCE_NAME", instance_name)
+    // Register the service (SCHEDULER API)
+    schedulerapi.registerService(pa_job_id, instance_id as int, true)
+
+    // Inform other platforms that service is RUNNING (SYNCHRONIZATION API)
+    def channel = "Service_Instance_" + instance_id
+    synchronizationapi.createChannelIfAbsent(channel, true)
+    synchronizationapi.put(channel, "RUNNING_STATE", 1)
+    synchronizationapi.put(channel, "INSTANCE_NAME", instance_name)
+
+} else {
+
+    // Set the service instance status
+    service_instance_data.setInstanceStatus("ERROR")
+
+    // Update service instance (SERVICE INSTANCE REST API)
+    service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, service_instance_data)
+
+    // Ensure the service is not registered (SCHEDULER API)
+    schedulerapi.registerService(pa_job_id, instance_id as int, false)
+
+    // Inform other platforms that service is in ERROR (SYNCHRONIZATION API)
+    def channel = "Service_Instance_" + instance_id
+    synchronizationapi.createChannelIfAbsent(channel, true)
+    synchronizationapi.put(channel, "RUNNING_STATE", 2)
+    synchronizationapi.put(channel, "INSTANCE_NAME", instance_name)
+
+}
