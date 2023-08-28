@@ -1,18 +1,19 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="SSH_Terminal_For_Distributed_Nodes" onTaskError="continueJobExecution" priority="normal" tags="Data Connectors,Wetty,SSH,Terminal,Web Browser" projectName="6. IT" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
   <variables>
-    <variable model="PA:NOT_EMPTY_STRING" name="INSTANCE_NAME" value="ssh-terminal-for-distributed-nodes-${PA_JOB_ID}" description="Service instance name."/>
-    <variable model="PA:INTEGER" name="SSH_PORT" value="22" description="Port used by SSH in the reserved hosts."/>
-    <variable model="PA:INTEGER" name="NUMBER_OF_HOSTS" value="2" description="Number of hosts to be reserved, among those managed by ProActive Resource Manager"/>
-    <variable model="PA:Boolean" name="PROXYFIED" value="True" description="Whether the service should be accessed via the ProActive server proxy (for restricted access control)"/>
+    <variable name="INSTANCE_NAME" model="PA:NOT_EMPTY_STRING" value="ssh-terminal-for-distributed-nodes-${PA_JOB_ID}" description="Service instance name." group="SSH Connection"/>
+    <variable name="SSH_PORT" model="PA:INTEGER" value="22" description="Port used by SSH in the reserved hosts." group="SSH Connection"/>
+    <variable name="SSH_USER" model="PA:NOT_EMPTY_STRING" value="my_user" advanced="false" description="SSH user name" group="SSH Connection" hidden="false"/>
+    <variable name="SSH_PASSWORD" model="PA:HIDDEN" value="ENC(dP8Lz2T+xXBd+XWKjUzijg==)" advanced="false" description="SSH server password" group="SSH Connection" hidden="false"/>
+    <variable name="SSH_TARGET_HOST" description="IP address of the SSH server machine" value="" group="SSH Connection"/>
+    <variable name="SSH_PRIVATE_KEY" model="PA:CREDENTIAL" value="${SSH_USER}@${SSH_TARGET_HOST}" advanced="false" description="SSH private key" group="SSH Connection" hidden="true"/>
+    <variable name="AUTHENTICATION_METHOD" model="PA:LIST(SSH_PASSWORD,SSH_PRIVATE_KEY)" value="SSH_PASSWORD" advanced="false" description="Authentication method to use either a password or a private key" group="SSH Connection" hidden="false"/>
+    <variable name="AUTHENTICATION_METHOD_HANDLER" model="PA:SPEL(variables['AUTHENTICATION_METHOD'] == 'SSH_PASSWORD' ? showVar('SSH_PASSWORD') &amp;&amp; hideVar('SSH_PRIVATE_KEY') : showVar('SSH_PRIVATE_KEY') &amp;&amp; hideVar('SSH_PASSWORD'))" value="" advanced="false" description="Handler which enables SSH_PASSWORD field or SSH_PRIVATE_KEY based on the chosen AUTHENTICATION_METHOD" group="SSH Connection" hidden="true"/>
+    <variable name="NUMBER_OF_HOSTS" model="PA:INTEGER" value="2" description="Number of hosts to be reserved, among those managed by ProActive Resource Manager" group="SSH Connection"/>
+    <variable name="PROXYFIED" model="PA:Boolean" value="True" description="Whether the service should be accessed via the ProActive server proxy (for restricted access control)" group="SSH Connection"/>
   </variables>
   <description>
-    <![CDATA[ Reserves a number of hosts given as input, and deploys a SSH terminal (using the WeTTy software) in one of the reserved hosts, thus allowing to execute distributed commands via the SSH terminal. The service assumes that SSH is configured in the reserved machines (e.g., they use the SSH port given as input).
-This service takes as input:
-- INSTANCE_NAME: name of the service instance to be deployed
-- NUMBER_OF_HOSTS: number of hosts to be reserved, among those managed by ProActive Resource Manager
-- SSH_PORT: port used by SSH in the reserved hosts.
-- PROXYFIED: whether the service should be accessed via the ProActive server proxy (for restricted access control) ]]>
+    <![CDATA[ Reserves a number of hosts given as input, and deploys a SSH terminal (using the WeTTy software) in one of the reserved hosts, thus allowing to execute distributed commands via the SSH terminal. The service assumes that SSH is configured in the reserved machines (e.g., they use the SSH port given as input). ]]>
   </description>
   <genericInformation>
 <info name="bucketName" value="service-automation"/>
@@ -61,7 +62,11 @@ if ("true".equalsIgnoreCase(proxified)) {
     variables.put("WS_PROXYFIED_URL", wsURL)
 }
 
- println("MASTER_HOST: " + variables.get("MASTER_HOST"))
+if (variables.get("AUTHENTICATION_METHOD").equals("SSH_PRIVATE_KEY")){
+    sshKey= credentials.get(variables.get("SSH_PRIVATE_KEY"))
+    File file = new File("ssh-key.pem")
+    file.write sshKey + "\n"
+}
 ]]>
           </code>
         </script>
@@ -75,9 +80,21 @@ echo BEGIN "$variables_PA_TASK_NAME"
 ################################################################################
 ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
 # Check if the Linux machine supports AVX instructions
-DOCKER_IMAGE=svenihoney/wetty:v1.3.0
+DOCKER_IMAGE=wettyoss/wetty:main
 TERMINAL_INTERNAL_PORT=3000
 INSTANCE_NAME=$variables_INSTANCE_NAME
+
+if [ -z "$variables_SSH_TARGET_HOST" ]
+then
+  if [ ! -z "awk -F/ '$2 == "docker"' /proc/self/cgroup" ]; then
+      host_tmp=$(hostname)
+      TARGET_HOST=${host_tmp// }
+    else
+      TARGET_HOST=$variables_PA_NODE_HOST
+  fi
+else
+    TARGET_HOST=$variables_SSH_TARGET_HOST
+fi
 ################################################################################
 GET_RANDOM_PORT(){
     PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
@@ -104,6 +121,23 @@ if [ -z "$INSTANCE_NAME" ]; then
     exit 1
 fi
 
+PORT_OPTION="--ssh-port=$variables_SSH_PORT"
+USER_OPTION="--ssh-user=$variables_SSH_USER"
+VOLUME_OPTION=""
+AUTHENTICATION_OPTIONS=""
+keyPath=/tmp/pa/keys/$variables_PA_USER
+
+if [ "$variables_AUTHENTICATION_METHOD" = "SSH_PRIVATE_KEY" ]; then
+    key="ssh-key.pem"
+    mkdir -p $keyPath
+    cp $key $keyPath
+    chmod 600 $keyPath/$key
+    AUTHENTICATION_OPTIONS="--ssh-auth=publickey --ssh-key=/keys/$key"
+    VOLUME_OPTION="-v $keyPath:/keys"
+else
+    AUTHENTICATION_OPTIONS="--ssh-auth=password --ssh-pass=$variables_SSH_PASSWORD"
+fi
+
 echo "Pulling "$variables_PA_JOB_NAME" image"
 docker pull $DOCKER_IMAGE
 
@@ -118,8 +152,14 @@ if [ "$(docker ps --format '{{.Names}}' | grep ^$INSTANCE_NAME$)" ]; then
     fi
 else
     echo "Running $INSTANCE_NAME container"
-    echo docker run -d --name $INSTANCE_NAME -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT -e REMOTE_SSH_SERVER=$variables_PA_NODE_HOST -e REMOTE_SSH_PORT=$variables_SSH_PORT $DOCKER_IMAGE
-    docker run -d --name $INSTANCE_NAME -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT -e REMOTE_SSH_SERVER=$variables_PA_NODE_HOST -e REMOTE_SSH_PORT=$variables_SSH_PORT $DOCKER_IMAGE
+
+    if [ "$TARGET_HOST" = "service-node" ]; then
+    echo docker run -d --name $INSTANCE_NAME $VOLUME_OPTION --network="compose_pa-network" -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=proactive-node $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
+    docker run -d --name $INSTANCE_NAME $VOLUME_OPTION --network="compose_pa-network" -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=proactive-node $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
+    else
+    echo docker run -d --name $INSTANCE_NAME $VOLUME_OPTION -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=$TARGET_HOST $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
+    docker run -d --name $INSTANCE_NAME $VOLUME_OPTION -p $TERMINAL_HOST_PORT:$TERMINAL_INTERNAL_PORT $DOCKER_IMAGE --base=/ --ssh-host=$TARGET_HOST $PORT_OPTION $USER_OPTION $AUTHENTICATION_OPTIONS
+    fi
 fi
 
 TERMINAL_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$TERMINAL_INTERNAL_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
