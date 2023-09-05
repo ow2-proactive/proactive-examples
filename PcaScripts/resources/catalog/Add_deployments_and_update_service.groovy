@@ -117,6 +117,7 @@ if (nb_deployments > 0) {
     def channel = "Service_Instance_" + instance_id
     synchronizationapi.createChannelIfAbsent(channel, true)
     synchronizationapi.put(channel, "RUNNING_STATE", 2)
+    synchronizationapi.put(channel, "DEPLOY_ERROR_MESSAGE", variables.get("DEPLOY_ERROR_MESSAGE"))
     synchronizationapi.put(channel, "INSTANCE_NAME", instance_name)
 
 }

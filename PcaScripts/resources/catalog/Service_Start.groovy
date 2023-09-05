@@ -187,7 +187,9 @@ if (!instance_exists){
     } else if (runningState == 2) {
 
         // Make the task in error
-        throw new Exception("Service in ERROR")
+        def deployErrorMessage = synchronizationapi.get(channel, "DEPLOY_ERROR_MESSAGE")
+        println deployErrorMessage
+        throw new Exception()
     }
 }
 
