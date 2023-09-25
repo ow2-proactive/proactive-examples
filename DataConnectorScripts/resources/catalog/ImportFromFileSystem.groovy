@@ -156,7 +156,7 @@ def createKeyStore(String certificate, String clientPrivateKey) throws IOExcepti
  */
 void importFiles() {
     try {
-        startUrl = createFileUri(host, port, username).toString() + "/" + remoteDir
+        startUrl = createFileUri(host, port, username).toString() + Paths.get("/", remoteDir).toString()
         // localBase can be either a global path or a local relative path in the data space
         if (Paths.get(localBase).isAbsolute()) {
             localDir = localBase

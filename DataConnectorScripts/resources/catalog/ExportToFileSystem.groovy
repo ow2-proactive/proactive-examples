@@ -154,7 +154,7 @@ def createKeyStore(String certificate, String clientPrivateKey) throws IOExcepti
 void exportFiles() {
     try {
         optsLocal = new FileSystemOptions()
-        startRemoteUrl = createFileUri(host, port, username).toString() + "/" + remoteDir
+        startRemoteUrl = createFileUri(host, port, username).toString() + Paths.get("/", remoteDir).toString()
         // Set remoteSrc for cleanup in release()
         remoteSrc = fsManager.resolveFile(startRemoteUrl, optsRemote);
         // localBase can be either a global path or a local relative path in the data space
