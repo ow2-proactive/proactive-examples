@@ -18,8 +18,11 @@ import org.apache.commons.vfs2.impl.*
 import org.apache.commons.vfs2.provider.local.*
 import org.apache.commons.vfs2.provider.ftp.FtpFileSystemConfigBuilder
 import org.apache.commons.vfs2.provider.ftps.FtpsFileSystemConfigBuilder
+import org.apache.commons.vfs2.provider.ftps.FtpsDataChannelProtectionLevel
 import org.apache.commons.vfs2.provider.sftp.SftpFileSystemConfigBuilder
 import org.objectweb.proactive.extensions.dataspaces.vfs.selector.*
+import org.apache.commons.vfs2.provider.sftp.*
+import java.net.URI
 import java.security.PrivateKey
 import java.security.KeyFactory
 import java.security.KeyStore
@@ -40,7 +43,6 @@ port = variables.get("PORT")
 keyManager = null
 optsRemote = new FileSystemOptions()
 fsManager = null
-password = checkParametersAndReturnPassword()
 
 //Initialize keystore parameters
 if (variables.get("CLIENT_CERTIFICATE_AUTHENTICATION")) {
@@ -81,6 +83,19 @@ remoteSrc = null
 //Export file(s) to the SFTP/FTP server
 exportFiles()
 release()
+
+/*
+* Create File URI
+*
+* @param host
+* @param port
+* @param userName
+* @return
+*/
+def createFileUri(def host, def port, def userName) throws URISyntaxException {
+    return new URI(URI_SCHEME, userName, host, (port?.trim()) ? port as int : -1, null, null, null);
+}
+
 
 def createEmptyKeyStore() throws IOException, GeneralSecurityException {
     KeyStore keyStore = KeyStore.getInstance("JKS")
@@ -139,11 +154,7 @@ def createKeyStore(String certificate, String clientPrivateKey) throws IOExcepti
 void exportFiles() {
     try {
         optsLocal = new FileSystemOptions()
-        if (port == null || port.isEmpty()) {
-            startRemoteUrl = URI_SCHEME + "://" + host + "/" + remoteDir
-        } else {
-            startRemoteUrl = URI_SCHEME + "://" + host + ":" + port + "/" + remoteDir
-        }
+        startRemoteUrl = createFileUri(host, port, username).toString() + Paths.get("/", remoteDir).toString()
         // Set remoteSrc for cleanup in release()
         remoteSrc = fsManager.resolveFile(startRemoteUrl, optsRemote);
         // localBase can be either a global path or a local relative path in the data space
@@ -227,7 +238,7 @@ def checkParametersAndReturnPassword() {
     }
     def urlKey = URI_SCHEME + "://" + username + "@" + host;
     def password = credentials.get(urlKey)
-    if (password == null || password.isEmpty()) {
+    if (!password?.trim()) {
         throw new IllegalArgumentException("Please add your " + URI_SCHEME + " password to 3rd-party credentials under the key :\"" +
                 URL_KEY + "\"");
     }
@@ -244,17 +255,43 @@ void initializeAuthentication() {
     } catch (FileSystemException ex) {
         throw new RuntimeException("Failed to get fsManager from VFS", ex);
     }
-    def auth = new StaticUserAuthenticator(null, username, password)
-    try {
-        DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth)
-        FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true)
-        if (keyManager != null) {
-            FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
-            SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
+    if (variables.get("AUTHENTICATION_METHOD") != null && variables.get("AUTHENTICATION_METHOD").equals("SSH_PRIVATE_KEY")){
+        passphrase = variables.get("PASSPHRASE")
+        sshKey= credentials.get(variables.get("SSH_PRIVATE_KEY"))
+        try {
+            IdentityProvider bytesIdentityInfo
+            if(passphrase != null && !passphrase.isEmpty()) {
+                bytesIdentityInfo = new BytesIdentityInfo(sshKey.getBytes(), passphrase.getBytes())
+            } else {
+                bytesIdentityInfo = new BytesIdentityInfo(sshKey.getBytes())
+            }
+            //ssh key
+            SftpFileSystemConfigBuilder.getInstance().setStrictHostKeyChecking(optsRemote, "no");
+            //set root directory to user home
+            SftpFileSystemConfigBuilder.getInstance().setUserDirIsRoot(optsRemote, true);
+            //timeout
+            SftpFileSystemConfigBuilder.getInstance().setTimeout(optsRemote, 10000);
+            SftpFileSystemConfigBuilder.getInstance().setIdentityProvider(optsRemote, bytesIdentityInfo)
+        } catch (FileSystemException ex) {
+            throw new RuntimeException("Failed to set user authenticator", ex);
         }
-
-    } catch (FileSystemException ex) {
-        throw new RuntimeException("Failed to set user authenticator", ex);
+    } else {
+        password = checkParametersAndReturnPassword()
+        def auth = new StaticUserAuthenticator(null, username, password)
+        try {
+            DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
+            FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
+            SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
+            if (keyManager != null) {
+                FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
+            }
+            if(URI_SCHEME.equals("ftps")){
+                protectionLevelMap = ["Clear": FtpsDataChannelProtectionLevel.P, "Safe": FtpsDataChannelProtectionLevel.P, "Confidential": FtpsDataChannelProtectionLevel.P, "Private": FtpsDataChannelProtectionLevel.P]
+                FtpsFileSystemConfigBuilder.getInstance().setDataChannelProtectionLevel(optsRemote, protectionLevelMap[variables.get("PROTECTION_LEVEL")])
+            }
+        } catch (FileSystemException ex) {
+            throw new RuntimeException("Failed to set user authenticator", ex);
+        }
     }
 }
 

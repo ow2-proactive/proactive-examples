@@ -134,7 +134,7 @@ def checkParametersAndReturnPassword() {
     }
     def urlKey = URI_SCHEME + "://" + username + "@" + host;
     def password = variables.get(urlKey)
-    if (password == null || password.isEmpty()) {
+    if (!password?.trim()) {
         throw new IllegalArgumentException("Please add your " + URI_SCHEME + " password to 3rd-party credentials under the key :\"" +
                                            URL_KEY + "\"");
     }
