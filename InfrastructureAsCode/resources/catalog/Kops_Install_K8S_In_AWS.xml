@@ -1,0 +1,835 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Kops_Install_K8S_In_AWS" projectName="Kubernetes Workflows" tags="Kubernetes,Enterprise-grade,AWS,Kops,K8S,SSH" priority="normal" onTaskError="suspendTask"  maxNumberOfExecution="1"  >
+  <variables>
+    <variable name="AWS_ACCESS_KEY" value="my_aws_access_key" model="PA:NOT_EMPTY_STRING" description="AWS access key used by Kops to create AWS resources." group="AWS Subscription" advanced="false" hidden="false"/>
+    <variable name="AWS_SECRET_KEY" value="$AWS_ACCESS_KEY" model="PA:CREDENTIAL" description="AWS secret key used by Kops to create AWS resources. Must be added to the third-party credentials vault." group="AWS Subscription" advanced="false" hidden="false"/>
+    <variable name="AWS_REGION" value="eu-west-3" model="PA:NOT_EMPTY_STRING" description="AWS region where the cluster deployment will take place" group="AWS Subscription" advanced="true" hidden="false"/>
+    <variable name="K8S_DOMAIN" value="activeeon-k8s.net" model="PA:NOT_EMPTY_STRING" description="An AWS Route53 domain, used as the main domain of the Kubernetes cluster." group="Kubernetes Parameters" advanced="false" hidden="false"/>
+    <variable name="K8S_CLUSTER_NAME" value="kubernetes-${PA_JOB_ID}" model="PA:NOT_EMPTY_STRING" description="Name of the Kubernetes cluster, to be used as the sub-domain of the Kubernetes cluster." group="Kubernetes Parameters" advanced="false" hidden="false"/>
+    <variable name="K8S_NODE_COUNT" value="1" model="PA:INTEGER" description="Number of the worker nodes in the Kubernetes cluster." group="Kubernetes Parameters" advanced="false" hidden="false"/>
+    <variable name="K8S_NODE_SIZE" value="t3.medium" model="PA:NOT_EMPTY_STRING" description="Size of the worker nodes (i.e., EC2 instances) in the Kubernetes cluster." group="Kubernetes Parameters" advanced="true" hidden="false"/>
+    <variable name="K8S_STATE_STORE" value="activeeon-k8s-state-store" model="PA:NOT_EMPTY_STRING" description="Name of the AWS S3 bucket to be used for storing the state information of the Kubernetes cluster. If the bucket does not exist, it will be created and configured by the workflows." group="Kubernetes Parameters" advanced="true" hidden="false"/>
+    <variable name="K8S_OIDC_STORE" value="activeeon-k8s-oidc-store" model="PA:NOT_EMPTY_STRING" description="Name of the AWS S3 bucket to be used for storing the OIDC access information of the Kubernetes cluster. If the bucket does not exist, it will be created and configured by the workflows." group="Kubernetes Parameters" advanced="true" hidden="false"/>
+    <variable name="USER_OF_AWS_AMI" value="ubuntu" model="PA:NOT_EMPTY_STRING" description="Standard user of the AWS AMI used for the nodes of the kubernetes cluster." group="Kubernetes Parameters" advanced="true" hidden="true"/>
+    <variable name="DELETE_AWS_BUCKETS" value="false" model="PA:BOOLEAN" description="Indicate whether to remove the S3 buckets (i.e., the state and OIDC stores) when deleting the Kubernetes cluster. By default, this variable is set to false as the same buckets can be used by multiple Kubernetes clusters." group="Kubernetes Parameters" advanced="true" hidden="false"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that uses the Kops tool to install an enterprise-grade Kubernetes cluster in AWS. Once the installation is done, the workflow enables an SSH access to  the master node of the Kubernetes cluster. The workflow requires Docker to be installed in the underlying hosts where it will be executed, since the tools it uses (Kops, Kubectl and AWS CLI) are executed in a docker container (activeeon/k8s-tools). ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="it-infrastructure-as-code"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/kops.svg"/>
+    <info name="Documentation" value="https://kops.sigs.k8s.io/"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Create_AWS_Buckets" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A bash task that uses AWS CLI to create S3 buckets for the Kubernetes cluster (i.e., the state and OIDC stores), if they do not exist. AWS CLI is executed in a docker container (activeeon/k8s-tools). This task requires then Docker to be installed in its underlying host. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/amazon.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Read_AWS_Credentials"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+mkdir -p .aws
+mkdir -p /tmp/kops/$variables_K8S_CLUSTER_NAME/.kube
+
+AWS_DIR=$(pwd)/.aws
+KUBE_DIR=/tmp/kops/$variables_K8S_CLUSTER_NAME/.kube
+
+echo "[default]" > $AWS_DIR/config
+echo "region=$variables_AWS_REGION" >> $AWS_DIR/config
+echo "output=json" >> $AWS_DIR/config
+
+echo "[default]" > $AWS_DIR/credentials
+echo "aws_access_key_id=$variables_AWS_ACCESS_KEY" >> $AWS_DIR/credentials
+echo "aws_secret_access_key=$variables_AWS_ACCESS_SECRET" >> $AWS_DIR/credentials
+
+# Alias for executing Kops, Kubectl and aws commands
+K8S_TOOLS="docker run --rm -i -v $AWS_DIR:/root/.aws -v $KUBE_DIR:/root/.kube activeeon/k8s-tools"
+
+################### CREATE KOPS state bucket in AWS  ################### 
+STATE_BUCKET=$variables_K8S_STATE_STORE
+
+$K8S_TOOLS aws s3api head-bucket --bucket $STATE_BUCKET
+if [ $? -eq 0 ]; then
+    echo "$STATE_BUCKET already exists"
+else
+    $K8S_TOOLS aws s3api create-bucket --bucket $STATE_BUCKET --region $variables_AWS_REGION --create-bucket-configuration LocationConstraint=$variables_AWS_REGION
+    $K8S_TOOLS aws s3api put-bucket-encryption  --bucket $STATE_BUCKET  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+    $K8S_TOOLS aws s3 ls | grep $STATE_BUCKET
+fi
+
+################### CREATE KOPS OIDC bucket in AWS  ################### 
+OIDC_BUCKET=$variables_K8S_OIDC_STORE
+
+$K8S_TOOLS aws s3api head-bucket --bucket $OIDC_BUCKET
+if [ $? -eq 0 ]; then
+    echo "$OIDC_BUCKET already exists"
+else
+    $K8S_TOOLS aws s3api create-bucket --bucket $OIDC_BUCKET --region $variables_AWS_REGION --object-ownership BucketOwnerPreferred --create-bucket-configuration LocationConstraint=$variables_AWS_REGION
+
+    $K8S_TOOLS aws s3api put-public-access-block --bucket $OIDC_BUCKET --public-access-block-configuration BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false
+
+    $K8S_TOOLS aws s3 sync s3://$OIDC_BUCKET . --acl public-read
+    $K8S_TOOLS aws s3api put-bucket-acl --bucket $OIDC_BUCKET --acl public-read
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            357
+        </positionTop>
+        <positionLeft>
+            687
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Read_AWS_Credentials" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A groovy task that reads the AWS access credentials from the ProActive buit-in vault (called 3rd Party Credentials vault) ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("AWS_ACCESS_SECRET",credentials.get(variables.get("AWS_ACCESS_KEY")))
+
+//variables.put("CLUSTER_ID",new Random().nextInt(10 ** 4))
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            229
+        </positionTop>
+        <positionLeft>
+            687
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Delete_Kubernetes_Cluster" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A bash task that deletes a Kubernetes cluster using Kops. This task requires Docker to be installed in its underlying host, since the tools it uses (Kops, Kubectl and AWS CLI) are executed in a docker container (activeeon/k8s-tools). ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/Kube.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Stop_SSH_Connection"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+if [ "$variables_SIGNAL_ACTION" = "Delete_Kubernetes_Cluster" ]; then
+    mkdir -p .aws
+    mkdir -p /tmp/kops/$variables_K8S_CLUSTER_NAME/.kube
+
+    AWS_DIR=$(pwd)/.aws
+    KUBE_DIR=/tmp/kops/$variables_K8S_CLUSTER_NAME/.kube
+
+    echo "[default]" > $AWS_DIR/config
+    echo "region=$variables_AWS_REGION" >> $AWS_DIR/config
+    echo "output=json" >> $AWS_DIR/config
+
+    echo "[default]" > $AWS_DIR/credentials
+    echo "aws_access_key_id=$variables_AWS_ACCESS_KEY" >> $AWS_DIR/credentials
+    echo "aws_secret_access_key=$variables_AWS_ACCESS_SECRET" >> $AWS_DIR/credentials
+
+    STATE_BUCKET=$variables_K8S_STATE_STORE
+    OIDC_BUCKET=$variables_K8S_OIDC_STORE
+
+    export NAME="$variables_K8S_CLUSTER_NAME.$variables_K8S_DOMAIN"
+    export KOPS_STATE_STORE=s3://$STATE_BUCKET
+    export AWS_ACCESS_KEY_ID=$variables_AWS_ACCESS_KEY
+    export AWS_SECRET_ACCESS_KEY=$variables_AWS_ACCESS_SECRET
+
+    ENVIRONMENT_OPTIONS="-e NAME -e KOPS_STATE_STORE -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY"
+
+    # Alias for executing Kops, Kubectl and aws commands
+    K8S_TOOLS="docker run --rm -i -v $AWS_DIR:/root/.aws -v $KUBE_DIR:/root/.kube $ENVIRONMENT_OPTIONS activeeon/k8s-tools"
+
+    $K8S_TOOLS printenv
+
+    $K8S_TOOLS kops delete cluster --name ${NAME} --yes
+
+    # Remove the temporary folder used by Kubernetes cluster
+    sudo rm -rf /tmp/kops/$variables_K8S_CLUSTER_NAME
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="none"></controlFlow>
+      <metadata>
+        <positionTop>
+            1184
+        </positionTop>
+        <positionLeft>
+            679
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Create_Kubernetes_Cluster" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A bash task that create a Kubernetes cluster using Kops. This task requires Docker to be installed in its underlying host, since the tools it uses (Kops, Kubectl and AWS CLI) are executed in a docker container (activeeon/k8s-tools). ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/Kube.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Create_AWS_Buckets"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+AWS_DIR=$(pwd)/.aws
+KUBE_DIR=/tmp/kops/$variables_K8S_CLUSTER_NAME/.kube
+SSH_DIR=/tmp/kops/$variables_K8S_CLUSTER_NAME/.ssh
+
+mkdir -p $AWS_DIR
+mkdir -p $KUBE_DIR
+mkdir -p $SSH_DIR
+
+# Configure AWS credentials
+echo "[default]" > $AWS_DIR/config
+echo "region=$variables_AWS_REGION" >> $AWS_DIR/config
+echo "output=json" >> $AWS_DIR/config
+
+echo "[default]" > $AWS_DIR/credentials
+echo "aws_access_key_id=$variables_AWS_ACCESS_KEY" >> $AWS_DIR/credentials
+echo "aws_secret_access_key=$variables_AWS_ACCESS_SECRET" >> $AWS_DIR/credentials
+
+# Create SSH keypair to be used to connect to Kubernetes cluster
+ssh-keygen -t rsa -b 4096 -N '' -f $SSH_DIR/id_rsa
+
+if [ ! -f "$SSH_DIR/id_rsa.pub" ]; then
+    echo "The SSH keypair is not generated properly" && exit 1
+fi
+
+# Init env variables
+#AVAILABILITY_ZONES=$($K8S_TOOLS aws ec2 describe-availability-zones --region $variables_AWS_REGION --query "AvailabilityZones[*].ZoneName | join(', ', @)")
+#echo $AVAILABILITY_ZONES
+
+STATE_BUCKET=$variables_K8S_STATE_STORE
+OIDC_BUCKET=$variables_K8S_OIDC_STORE
+
+export NAME="$variables_K8S_CLUSTER_NAME.$variables_K8S_DOMAIN"
+export KOPS_STATE_STORE=s3://$STATE_BUCKET
+
+export AWS_ACCESS_KEY_ID=$variables_AWS_ACCESS_KEY
+export AWS_SECRET_ACCESS_KEY=$variables_AWS_ACCESS_SECRET
+
+export OIDC_BUCKET=$OIDC_BUCKET
+#export ZONES=$AVAILABILITY_ZONES
+export ZONES=$variables_AWS_REGION"a"
+export NODE_COUNT=$variables_K8S_NODE_COUNT
+export NODE_SIZE=$variables_K8S_NODE_SIZE
+
+ENVIRONMENT_OPTIONS="-e NAME -e KOPS_STATE_STORE -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e OIDC_BUCKET -e ZONES -e NODE_COUNT -e NODE_SIZE"
+
+# Alias for executing Kops, Kubectl and aws commands
+K8S_TOOLS="docker run --rm -i -v $AWS_DIR:/root/.aws -v $SSH_DIR:/root/.ssh -v $KUBE_DIR:/root/.kube $ENVIRONMENT_OPTIONS activeeon/k8s-tools"
+
+# Display environment variables before starting the cluster creation
+$K8S_TOOLS printenv
+
+# Execute kops commands to create a Kubernetes cluster
+$K8S_TOOLS kops create cluster  \
+    --name=${NAME} \
+    --cloud=aws \
+    --zones=${ZONES} \
+    --node-count=${NODE_COUNT} \
+    --node-size=${NODE_SIZE} \
+    --discovery-store=s3://${OIDC_BUCKET}/${NAME}/discovery \
+    --ssh-public-key=/root/.ssh/id_rsa.pub \
+    --cloud-labels="cluster=${NAME}" \
+    --yes 
+
+#    --dry-run --output yaml \
+    
+#$K8S_TOOLS kops update cluster --name ${NAME} --yes --admin
+$K8S_TOOLS kops get clusters
+$K8S_TOOLS kops validate cluster --wait 20m
+
+$K8S_TOOLS kubectl get nodes --show-labels
+$K8S_TOOLS kubectl -n kube-system get po
+
+$K8S_TOOLS cp /root/.kube/config /root/.kube/$variables_K8S_CLUSTER_NAME-config
+$K8S_TOOLS cp /root/.ssh/id_rsa /root/.ssh/$variables_K8S_CLUSTER_NAME-ssh-private-key
+
+$K8S_TOOLS chmod go+r /root/.kube/$variables_K8S_CLUSTER_NAME-config
+$K8S_TOOLS chmod go+r /root/.ssh/$variables_K8S_CLUSTER_NAME-ssh-private-key
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            486
+        </positionTop>
+        <positionLeft>
+            687
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Delete_AWS_Buckets" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A bash task that uses AWS CLI to delete S3 buckets used by the Kubernetes cluster (i.e., the state and OIDC stores), if the variable 'DELETE_AWS_BUCKETS' is set to TRUE. AWS CLI is executed in a docker container (activeeon/k8s-tools). This task requires then Docker to be installed in its underlying host. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/amazon.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Delete_Kubernetes_Cluster"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+if $variables_DELETE_AWS_BUCKETS; then
+    mkdir -p .aws
+    mkdir -p /tmp/kops/$variables_K8S_CLUSTER_NAME/.kube
+
+    AWS_DIR=$(pwd)/.aws
+    KUBE_DIR=/tmp/kops/$variables_K8S_CLUSTER_NAME/.kube
+
+    echo "[default]" > $AWS_DIR/config
+    echo "region=$variables_AWS_REGION" >> $AWS_DIR/config
+    echo "output=json" >> $AWS_DIR/config
+
+    echo "[default]" > $AWS_DIR/credentials
+    echo "aws_access_key_id=$variables_AWS_ACCESS_KEY" >> $AWS_DIR/credentials
+    echo "aws_secret_access_key=$variables_AWS_ACCESS_SECRET" >> $AWS_DIR/credentials
+
+    # Alias for executing Kops, Kubectl and aws commands
+    K8S_TOOLS="docker run --rm -i -v $AWS_DIR:/root/.aws -v $KUBE_DIR:/root/.kube activeeon/k8s-tools"
+
+    ################### DELETE AWS Route53 ################### 
+    #ID=$variables_PA_JOB_ID
+    #$K8S_TOOLS aws route53 delete-hosted-zone --id $ID
+
+    ################### DELETE KOPS user in AWS ################### 
+    #$K8S_TOOLS aws iam delete-group --group-name kops
+    #$K8S_TOOLS aws iam delete-user --user-name kops
+
+    ################### DELETE KOPS state bucket in AWS  ################### 
+    STATE_BUCKET=cluster-$variables_CLUSTER_ID-state-store
+    $K8S_TOOLS aws s3api delete-bucket --bucket $STATE_BUCKET
+
+    ################### DELETE KOPS OIDC bucket in AWS  ################### 
+    OIDC_BUCKET=cluster-$variables_CLUSTER_ID-oidc-store
+    $K8S_TOOLS aws s3api delete-bucket --bucket $OIDC_BUCKET
+fi
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"></controlFlow>
+      <metadata>
+        <positionTop>
+            1324
+        </positionTop>
+        <positionLeft>
+            699.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Wait_for_User_Action" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A groovy task that waits for a user action to: (i) perform a SSH connection to the Kubernetes master node, or (ii) finish the SSH connection, terminate the deployed Kubernetes cluster and eventually delete S3 buckets used by the cluster. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <depends>
+        <task ref="Download_Private_Key"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.scheduler.common.job.JobVariable
+
+def signals = ['Delete_Kubernetes_Cluster']
+
+if (variables.get("SSH_ENABLED")!="TRUE"){
+    signals.add("Connect_To_K8S_Master")
+}
+    
+signals.each {  signalapi.readyForSignal(it) }
+
+println("Waiting for user action ... ")
+receivedSignal = signalapi.waitForAny(signals.toSet())
+println(receivedSignal)
+signals.each {  signalapi.removeSignal("ready_"+it) }
+
+if (receivedSignal.getName() == "Delete_Kubernetes_Cluster"){
+    variables.put("SIGNAL_ACTION","Delete_Kubernetes_Cluster")
+    println("Deleting Kubernetes Cluster ...")
+} else if (receivedSignal.getName() == "Connect_To_K8S_Master"){
+    variables.put("SIGNAL_ACTION","Connect_To_K8S_Master")
+    variables.put("SSH_ENABLED","TRUE")
+    println("Connectiong to Kubernetes master node via SSH ...")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow  block="start">
+        <if target="Start_SSH_Connection"
+        else="Stop_SSH_Connection"
+        continuation="Loop">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+action = variables.get("SIGNAL_ACTION")
+
+if ( action == "Connect_To_K8S_Master" ) {
+    branch = "if"
+} else  if ( action == "Delete_Kubernetes_Cluster" ) {
+    branch = "else"
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+action = variables.get("SIGNAL_ACTION")
+
+if ( action == "Connect_To_K8S_Master" ) {
+    jobID = variables.get("PA_JOB_ID")
+    host = variables.get("K8S_MASTER_HOST")
+    user = variables.get("USER_OF_AWS_AMI")
+ 
+    variables.put("INSTANCE_NAME", "shell-terminal-${jobID}")
+    variables.put("PROXYFIED", "True")
+    variables.put("ENDPOINT_ID", host)
+    
+    variables.put("USE_MANAGED_HOST_LIST", "False")
+    variables.put("SSH_TARGET_HOST", host)
+    variables.put("SSH_USER", user)
+    variables.put("SSH_PORT", "22")
+	
+    variables.put("AUTHENTICATION_METHOD", "SSH_PRIVATE_KEY")
+
+    schedulerapi.connect() 
+	schedulerapi.putThirdPartyCredential("${user}@${host}",variables.get("PRIVATE_KEY")) 
+}
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            867.5
+        </positionTop>
+        <positionLeft>
+            687
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Download_Kubernetes_Config" 
+    
+    
+    
+    preciousResult="true" 
+    fork="true">
+      <description>
+        <![CDATA[ A groovy task that allows to download the configuration file of the deployed Kubernetes cluster. The configuration file can be used by any Kubectl client to control the cluster. ]]>
+      </description>
+      <depends>
+        <task ref="Create_Kubernetes_Cluster"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def clusterName = variables.get("K8S_CLUSTER_NAME")
+
+def kubeConfig=new File("/tmp/kops/${clusterName}/.kube/${clusterName}-config")
+if (kubeConfig.exists()){
+    result = kubeConfig.getBytes()
+    resultMetadata.put("file.name", clusterName+"-config")
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            608.984375
+        </positionTop>
+        <positionLeft>
+            664
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Download_Private_Key" 
+    
+    
+    
+    preciousResult="true" 
+    fork="true">
+      <description>
+        <![CDATA[ A groovy task that: (i) displays information about the deployed Kubernetes cluster, and (ii) allows to download the SSH private key needed for accessing the nodes of the cluster. ]]>
+      </description>
+      <depends>
+        <task ref="Download_Kubernetes_Config"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def domain = variables.get("K8S_DOMAIN")
+def clusterName = variables.get("K8S_CLUSTER_NAME")
+def user = variables.get("USER_OF_AWS_AMI")
+def kubernetesMasterHost = "api."+clusterName+"."+domain
+
+def privateKey=new File("/tmp/kops/${clusterName}/.ssh/${clusterName}-ssh-private-key")
+if (privateKey.exists()){
+    result = privateKey.getBytes()
+    resultMetadata.put("file.name", clusterName+"-ssh-private-key")
+    
+    variables.put("PRIVATE_KEY",privateKey.getText())
+	println(variables.get("PRIVATE_KEY"))
+}
+
+resultMap.put("K8S cluster name",clusterName+"."+domain)
+resultMap.put("K8S control plane DNS",kubernetesMasterHost)
+resultMap.put("SSH to control plane","ssh -i path-to-private-key "+ user +"@"+kubernetesMasterHost)
+
+variables.put("K8S_MASTER_HOST",kubernetesMasterHost)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            742
+        </positionTop>
+        <positionLeft>
+            679
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Start_SSH_Connection" 
+    
+    
+    
+    
+    fork="false">
+      <description>
+        <![CDATA[ Start a SSH connection in the browser to the kubernetes master node. ]]>
+      </description>
+      <variables>
+        <variable name="SSH_INSTANCE_NAME" value="ssh-via-browser-${PA_JOB_ID}" inherited="false" model="PA:NOT_EMPTY_STRING" description="Name of the SSH service instance."  advanced="false" hidden="false"/>
+        <variable name="SERVICE_ACTIVATION_WORKFLOW" value="service-automation/SSH_Terminal_Via_Browser" inherited="false" model="PA:CATALOG_OBJECT(Workflow/psa,,,SSH_Terminal_Via_Browser%)" description="The SSH service activation workflow."  advanced="false" hidden="false"/>
+        <variable name="INSTANCE_NAME" value="" inherited="true"  description="Instance name of RabbitMQ"  advanced="false" hidden="false"/>
+        <variable name="PROXYFIED" value="" inherited="true"  description="If True, requests to RabbitMQ are sent via a proxy server."  advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+        <info name="task.documentation" value="PSA/PSAUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Service_Start/raw" language="groovy">
+            <arguments>
+              <argument value="true"/>
+              <argument value="false"/>
+              <argument value="INSTANCE_NAME"/>
+              <argument value="PROXYFIED"/>
+              <argument value="USE_MANAGED_HOST_LIST"/>
+              <argument value="SSH_TARGET_HOST"/>
+              <argument value="SSH_USER"/>
+              <argument value="SSH_PORT"/>
+              <argument value="AUTHENTICATION_METHOD"/>
+              <argument value="SSH_PRIVATE_KEY"/>
+              <argument value="ENDPOINT_ID"/>
+            </arguments>
+          </file>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            1051
+        </positionTop>
+        <positionLeft>
+            433.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Stop_SSH_Connection" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A task that finishes the SSH connection to the kubernetes master node. ]]>
+      </description>
+      <variables>
+        <variable name="INSTANCE_ID" value="" inherited="false"  description="ID of the SSH service instance to stop."  advanced="false" hidden="false"/>
+        <variable name="SERVICE_ACTION_WORKFLOW" value="service-automation/Finish_SSH_Terminal_Via_Browser" inherited="false" model="PA:CATALOG_OBJECT(Workflow/psa,,,%Finish_SSH_Terminal_Via_Browser)" description="The SSH service activation workflow."  advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png"/>
+      </genericInformation>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.pca.service.client.ApiClient
+import org.ow2.proactive.pca.service.client.api.CatalogRestApi
+import org.ow2.proactive.pca.service.client.api.ServiceInstanceRestApi
+import org.ow2.proactive.pca.service.client.model.CloudAutomationWorkflow
+import org.ow2.proactive.pca.service.client.model.ServiceDescription
+import java.util.concurrent.TimeoutException
+import com.google.common.base.Strings
+
+if (variables.get("SSH_ENABLED")=="TRUE"){
+
+	println("BEGIN " + variables.get("PA_TASK_NAME"))
+
+    try {
+    // Get schedulerapi access
+    schedulerapi.connect()
+
+    // Acquire session id
+    def sessionId = schedulerapi.getSession()
+
+    // Define PCA URL
+    def pcaUrl = variables.get('PA_CLOUD_AUTOMATION_REST_URL')
+
+    // Connect to APIs
+    def apiClient = new ApiClient()
+    apiClient.setBasePath(pcaUrl)
+    //apiClient.setDebugging(true)
+    def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
+    def instanceName = variables.get("INSTANCE_NAME")
+    def instanceId = (!variables.get("INSTANCE_ID") && instanceName)? variables.get("INSTANCE_ID_" + instanceName) : variables.get("INSTANCE_ID")
+    if (!instanceId && !instanceName){
+        throw new IllegalArgumentException("You have to specify an INSTANCE_NAME or an INSTANCE_ID. Empty value for both is not allowed.");
+    }
+
+    println("INSTANCE_ID: " + instanceId)
+	println(instanceName)
+    println(variables.get("INSTANCE_ID_" + instanceName))
+
+    def bucketName
+    def isActionExists = false
+    def catalogRestApi = new CatalogRestApi(apiClient)
+    def actionVariables = new HashMap()
+
+    def action = variables.get("ACTION")
+    def serviceActionWorkflow = variables.get("SERVICE_ACTION_WORKFLOW")
+
+    if (Strings.isNullOrEmpty(action) && Strings.isNullOrEmpty(serviceActionWorkflow)) {
+        throw new IllegalArgumentException("You have to provide an ACTION value or a SERVICE_ACTION_WORKFLOW. Empty value is not allowed.");
+    }
+
+    if (!Strings.isNullOrEmpty(action)) {
+        List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceIdUsingGET(sessionId, instanceId.toString()).get(instanceId.toString())
+        for (CloudAutomationWorkflow actionIterator : listExecutableActions) {
+            if (actionIterator.getName().equals(action)){
+                bucketName = actionIterator.getBucket()
+                //retrieve default action variables
+                actionVariables = actionIterator.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+                isActionExists = true
+                break
+            }
+        }
+    } else if (!Strings.isNullOrEmpty(serviceActionWorkflow)) {
+        def serviceActionWorkflowSplits = serviceActionWorkflow.split('/')
+        bucketName = serviceActionWorkflowSplits[0]
+        action = serviceActionWorkflowSplits[1]
+        CloudAutomationWorkflow executableAction = catalogRestApi.getExecutableActionByCatalogObjectUsingGET(sessionId, instanceId, bucketName, action)
+        println("Action Bucket_name: " + bucketName + ", Action_workflow_name: " + action)
+        if (executableAction != null) {
+            actionVariables = executableAction.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
+            isActionExists = true
+        }
+    }
+    if(!isActionExists){
+        throw new IllegalArgumentException("The provided ACTION: " + action + " does not belong to the existing possible actions that can be applied to the current state of the service. You have to specify a valid action.")
+    }
+
+    // Retrieve and update workflow variables
+    if (binding.variables["args"]){
+        for (String var: args){
+            actionVariables.put(var, variables.get(var))
+        }
+    }
+
+    // Execute action on service
+    ServiceDescription service = new ServiceDescription()
+    service.setBucketName(bucketName)
+    service.setWorkflowName(action)
+    if( !actionVariables.isEmpty() ){
+        actionVariables.each{ k, v -> service.putVariablesItem("${k}", "${v}") }
+    }
+    def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceActionUsingPUT(sessionId, instanceId as int, service, variables.get("PA_JOB_ID"))
+
+    if (action.toLowerCase().contains("finish")) {
+        try {
+            schedulerapi.waitForJob(serviceInstanceData.getJobSubmissions().get(0).getJobId().toString(), 180000)
+        } catch (TimeoutException toe) {
+            println("[warning] Timeout reached. Disable to wait until the PCA service " + instanceId + " finishes." )
+        }
+    }}
+    catch (Exception ex) {
+        println("[error] Unable to finalize the PCA service. It was already finished?" )
+        ex.printStackTrace();
+    }
+
+
+	println("END " + variables.get("PA_TASK_NAME"))
+}
+]]>
+          </code>
+          <arguments>
+            <argument value="INSTANCE_NAME"/>
+          </arguments>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"></controlFlow>
+      <metadata>
+        <positionTop>
+            1055
+        </positionTop>
+        <positionLeft>
+            680.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Loop" 
+    
+    
+    
+    
+    fork="true">
+      <description>
+        <![CDATA[ A simple task to loop over user actions. ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow  block="end">
+        <loop target="Wait_for_User_Action">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+signalAction=variables.get("SIGNAL_ACTION")
+
+loop = signalAction=="Delete_Kubernetes_Cluster" ? false : true
+
+variables.put("SIGNAL_ACTION","")
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            1060.453125
+        </positionTop>
+        <positionLeft>
+            950
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2725px;
+            height:3120px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-224px;left:-428.5px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1218" style="top: 357px; left: 687px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that uses AWS CLI to create S3 buckets for the Kubernetes cluster (i.e., the state and OIDC stores), if they do not exist. AWS CLI is executed in a docker container (activeeon/k8s-tools). This task requires then Docker to be installed in its underlying host."><img src="/automation-dashboard/styles/patterns/img/wf-icons/amazon.png" width="20px">&nbsp;<span class="name">Create_AWS_Buckets</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1221" style="top: 229px; left: 687px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that reads the AWS access credentials from the ProActive buit-in vault (called 3rd Party Credentials vault)"><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Read_AWS_Credentials</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1224" style="top: 1184px; left: 679px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that deletes a Kubernetes cluster using Kops. This task requires Docker to be installed in its underlying host, since the tools it uses (Kops, Kubectl and AWS CLI) are executed in a docker container (activeeon/k8s-tools)."><img src="/automation-dashboard/styles/patterns/img/wf-icons/Kube.png" width="20px">&nbsp;<span class="name">Delete_Kubernetes_Cluster</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1227" style="top: 486px; left: 687px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that create a Kubernetes cluster using Kops. This task requires Docker to be installed in its underlying host, since the tools it uses (Kops, Kubectl and AWS CLI) are executed in a docker container (activeeon/k8s-tools)."><img src="/automation-dashboard/styles/patterns/img/wf-icons/Kube.png" width="20px">&nbsp;<span class="name">Create_Kubernetes_Cluster</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1230" style="top: 1324px; left: 699.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A bash task that uses AWS CLI to delete S3 buckets used by the Kubernetes cluster (i.e., the state and OIDC stores), if the variable 'DELETE_AWS_BUCKETS' is set to TRUE. AWS CLI is executed in a docker container (activeeon/k8s-tools). This task requires then Docker to be installed in its underlying host."><img src="/automation-dashboard/styles/patterns/img/wf-icons/amazon.png" width="20px">&nbsp;<span class="name">Delete_AWS_Buckets</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_1233" style="top: 867.5px; left: 687px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that waits for a user action to: (i) perform a SSH connection to the Kubernetes master node, or (ii) finish the SSH connection, terminate the deployed Kubernetes cluster and eventually delete S3 buckets used by the cluster."><img src="/automation-dashboard/styles/patterns/img/wf-icons/signal-wait.png" width="20px">&nbsp;<span class="name">Wait_for_User_Action</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1236" style="top: 608.984px; left: 664px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that allows to download the configuration file of the deployed Kubernetes cluster. The configuration file can be used by any Kubectl client to control the cluster."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Download_Kubernetes_Config</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1239" style="top: 742px; left: 679px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A groovy task that: (i) displays information about the deployed Kubernetes cluster, and (ii) allows to download the SSH private key needed for accessing the nodes of the cluster."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Download_Private_Key</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1242" style="top: 1051px; left: 433.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Start a SSH connection in the browser to the kubernetes master node."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">Start_SSH_Connection</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1245" style="top: 1055px; left: 680.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that finishes the SSH connection to the kubernetes master node."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ssh.png" width="20px">&nbsp;<span class="name">Stop_SSH_Connection</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon" class="glyphicon glyphicon-arrow-right"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1248" style="top: 1060.45px; left: 950px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A simple task to loop over user actions."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Loop</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:746px;top:268.5px" width="25.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 14.5 50 4.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4501093750000003,66.78168750000002 L6.253690937044999,47.46216731630898 L-1.2390824053543916,52.834163932040326 L-7.69383263091469,46.25114034666338 L-2.4501093750000003,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4501093750000003,66.78168750000002 L6.253690937044999,47.46216731630898 L-1.2390824053543916,52.834163932040326 L-7.69383263091469,46.25114034666338 L-2.4501093750000003,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:742px;top:1094.5px" width="29" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 8 89 C 18 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.149632,67.21769599999999 L14.40690958201079,46.46015309170498 L8.273904868485769,53.343920460223465 L0.5331340422342654,48.335880223219206 L10.149632,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.149632,67.21769599999999 L14.40690958201079,46.46015309170498 L8.273904868485769,53.343920460223465 L0.5331340422342654,48.335880223219206 L10.149632,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:746px;top:396.5px" width="33.5" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 12.5 89 C 22.5 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M14.26472,67.21769599999999 L17.334394432589825,46.251601969926 L11.602875069438529,53.47307590464471 L3.5897743372345428,48.91344690048747 L14.26472,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M14.26472,67.21769599999999 L17.334394432589825,46.251601969926 L11.602875069438529,53.47307590464471 L3.5897743372345428,48.91344690048747 L14.26472,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:750px;top:1223.5px" width="29.5" height="101" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 8.5 100 C 18.5 50 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.529057875000001,75.71226250000001 L14.776206733730373,54.95264481152161 L8.646561543092698,61.839403834232684 L0.9033480679630488,56.83514114342891 L10.529057875000001,75.71226250000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.529057875000001,75.71226250000001 L14.776206733730373,54.95264481152161 L8.646561543092698,61.839403834232684 L0.9033480679630488,56.83514114342891 L10.529057875000001,75.71226250000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:740.5px;top:781.5px" width="25.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 4.5 86 C 14.5 36 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,64.94400000000002 L12.146678986227787,44.40146694597614 L5.707060938139065,50.99929381508463 L-1.7980271986876035,45.64451538283707 L6.950109375,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M6.950109375,64.94400000000002 L12.146678986227787,44.40146694597614 L5.707060938139065,50.99929381508463 L-1.7980271986876035,45.64451538283707 L6.950109375,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:423.5px;top:907.5px" width="274" height="144" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 143 C -10 93 263 50 253 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M42.651522,103.755338 L63.76584486605911,101.9705775376933 L55.42903620309687,98.0338757053014 L58.04438257136053,89.19306333459643 L42.651522,103.755338" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M42.651522,103.755338 L63.76584486605911,101.9705775376933 L55.42903620309687,98.0338757053014 L58.04438257136053,89.19306333459643 L42.651522,103.755338" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1271" style="position: absolute; transform: translate(-50%, -50%); left: 560px; top: 979px;">if</div><svg style="position:absolute;left:670.5px;top:907.5px" width="27" height="148" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 147 C -10 97 16 50 6 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.062824,112.903098 L6.544346738403062,93.54033446067075 L-0.9214944233884381,98.94969817065548 L-7.409053090941457,92.3990048840592 L-2.062824,112.903098" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.062824,112.903098 L6.544346738403062,93.54033446067075 L-0.9214944233884381,98.94969817065548 L-7.409053090941457,92.3990048840592 L-2.062824,112.903098" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1275" style="position: absolute; transform: translate(-50%, -50%); left: 683.5px; top: 981px;">else</div><svg style="position:absolute;left:676.5px;top:907.5px" width="284" height="153" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 263 152 C 273 102 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M218.55513799999997,111.141332 L203.36681635193165,96.36584941854706 L205.85864055135517,105.24226830000862 L197.4677526519403,109.06234686719186 L218.55513799999997,111.141332" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M218.55513799999997,111.141332 L203.36681635193165,96.36584941854706 L205.85864055135517,105.24226830000862 L197.4677526519403,109.06234686719186 L218.55513799999997,111.141332" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1279" style="position: absolute; transform: translate(-50%, -50%); left: 818px; top: 983.5px;">continuation</div><svg style="position:absolute;left:741.5px;top:525.5px" width="38" height="84" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 83 C -10 33 27 50 17 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.435656250000001,62.18746875000001 L10.475961304186288,44.662818475520886 L2.1675446147510167,48.65909325520177 L-3.0524141906119526,41.05961761076987 L-1.435656250000001,62.18746875000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.435656250000001,62.18746875000001 L10.475961304186288,44.662818475520886 L2.1675446147510167,48.65909325520177 L-3.0524141906119526,41.05961761076987 L-1.435656250000001,62.18746875000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:740.5px;top:648.5px" width="22" height="94" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 93 C -10 43 11 50 1 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.75963575,70.38066975000001 L5.137339100675097,50.717562462294815 L-2.1267438925525206,56.39498249849976 L-8.848348150825156,50.08467060484734 L-2.75963575,70.38066975000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.75963575,70.38066975000001 L5.137339100675097,50.717562462294815 L-2.1267438925525206,56.39498249849976 L-8.848348150825156,50.08467060484734 L-2.75963575,70.38066975000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:823.5px;top:857.5px" width="227" height="253" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 0 C 50 -50 216 202 226 152 " transform="translate(0.5,50.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M60.515424,13.658867999999998 L80.6036898507883,20.401387937534693 L71.57098632592945,22.248078770349593 L72.01447908043869,31.456950263464137 L60.515424,13.658867999999998" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M60.515424,13.658867999999998 L80.6036898507883,20.401387937534693 L71.57098632592945,22.248078770349593 L72.01447908043869,31.456950263464137 L60.515424,13.658867999999998" class="" stroke="#316b31" fill="#316b31" transform="translate(0.5,50.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1291" style="position: absolute; transform: translate(-50%, -50%); left: 951.5px; top: 983.5px;">loop</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 746.5px; top: 387px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 746.5px; top: 347px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 751px; top: 259px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 750.5px; top: 1214px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 750.5px; top: 1174px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 759px; top: 516px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 759px; top: 476px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 759px; top: 1354px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 759px; top: 1314px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 745.5px; top: 898px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 745.5px; top: 858px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 677px; top: 898px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 814px; top: 898px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 742px; top: 639px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 742px; top: 599px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 741px; top: 772px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 741px; top: 732px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 496px; top: 1081px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 424px; top: 1041px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 742.5px; top: 1085px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 671px; top: 1045px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 990px; top: 1090px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 940px; top: 1050px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 1040px; top: 1050px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
