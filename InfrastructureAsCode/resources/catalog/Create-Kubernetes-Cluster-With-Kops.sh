@@ -14,9 +14,7 @@ kops create cluster  \
     --ssh-public-key=/root/.ssh/id_rsa.pub \
     --cloud-labels="cluster=${NAME}" \
     --yes 
-#    --dry-run --output yaml \
-    
-#kops update cluster --name ${NAME} --yes --admin
+
 kops get clusters
 kops validate cluster --wait 20m
 
