@@ -21,8 +21,7 @@ kops validate cluster --wait 20m
 kubectl get nodes --show-labels
 kubectl -n kube-system get po
 
-cp /root/.kube/config /root/.kube/${SHORT_NAME}-config
+
 cp /root/.ssh/id_rsa /root/.ssh/${SHORT_NAME}-ssh-private-key
 
-chmod go+r /root/.kube/${SHORT_NAME}-config
 chmod go+r /root/.ssh/${SHORT_NAME}-ssh-private-key
