@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 NAME=$1
 SHORT_NAME=$2
 TOKEN_DURATION=$3

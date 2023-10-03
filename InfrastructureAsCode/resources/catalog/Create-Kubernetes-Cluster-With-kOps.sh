@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 # Display environment variables before starting the cluster creation
 printenv
 
