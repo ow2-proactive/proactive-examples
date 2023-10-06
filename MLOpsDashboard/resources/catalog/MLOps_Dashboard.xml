@@ -6,6 +6,7 @@
     <variable advanced="true" description="The endpoint_id that will be used if PROXYFIED is set to True." group="Proactive Service Parameters" hidden="false" name="ENDPOINT_ID" value="mlops-dashboard-gui-$PA_JOB_ID"/>
     <variable advanced="true" description="True if a proxy is needed to protect the access to the service endpoint." group="Proactive Service Parameters" hidden="false" model="PA:Boolean" name="PROXYFIED" value="False"/>
     <variable advanced="true" description="True if an https endpoint will be exposed as the service endpoint." group="Proactive Service Parameters" hidden="false" model="PA:Boolean" name="HTTPS_ENABLED" value="False"/>
+    <variable advanced="true" description="True if a public ip address is needed for the service endpoint." group="Proactive Service Parameters" hidden="false" model="PA:Boolean" name="PUBLIC_IP" value="True"/>
     <variable advanced="true" description="If specified, it specifies the port number for the HTTP metrics." group="MLOps Dashboard Service Configuration" hidden="false" name="DASHBOARD_SERVICE_PORT" value="-1"/>
     <variable advanced="true" description="Docker image used to start the MLOps Dashboard." group="MLOps Dashboard Service Configuration" hidden="false" name="DOCKER_IMAGE" value="activeeon/mlops_dashboard:latest"/>
     <variable advanced="false" description="If not empty, the MLOps Dashboard will ask this password to access the service." group="MLOps Dashboard Service Configuration" hidden="false" model="PA:HIDDEN" name="DASHBOARD_PASSWORD" value=""/>
@@ -42,7 +43,7 @@
           </file>
         </script>
         <script type="static">
-          <file url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Check_Not_Used_By_Other_Service/raw" language="groovy"></file>
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/service-automation/resources/Check_Not_Used_By_Other_Service/raw"/>
         </script>
       </selection>
       <pre>
@@ -114,6 +115,10 @@ USER_DATA_FILE="${PWD}/${variables_USER_DATA_FILE}"
 PA_JOB_ID=$variables_PA_JOB_ID
 PROXYFIED=$variables_PROXYFIED
 ################################################################################
+
+if [ "${HTTPS_ENABLED,,}" = "true" ]; then
+    DASHBOARD_INTERNAL_PORT=8443
+fi
 
 BASE_URL=""
 BASE_PATH=""
@@ -208,17 +213,59 @@ import org.ow2.proactive.pca.service.client.model.Deployment
 import org.ow2.proactive.pca.service.client.model.Node
 import java.net.URLEncoder;
 
+import groovy.json.JsonSlurper
+import java.net.HttpURLConnection
+import java.net.URL
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.IOException
+
+def getExternalIPAddress() {
+    def url = 'http://httpbin.org/ip'
+    try {
+        def apiUrl = new URL(url)
+        def connection = apiUrl.openConnection() as HttpURLConnection
+        connection.requestMethod = 'GET'
+        def responseCode = connection.responseCode
+        if (responseCode == 200) {
+            def reader = new BufferedReader(new InputStreamReader(connection.inputStream))
+            def jsonResponse = reader.text
+            def slurper = new JsonSlurper()
+            def json = slurper.parseText(jsonResponse)
+            if (json.origin) {
+                def ip = json.origin
+                return ip
+            } else {
+                println "Failed to retrieve the IP address. Response: $jsonResponse"
+            }
+        } else {
+            println "Failed to retrieve the IP address. Status code: $responseCode"
+        }
+    } catch (IOException e) {
+        e.printStackTrace()
+    }
+    // Return null if an error occurs
+    return null
+}
+
 // Acquire variables
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
 def httpsEnabled = variables.get("HTTPS_ENABLED")
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")
-def hostname = variables.get("PA_NODE_HOST")
 def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
 def engine = variables.get("ENGINE")
+def publicIP = variables.get("PUBLIC_IP")
 
 println("proxyfied: " + proxyfied)
 println("httpsEnabled: " + httpsEnabled)
+println("publicIP: " + publicIP)
+
+def hostname = variables.get("PA_NODE_HOST")
+if (publicIP.toLowerCase()=="true") {
+    hostname = getExternalIPAddress()
+}
+println("hostname: " + hostname)
 
 // Handle service parameters
 def port = new File(instanceName+"_port").text.trim()
