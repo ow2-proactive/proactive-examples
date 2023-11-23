@@ -52,7 +52,7 @@ if (!database) {
 }
 
 // This key is used for getting the password from 3rd party credentials.
-CREDENTIALS_KEY = RDBMS_NAME + "://" + username + "@" + host
+CREDENTIALS_KEY = RDBMS_NAME + "://" + username + "@" + host + ":" + port
 password = credentials.get(CREDENTIALS_KEY).trim()
 
 //Construct the jdbc URL
@@ -77,12 +77,12 @@ if(password){
 variables.entrySet().each { var ->
     if (var.getKey().startsWith("POOL_")){
         dbConnectionDetailsBuilder.addDataSourceProperty(var.getKey().replace("POOL_", ""), var.getValue())
-    }} 
+    }}
 
 
 //Open the pooled connection to the database
 dbConnectionDetails = dbConnectionDetailsBuilder.build()
-sqlStatements = variables.get("SQL_STATEMENTS")   
+sqlStatements = variables.get("SQL_STATEMENTS")
 if (!sqlStatements){
     throw new IllegalArgumentException("ERROR: SQL_STATEMENTS variable is not provided by the user. Empty value is not allowed.")
 }
@@ -98,9 +98,9 @@ interceptor.stop()
 
 outputType = variables.get("OUTPUT_TYPE")
 if (outputType == "HTML"){
-    result = getHtmlPreview(rs).toString()
+    result = getHtmlPreview(rs).toString().getBytes()
     resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "output.html") 
+    resultMetadata.put("file.name", "output.html")
     resultMetadata.put("content.type", "text/html")
 } else {
     result = getCsvPreview(rs)
@@ -117,7 +117,7 @@ if(storeResultVariable){
     } catch (Exception e) {
         println org.objectweb.proactive.utils.StackTraceUtil.getStackTrace(e)
         throw e
-    }   
+    }
 }
 
 /**
@@ -130,7 +130,7 @@ def init(String protocol, String port, String dataSourceClassName){
 }
 
 /**
-* This methods allows to download the results from the Scheduler Portal in a CSV format. 
+* This methods allows to download the results from the Scheduler Portal in a CSV format.
 */
 def getCsvPreview(ResultSet rs) throws IOException, SQLException {
 
@@ -159,7 +159,7 @@ def getCsvPreview(ResultSet rs) throws IOException, SQLException {
 }
 
 /**
-* This methods allows to preview the results in the Scheduler Portal in a HTML format. 
+* This methods allows to preview the results in the Scheduler Portal in a HTML format.
 */
 def getHtmlPreview(ResultSet rs) throws IOException, SQLException {
 
