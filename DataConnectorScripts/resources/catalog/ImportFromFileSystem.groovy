@@ -156,7 +156,8 @@ def createKeyStore(String certificate, String clientPrivateKey) throws IOExcepti
  */
 void importFiles() {
     try {
-        startUrl = createFileUri(host, port, username).toString() + Paths.get("/", remoteDir).toString()
+        startUrl = createFileUri(host, port, username).resolve(remoteDir).toString()
+        println "startUrl: " + startUrl
         // localBase can be either a global path or a local relative path in the data space
         if (Paths.get(localBase).isAbsolute()) {
             localDir = localBase
@@ -288,9 +289,7 @@ void initializeAuthentication() {
         password = checkParametersAndReturnPassword()
         def auth = new StaticUserAuthenticator(null, username, password)
         try {
-            DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
-            FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
-            SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
+            DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth)
             if (keyManager != null) {
                 FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
             }
@@ -302,6 +301,8 @@ void initializeAuthentication() {
             throw new RuntimeException("Failed to set user authenticator", ex);
         }
     }
+    FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
+    SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
 }
 
 result = true

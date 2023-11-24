@@ -50,7 +50,7 @@ if (!database) {
 }
 
 // This key is used for getting the password from 3rd party credentials.
-CREDENTIALS_KEY = RDBMS_NAME + "://" + username + "@" + host
+CREDENTIALS_KEY = RDBMS_NAME + "://" + username + "@" + host + ":" + port
 password = credentials.get(CREDENTIALS_KEY).trim()
 
 //Construct the jdbc URL
@@ -75,11 +75,11 @@ if(password){
 variables.entrySet().each { var ->
     if (var.getKey().startsWith("POOL_")){
         dbConnectionDetailsBuilder.addDataSourceProperty(var.getKey().replace("POOL_", ""), var.getValue())
-    }} 
+    }}
 
 //Open the pooled connection to the database
 dbConnectionDetails = dbConnectionDetailsBuilder.build()
-sqlStatements = variables.get("SQL_STATEMENTS")   
+sqlStatements = variables.get("SQL_STATEMENTS")
 if (!sqlStatements){
     throw new IllegalArgumentException("ERROR: SQL_STATEMENTS variable is not provided by the user. Empty value is not allowed.")
 }

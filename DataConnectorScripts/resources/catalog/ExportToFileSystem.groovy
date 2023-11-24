@@ -154,7 +154,8 @@ def createKeyStore(String certificate, String clientPrivateKey) throws IOExcepti
 void exportFiles() {
     try {
         optsLocal = new FileSystemOptions()
-        startRemoteUrl = createFileUri(host, port, username).toString() + Paths.get("/", remoteDir).toString()
+        startRemoteUrl = createFileUri(host, port, username).resolve(remoteDir).toString()
+        println "startRemoteUrl: " + startRemoteUrl
         // Set remoteSrc for cleanup in release()
         remoteSrc = fsManager.resolveFile(startRemoteUrl, optsRemote);
         // localBase can be either a global path or a local relative path in the data space
@@ -279,9 +280,7 @@ void initializeAuthentication() {
         password = checkParametersAndReturnPassword()
         def auth = new StaticUserAuthenticator(null, username, password)
         try {
-            DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth);
-            FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
-            SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
+            DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth)
             if (keyManager != null) {
                 FtpsFileSystemConfigBuilder.getInstance().setKeyManager(optsRemote, keyManager)
             }
@@ -293,6 +292,8 @@ void initializeAuthentication() {
             throw new RuntimeException("Failed to set user authenticator", ex);
         }
     }
+    FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
+    SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
 }
 
 result = true
