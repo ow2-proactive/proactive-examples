@@ -1,0 +1,1422 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Single_Workflow_Staging" projectName="4. Tools" tags="CI-CD,Workflow Staging" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
+  <variables>
+    <variable name="SOURCE_ENVIRONMENT" value="https://source-env" model="PA:URL" description="The URL of the source ProActive server" group="Source Parameters" advanced="false" hidden="false"/>
+    <variable name="SOURCE_USER" value="my_user" model="PA:NOT_EMPTY_STRING" description="The ProActive user login of the source environment" group="Source Parameters" advanced="true" hidden="false"/>
+    <variable name="SOURCE_PASSWORD" value="${SOURCE_USER}" model="PA:CREDENTIAL" description="The ProActive user password of the source environment. This password must be added to the third-party credentials vault (the user login is the key and the password is the credential)." group="Source Parameters" advanced="true" hidden="false"/>
+    <variable name="SOURCE_OBJECT_PATH" value="basic-examples/Native_Task" model="PA:CATALOG_OBJECT" description="The source catalog path of the object to be promoted" group="Source Parameters" advanced="false" hidden="false"/>
+    <variable name="TARGET_ENVIRONMENT" value="https://target-env" model="PA:URL" description="The URL of the target ProActive server" group="Target Parameters" advanced="false" hidden="false"/>
+    <variable name="TARGET_USER" value="my_user" model="PA:NOT_EMPTY_STRING" description="The ProActive user login of the target environment" group="Target Parameters" advanced="true" hidden="false"/>
+    <variable name="TARGET_PASSWORD" value="${TARGET_USER}" model="PA:CREDENTIAL" description="The ProActive user password of the target environment. This password must be added to the third-party credentials vault (the user login is the key and the password is the credential)." group="Target Parameters" advanced="true" hidden="false"/>
+    <variable name="TARGET_OBJECT_PATH" value="" model="PA:SPEL( variables[&#x27;TARGET_OBJECT_PATH&#x27;] == &#x27;&#x27; ? t(variables[&#x27;TARGET_OBJECT_PATH&#x27;] = variables[&#x27;SOURCE_OBJECT_PATH&#x27;]) : true )" description="The target catalog path of the object to be promoted. if the value is empty, it will use the value of variable SOURCE_OBJECT_PATH instead." group="Target Parameters" advanced="true" hidden="false"/>
+    <variable name="COMMIT_MESSAGE" value="new version"  description="When promoting an object in the Catalog, users can add a specific commit message. We recommend to always specify commit messages at any commit for an easier differentiation between stored versions." group="Target Parameters" advanced="false" hidden="false"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that promotes a single catalog object
+from a source to a target ProActive environment.
+In case the catalog object to be promoted already exists in the target environment, a new revision of this catalog object is created. Otherwise, a new catalog object is created. ]]>
+  </description>
+  <genericInformation>
+    <info name="bucketName" value="basic-examples"/>
+    <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/single_workflow_staging.png"/>
+    <info name="submission.mode" value="studio"/>
+    <info name="group" value="public-objects"/>
+  </genericInformation>
+  <taskFlow>
+    <task name="Authenticate_Source_Environment"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task performing a rest POST request to authenticate to the source environment and and acquire a sessionid. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${SOURCE_ENVIRONMENT}" inherited="false" model="PA:URL"   advanced="false" hidden="false"/>
+        <variable name="PATH" value="/rest/scheduler/login" inherited="false"    advanced="false" hidden="false"/>
+        <variable name="CONTENT_TYPE" value="application/x-www-form-urlencoded" inherited="false" model="PA:LIST(application/x-www-form-urlencoded,multipart/form-data)"   advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"   advanced="false" hidden="false"/>
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"   advanced="false" hidden="false"/>
+        <variable name="RESPONSE_FORMAT" value="string" inherited="false" model="PA:LIST(string,json,xml,html,contentView)"   advanced="false" hidden="false"/>
+        <variable name="RESPONSE_PATH" value="." inherited="false"    advanced="false" hidden="false"/>
+        <variable name="PARAM_username" value="${SOURCE_USER}" inherited="false"    advanced="false" hidden="false"/>
+        <variable name="PARAM_password" value="" inherited="false"    advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+sourceObjectPath = variables.get("SOURCE_OBJECT_PATH")
+targetObjectPath = variables.get("TARGET_OBJECT_PATH")
+
+internalSourceBucket = sourceObjectPath.split('/')[0]
+internalSourceObject = sourceObjectPath.split('/')[1]
+variables.put("INTERNAL_SOURCE_OBJECT", internalSourceObject)
+variables.put("INTERNAL_SOURCE_BUCKET", internalSourceBucket)
+
+if (targetObjectPath?.trim()) {
+    internalTargetBucket = targetObjectPath.split('/')[0]
+    internalTargetObject = targetObjectPath.split('/')[1]
+    variables.put("INTERNAL_TARGET_OBJECT", internalTargetObject)
+    variables.put("INTERNAL_TARGET_BUCKET", internalTargetBucket)
+} else {
+    variables.put("INTERNAL_TARGET_OBJECT", internalSourceObject)
+    variables.put("INTERNAL_TARGET_BUCKET", internalSourceBucket)
+}
+
+def pwdVariable = variables.get("SOURCE_PASSWORD")
+def pwd = credentials.get(pwdVariable)
+variables.put("PARAM_password", pwd)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+contentType = variables.get("CONTENT_TYPE")
+isMultiPart = contentType.equals("multipart/form-data")
+
+restCall = given().contentType(contentType + ";charset = UTF-8")
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = (isMultiPart ? restCall.multiPart(entry.getKey().replace("PARAM_",""), entry.getValue()) : restCall.formParam(entry.getKey().replace("PARAM_",""), entry.getValue()) )});
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("SOURCE_SESSIONID", result)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            73.67189025878906
+        </positionTop>
+        <positionLeft>
+            589.9219055175781
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Authenticate_Target_Environment"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task performing a rest POST request to authenticate to the target environment and and acquire a sessionid. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${TARGET_ENVIRONMENT}" inherited="false" model="PA:URL"   advanced="false" hidden="false"/>
+        <variable name="PATH" value="/rest/scheduler/login" inherited="false"    advanced="false" hidden="false"/>
+        <variable name="CONTENT_TYPE" value="application/x-www-form-urlencoded" inherited="false" model="PA:LIST(application/x-www-form-urlencoded,multipart/form-data)"   advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN"   advanced="false" hidden="false"/>
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN"   advanced="false" hidden="false"/>
+        <variable name="RESPONSE_FORMAT" value="string" inherited="false" model="PA:LIST(string,json,xml,html,contentView)"   advanced="false" hidden="false"/>
+        <variable name="RESPONSE_PATH" value="." inherited="false"    advanced="false" hidden="false"/>
+        <variable name="PARAM_username" value="${TARGET_USER}" inherited="false"    advanced="false" hidden="false"/>
+        <variable name="PARAM_password" value="${TARGET_PASSWORD}" inherited="false"    advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Get_Source_Object_Raw"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+def pwdVariable = variables.get("TARGET_PASSWORD")
+def pwd = credentials.get(pwdVariable)
+variables.put("PARAM_password", pwd)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+contentType = variables.get("CONTENT_TYPE")
+isMultiPart = contentType.equals("multipart/form-data")
+
+restCall = given().contentType(contentType + ";charset = UTF-8")
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("HEADER_")}).forEach({entry -> restCall = restCall.header(entry.getKey().replace("HEADER_",""), entry.getValue()) });
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("PARAM_")}).forEach({entry -> restCall = (isMultiPart ? restCall.multiPart(entry.getKey().replace("PARAM_",""), entry.getValue()) : restCall.formParam(entry.getKey().replace("PARAM_",""), entry.getValue()) )});
+
+variables.entrySet().stream().filter({entry -> entry.getKey().startsWith("QUERY_PARAM_")}).forEach({entry -> restCall = restCall.queryParam(entry.getKey().replace("QUERY_PARAM_",""), entry.getValue()) });
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+variables.put("TARGET_SESSIONID", result)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            459.92189025878906
+        </positionTop>
+        <positionLeft>
+            589.9219055175781
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Create_New_Object_Revision"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task that executes a POST REST request to create a catalog object revision. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${TARGET_ENVIRONMENT}" inherited="false" model="PA:URL" description="Base URL of the server or service that will be queried." group="Http Connection" advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:Boolean" description="If true, disable SSL certificate verification" group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="DEBUG" value="true" inherited="false" model="PA:Boolean" description="If true, print the full request and response content in the task output." group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_HOST" value="" inherited="false"  description="The hostname of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_PORT" value="" inherited="false"  description="The port of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_SCHEME" value="http" inherited="false" model="PA:LIST(http,https)" description="The scheme of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PATH" value="/catalog/buckets/${INTERNAL_TARGET_BUCKET}/resources/${INTERNAL_TARGET_OBJECT}/revisions" inherited="false"  description="Path of the request (relative to the base url)" group="Http Request" advanced="false" hidden="false"/>
+        <variable name="CONTENT_TYPE" value="multipart/form-data" inherited="false" model="PA:LIST(multipart/form-data)" description="Content-Type of the request" group="Http Request" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_FORMAT" value="string" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_PATH" value="." inherited="false"  description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="FORM_PARAMETERS" value="[&#xA;{&#xA;&quot;key&quot;: &quot;file&quot;,&#xA;&quot;value&quot;: &quot;${INTERNAL_SOURCE_OBJECT}&quot;,&#xA;&quot;isFile&quot;: &quot;true&quot;,&#xA;&quot;contentType&quot;: &quot;application/octet-stream&quot;&#xA;}&#xA;]" inherited="false" model="PA:JSON" description="Form parameters of the request, provided as a JSON key/value structure. Parameters can also be specified by adding &lt;i&gt;PARAM_paramname&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+        <variable name="HEADERS" value="{ &quot;sessionID&quot;: &quot;$TARGET_SESSIONID&quot; }" inherited="false" model="PA:JSON" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+        <variable name="QUERY_PARAMETERS" value="{ &quot;name&quot;: &quot;${INTERNAL_TARGET_OBJECT}&quot;, &quot;kind&quot;: &quot;${KIND}&quot;, &quot;objectContentType&quot;: &quot;${OBJECT_CONTENT_TYPE}&quot;, &quot;commitMessage&quot;: &quot;${COMMIT_MESSAGE}&quot; }" inherited="false" model="PA:JSON" description="Query parameters of the request, provided as a JSON key/value structure. Parameters can also be specified by adding &lt;i&gt;QUERY_PARAM_paramname&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+        <files  includes="${INTERNAL_SOURCE_OBJECT}" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+contentType = variables.get("CONTENT_TYPE")
+assert contentType == "multipart/form-data"
+
+restCall = given().contentType(contentType + ";charset = UTF-8")
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("FORM_PARAMETERS") != null && variables.get("FORM_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("FORM_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("FORM_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { it.isFile.toBoolean() ? restCall.multiPart(it.key, new File(it.value), it.contentType) : restCall.multiPart(it.key, it.value, it.contentType)}
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            717.4218902587891
+        </positionTop>
+        <positionLeft>
+            497.8125305175781
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Get_Source_Object_Raw"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task that executes a GET REST request to get source object raw content. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${SOURCE_ENVIRONMENT}" inherited="false" model="PA:URL" description="Base URL of the server or service that will be queried." group="Http Connection" advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN" description="If true, disable SSL certificate verification" group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN" description="If true, print the full request and response content in the task output." group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_HOST" value="" inherited="false"  description="The hostname of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_PORT" value="" inherited="false"  description="The port of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_SCHEME" value="http" inherited="false" model="PA:LIST(http,https)" description="The scheme of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PATH" value="/catalog/buckets/${INTERNAL_SOURCE_BUCKET}/resources/${INTERNAL_SOURCE_OBJECT}/raw" inherited="false"  description="Path of the request (relative to the base url)" group="Http Request" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_FORMAT" value="string" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_PATH" value="" inherited="false"  description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="HEADERS" value="{ &quot;sessionID&quot;: &quot;$SOURCE_SESSIONID&quot; }" inherited="false" model="PA:JSON" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Get_Source_Object_Metadata"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("PARAMETERS") != null && variables.get("PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.param(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+    new File(variables.get("INTERNAL_SOURCE_OBJECT")) << response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files  includes="${INTERNAL_SOURCE_OBJECT}" accessMode="transferToUserSpace"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            331.17189025878906
+        </positionTop>
+        <positionLeft>
+            589.9219055175781
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Get_Source_Object_Metadata"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task that executes a GET REST request to get source object metadata. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${SOURCE_ENVIRONMENT}" inherited="false" model="PA:URL" description="Base URL of the server or service that will be queried." group="Http Connection" advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN" description="If true, disable SSL certificate verification" group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN" description="If true, print the full request and response content in the task output." group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_HOST" value="" inherited="false"  description="The hostname of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_PORT" value="" inherited="false"  description="The port of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_SCHEME" value="http" inherited="false" model="PA:LIST(http,https)" description="The scheme of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PATH" value="/catalog/buckets/${INTERNAL_SOURCE_BUCKET}/resources/${INTERNAL_SOURCE_OBJECT}" inherited="false"  description="Path of the request (relative to the base url)" group="Http Request" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_FORMAT" value="string" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_PATH" value="." inherited="false"  description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="HEADERS" value="{ &quot;sessionID&quot;: &quot;$SOURCE_SESSIONID&quot; }" inherited="false" model="PA:JSON" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Authenticate_Source_Environment"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("PARAMETERS") != null && variables.get("PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.param(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.util.Arrays;
+import groovy.json.JsonSlurperClassic;
+import java.util.ArrayList;
+
+def jsonSlurper = new JsonSlurperClassic()
+def object = jsonSlurper.parseText(result.toString())
+
+variables.put("EXTENSION", object.extension)
+variables.put("KIND", object.kind)
+variables.put("OBJECT_CONTENT_TYPE", object.content_type)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            202.42189025878906
+        </positionTop>
+        <positionLeft>
+            589.9219055175781
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Check_Target_Object"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task that executes a GET REST request to list  catalog objects metadata of a given bucket in order to check whether or not the catalog object to be promoted already exist in the target environment. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${TARGET_ENVIRONMENT}" inherited="false" model="PA:URL" description="Base URL of the server or service that will be queried." group="Http Connection" advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:BOOLEAN" description="If true, disable SSL certificate verification" group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="DEBUG" value="true" inherited="false" model="PA:BOOLEAN" description="If true, print the full request and response content in the task output." group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_HOST" value="" inherited="false"  description="The hostname of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_PORT" value="" inherited="false"  description="The port of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_SCHEME" value="http" inherited="false" model="PA:LIST(http,https)" description="The scheme of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PATH" value="/catalog/buckets/${INTERNAL_TARGET_BUCKET}/resources" inherited="false"  description="Path of the request (relative to the base url)" group="Http Request" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_FORMAT" value="string" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_PATH" value="." inherited="false"  description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="HEADERS" value="{ &quot;sessionID&quot;: &quot;${TARGET_SESSIONID&quot; }" inherited="false" model="PA:JSON" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Authenticate_Target_Environment"/>
+      </depends>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+restCall = given()
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("PARAMETERS") != null && variables.get("PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.param(it.key, it.value) }
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (debug) {
+    println "-------------- REQUEST ------------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.get(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(HttpStatus.SC_OK)
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow >
+        <if target="Create_New_Object_Revision"
+        else="Create_New_Object">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+object_found = variables.get("OBJECT_FOUND") as boolean
+println "object_found= " + object_found
+if(object_found){
+    branch = "if";
+} else {
+    branch = "else";
+}
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import java.util.Arrays;
+import groovy.json.JsonSlurperClassic;
+import java.util.ArrayList;
+
+def jsonSlurper = new JsonSlurperClassic()
+def bucket_resources_list = jsonSlurper.parseText(result.toString())
+def object_name = variables.get("INTERNAL_TARGET_OBJECT")
+def object_found = (bucket_resources_list.find { resource -> resource.name == object_name } != null)
+variables.put("OBJECT_FOUND", object_found)
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            588.6718902587891
+        </positionTop>
+        <positionLeft>
+            589.9219055175781
+        </positionLeft>
+      </metadata>
+    </task>
+    <task name="Create_New_Object"
+
+
+
+
+    fork="true">
+      <description>
+        <![CDATA[ A task that executes a POST REST request to create a new catalog object. ]]>
+      </description>
+      <variables>
+        <variable name="ENDPOINT" value="${TARGET_ENVIRONMENT}" inherited="false" model="PA:URL" description="Base URL of the server or service that will be queried." group="Http Connection" advanced="false" hidden="false"/>
+        <variable name="SSL_DISABLE_CHECK" value="true" inherited="false" model="PA:Boolean" description="If true, disable SSL certificate verification" group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="DEBUG" value="true" inherited="false" model="PA:Boolean" description="If true, print the full request and response content in the task output." group="Http Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_HOST" value="" inherited="false"  description="The hostname of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_PORT" value="" inherited="false"  description="The port of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PROXY_SCHEME" value="http" inherited="false" model="PA:LIST(http,https)" description="The scheme of the proxy" group="Proxy Connection" advanced="true" hidden="false"/>
+        <variable name="PATH" value="/catalog/buckets/${INTERNAL_TARGET_BUCKET}/resources" inherited="false"  description="Path of the request (relative to the base url)" group="Http Request" advanced="false" hidden="false"/>
+        <variable name="CONTENT_TYPE" value="multipart/form-data" inherited="false" model="PA:LIST(multipart/form-data)" description="Content-Type of the request" group="Http Request" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_FORMAT" value="string" inherited="false" model="PA:LIST(string,json,xml,html,contentView)" description="Format of the response, either: &lt;ul style=&quot;color:red;&quot;&gt;   &lt;li&gt;&lt;b&gt;string&lt;/b&gt;: plain text&lt;/li&gt;   &lt;li&gt;&lt;b&gt;json&lt;/b&gt;: a json response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;xml&lt;/b&gt;: a xml response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;html&lt;/b&gt;&lt;/li&gt;: an html response which will be parsed using &lt;i&gt;RESPONSE_PATH&lt;/i&gt;&lt;/li&gt;   &lt;li&gt;&lt;b&gt;contentView&lt;/b&gt;: the response will be stored in raw format, and the response content-type will be used for previewing (suitable for binary formats such as files, images, pdf documents, etc)&lt;/li&gt; &lt;/ul&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="RESPONSE_PATH" value="." inherited="false"  description="Which data to extract in the response if json, xml or html format is selected. It uses the &lt;a href=&quot;https://groovy-lang.org/processing-xml.html&quot; target=&quot;_blank&quot;&gt;GPath notation&lt;/a&gt;" group="Http Response" advanced="false" hidden="false"/>
+        <variable name="FORM_PARAMETERS" value="[&#xA;{&#xA;&quot;key&quot;: &quot;file&quot;,&#xA;&quot;value&quot;: &quot;${INTERNAL_SOURCE_OBJECT}&quot;,&#xA;&quot;isFile&quot;: &quot;true&quot;,&#xA;&quot;contentType&quot;: &quot;application/octet-stream&quot;&#xA;}&#xA;]" inherited="false" model="PA:JSON" description="Form parameters of the request, provided as a JSON key/value structure. Parameters can also be specified by adding &lt;i&gt;PARAM_paramname&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+        <variable name="HEADERS" value="{ &quot;sessionID&quot;: &quot;$TARGET_SESSIONID&quot; }" inherited="false" model="PA:JSON" description="Additional headers of the request, provided as a JSON key/value structure. Headers can also be specified by adding &lt;i&gt;HEADER_headername&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+        <variable name="QUERY_PARAMETERS" value="{ &quot;name&quot;: &quot;${INTERNAL_TARGET_OBJECT}&quot;, &quot;kind&quot;: &quot;${KIND}&quot;, &quot;objectContentType&quot;: &quot;${OBJECT_CONTENT_TYPE}&quot;, &quot;commitMessage&quot;: &quot;${COMMIT_MESSAGE}&quot; }" inherited="false" model="PA:JSON" description="Query parameters of the request, provided as a JSON key/value structure. Parameters can also be specified by adding &lt;i&gt;QUERY_PARAM_paramname&lt;/i&gt; variables." group="Http Request" advanced="false" hidden="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files  includes="rest-assured-fat-3.3.0.jar" accessMode="cacheFromGlobalSpace"/>
+        <files  includes="${INTERNAL_SOURCE_OBJECT}" accessMode="transferFromUserSpace"/>
+      </inputFiles>
+      <forkEnvironment >
+        <envScript>
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def jarFile = new File(cachespace, "rest-assured-fat-3.3.0.jar")
+
+forkEnvironment.addAdditionalClasspath(jarFile.getAbsolutePath())
+]]>
+            </code>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// See https://github.com/rest-assured/rest-assured/wiki/Usage for documentation
+
+import static io.restassured.RestAssured.*;
+import static io.restassured.matcher.RestAssuredMatchers.*;
+import static io.restassured.config.EncoderConfig.*;
+import static org.hamcrest.Matchers.*;
+import org.apache.commons.httpclient.HttpStatus;
+import io.restassured.http.ContentType;
+import io.restassured.RestAssured;
+import com.google.common.base.Strings;
+import groovy.json.JsonSlurper;
+import io.restassured.specification.ProxySpecification
+
+debug = Boolean.parseBoolean(variables.get("DEBUG"))
+
+if(variables.get("PROXY_HOST")?.trim() && variables.get("PROXY_PORT")?.trim()){
+  proxySpecification = new ProxySpecification(variables.get("PROXY_HOST"), variables.get("PROXY_PORT"), variables.get("PROXY_SCHEME"))
+  RestAssured.proxy(proxySpecification)
+}
+
+contentType = variables.get("CONTENT_TYPE")
+assert contentType == "multipart/form-data"
+
+restCall = given().contentType(contentType + ";charset = UTF-8")
+
+if (Boolean.parseBoolean(variables.get("SSL_DISABLE_CHECK"))) {
+    restCall = restCall.relaxedHTTPSValidation()
+}
+
+if (!Strings.isNullOrEmpty(variables.get("USER")) && !Strings.isNullOrEmpty(variables.get("PASSWORD"))) {
+    restCall = restCall.auth().preemptive().basic(variables.get("USER"), variables.get("PASSWORD"))
+}
+
+def jsonSlurper = new JsonSlurper()
+if (variables.get("HEADERS") != null && variables.get("HEADERS").length() > 0) {
+    headersObject = jsonSlurper.parseText(variables.get("HEADERS"))
+    if (!headersObject instanceof Map) {
+        throw new IllegalArgumentException("HEADERS must contain a JSON Map structure")
+    } else {
+        headersObject.each { restCall = restCall.header(it.key, it.value) }
+    }
+}
+
+if (variables.get("QUERY_PARAMETERS") != null && variables.get("QUERY_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("QUERY_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("QUERY_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { restCall = restCall.queryParam(it.key, it.value) }
+    }
+}
+
+if (variables.get("FORM_PARAMETERS") != null && variables.get("FORM_PARAMETERS").length() > 0) {
+    paramsObject = jsonSlurper.parseText(variables.get("FORM_PARAMETERS"))
+    if (!paramsObject instanceof Map) {
+        throw new IllegalArgumentException("FORM_PARAMETERS must contain a JSON Map structure")
+    } else {
+        paramsObject.each { it.isFile.toBoolean() ? restCall.multiPart(it.key, new File(it.value), it.contentType) : restCall.multiPart(it.key, it.value, it.contentType)}
+    }
+}
+
+if (variables.get("COOKIES") != null && variables.get("COOKIES").length() > 0) {
+    cookiesObject = jsonSlurper.parseText(variables.get("COOKIES"))
+    if (!cookiesObject instanceof Map) {
+        throw new IllegalArgumentException("COOKIES must contain a JSON Map structure")
+    } else {
+        cookiesObject.each { restCall = restCall.cookie(it.key, it.value) }
+    }
+}
+
+if (debug) {
+    println "-------------- REQUEST -----------------"
+	restCall = restCall.log().all()
+}
+
+response = restCall.post(variables.get("ENDPOINT") + variables.get("PATH"))
+
+if (debug) {
+    println "-------------- RESPONSE -----------------"
+	println response.statusLine()
+    println response.prettyPrint()
+} else {
+	println response.statusLine()
+}
+
+response = response.then().assertThat()
+  .statusCode(allOf(greaterThanOrEqualTo(HttpStatus.SC_OK),lessThan(HttpStatus.SC_MULTIPLE_CHOICES)))
+  .extract();
+
+if (debug) {
+    println "-------------- RESULT -------------------"
+}
+
+if (response.statusCode() == HttpStatus.SC_NO_CONTENT && !variables.get("RESPONSE_PATH").isEmpty()) {
+    throw new IllegalStateException("A RESPONSE_PATH was requested but http response has no content.")
+} else if (response.statusCode() == HttpStatus.SC_NO_CONTENT) {
+    result = true;
+    // response has no content
+    return;
+}
+
+switch (variables.get("RESPONSE_FORMAT")) {
+    case "json":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for json format")
+    }
+    result = response.jsonPath().get(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "xml":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for xml format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.xmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "html":
+    if (variables.get("RESPONSE_PATH").isEmpty()) {
+        throw new IllegalArgumentException("Invalid RESPONSE_PATH for html format")
+    }
+    // html parsing results are not serializable and thus can be returned only in string format
+    result = response.htmlPath().getString(variables.get("RESPONSE_PATH"));
+    println result
+    break;
+
+    case "contentView":
+    result = response.asByteArray();
+    resultMetadata.put("content.type", response.contentType())
+    // uncomment the following line to allow saving the result as a file on the scheduler portal
+    // see https://doc.activeeon.com/latest/user/ProActiveUserGuide.html#_assigning_metadata_to_task_result
+    // resultMetadata.put("file.extension",".png")
+    println "See result in \"Task Preview\" tab with content " + response.contentType()
+    break;
+
+    case "string":
+    result = response.prettyPrint()
+    break;
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            717.4218902587891
+        </positionTop>
+        <positionLeft>
+            682.0486755371094
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2354px;
+            height:3058px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-68.67189025878906px;left:-492.8125305175781px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1066" style="top: 73.6804px; left: 589.922px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a rest POST request to authenticate to the source environment and and acquire a sessionid."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">Authenticate_Source_Environment</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1069" style="top: 459.93px; left: 589.922px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task performing a rest POST request to authenticate to the target environment and and acquire a sessionid."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">Authenticate_Target_Environment</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1072" style="top: 717.43px; left: 497.813px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a POST REST request to create a catalog object revision."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">Create_New_Object_Revision</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1075" style="top: 331.18px; left: 589.922px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a GET REST request to get source object raw content."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">Get_Source_Object_Raw</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1078" style="top: 202.43px; left: 589.922px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a GET REST request to get source object metadata."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">Get_Source_Object_Metadata</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1081" style="top: 588.68px; left: 589.922px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a GET REST request to list  catalog objects metadata of a given bucket in order to check whether or not the catalog object to be promoted already exist in the target environment."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">Check_Target_Object</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1084" style="top: 717.43px; left: 682.049px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that executes a POST REST request to create a new catalog object."><img src="/automation-dashboard/styles/patterns/img/wf-icons/api-rest.png" width="20px">&nbsp;<span class="name">Create_New_Object</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:656px;top:370.5px" width="39.5" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 18.5 89 C 28.5 39 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.751504,67.21769599999999 L21.264334252234498,46.0821490558605 L16.081813287527815,53.707204888467615 L7.753843140702118,49.75183976833269 L19.751504,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.751504,67.21769599999999 L21.264334252234498,46.0821490558605 L16.081813287527815,53.707204888467615 L7.753843140702118,49.75183976833269 L19.751504,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:656px;top:241.5px" width="32" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 21 50 11 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.8930240000000003,67.21769599999999 L8.435007133996361,48.71548605374757 L0.5092747589894084,53.425344471977006 L-5.357344394026622,46.313187294758166 L-1.8930240000000003,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.8930240000000003,67.21769599999999 L8.435007133996361,48.71548605374757 L0.5092747589894084,53.425344471977006 L-5.357344394026622,46.313187294758166 L-1.8930240000000003,67.21769599999999" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:667px;top:113.5px" width="30.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 19.5 50 9.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.0213280000000005,66.303232 L7.990935403065082,47.628259937165645 L0.14634792583620504,52.472064981973276 L-5.840231614961638,45.46058401132944 L-2.0213280000000005,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.0213280000000005,66.303232 L7.990935403065082,47.628259937165645 L0.14634792583620504,52.472064981973276 L-5.840231614961638,45.46058401132944 L-2.0213280000000005,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:647.5px;top:499.5px" width="48" height="90" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 89 C -10 39 37 50 27 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.4193302500000017,66.74071675 L13.370749601829033,50.652407401899474 L4.668794566031797,53.6980565207185 L0.3280893725475309,45.56428258586768 L-0.4193302500000017,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-0.4193302500000017,66.74071675 L13.370749601829033,50.652407401899474 L4.668794566031797,53.6980565207185 L0.3280893725475309,45.56428258586768 L-0.4193302500000017,66.74071675" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:487.5px;top:628.5px" width="113" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 102 50 92 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.999437499999999,62.2538125 L29.391382914682087,56.49459708428355 L20.458995641137577,54.21151635960033 L21.349086774282416,45.03503894314597 L8.999437499999999,62.2538125" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.999437499999999,62.2538125 L29.391382914682087,56.49459708428355 L20.458995641137577,54.21151635960033 L21.349086774282416,45.03503894314597 L8.999437499999999,62.2538125" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1104" style="position: absolute; transform: translate(-50%, -50%); left: 543.5px; top: 672.5px;">if</div><svg style="position:absolute;left:579.5px;top:628.5px" width="113" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 92 88 C 102 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M83.0005625,62.2538125 L70.65091322571757,45.03503894314597 L71.54100435886242,54.21151635960033 L62.60861708531791,56.49459708428355 L83.0005625,62.2538125" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M83.0005625,62.2538125 L70.65091322571757,45.03503894314597 L71.54100435886242,54.21151635960033 L62.60861708531791,56.49459708428355 L83.0005625,62.2538125" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1108" style="position: absolute; transform: translate(-50%, -50%); left: 635.5px; top: 672.5px;">else</div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 677px; top: 104px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 675px; top: 490px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 675px; top: 450px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 574.5px; top: 747px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 488px; top: 707px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 656.5px; top: 361px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 656.5px; top: 321px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667.5px; top: 232px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 667.5px; top: 192px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 619px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 648px; top: 579px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 580px; top: 619px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 737px; top: 747px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 672px; top: 707px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
