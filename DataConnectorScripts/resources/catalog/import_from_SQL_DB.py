@@ -67,9 +67,15 @@ if DBMS_NAME == "greenplum":
 database_url = '{0}+{1}://{2}:{3}@{4}:{5}/{6}'.format(DBMS_NAME,DBMS_DRIVER,USER,PASSWORD,HOST,PORT,DATABASE)
 engine = create_engine(database_url)
 
-with engine.connect() as conn, conn.begin():
-    #pd.read_sql() can take either a SQL query as a parameter or a table name
-    dataframe = pd.read_sql(SQL_QUERY, conn)
+try:
+    with engine.connect() as conn, conn.begin():
+        #pd.read_sql() can take either a SQL query as a parameter or a table name
+        dataframe = pd.read_sql(SQL_QUERY, conn)
+
+finally:
+    conn.close()
+    engine.dispose()
+
 print(dataframe.to_string())
 #***************# HTML PREVIEW STYLING #***************#
 styles = [
