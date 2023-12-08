@@ -1,4 +1,3 @@
-# Copyright Activeeon 2007-2023. All rights reserved.
 """Proactive Predict Model for Machine Learning
 
 This module contains the Python script for the Predict Model task.
