@@ -1,3 +1,4 @@
+# Copyright Activeeon 2007-2023. All rights reserved.
 """Proactive Predict Model for Machine Learning
 
 This module contains the Python script for the Predict Model task.
@@ -177,9 +178,10 @@ if is_labeled_data:
         confusion_matrix_result = confusion_matrix(dataframe_label.values.ravel(), predictions)
         print("********************** CLASSIFICATION SCORE **********************")
         print("ACCURACY SCORE:  %.2f" % accuracy_score_result)
-        print("PRECISION SCORE: %.2f" % precision_score_result)
         print("CONFUSION MATRIX:\n%s" % confusion_matrix_result)
         print("*******************************************************************")
+        resultMap.put("ACCURACY_SCORE", "%.2f"%accuracy_score_result)
+        resultMap.put("CONFUSION_MATRIX", confusion_matrix_result.tolist())
     # -------------------------------------------------------------
     # REGRESSION SCORE
     #
@@ -193,6 +195,9 @@ if is_labeled_data:
         print("MEAN ABSOLUTE ERROR: %.2f" % mean_absolute_error_result)
         print("R2 SCORE: %.2f" % r2_score_result)
         print("***************************************************************")
+        resultMap.put("MEAN_SQUARED_ERROR", "%.2f"%mean_squared_error_result)
+        resultMap.put("MEAN_ABSOLUTE_ERROR", "%.2f"%mean_absolute_error_result)
+        resultMap.put("R2_SCORE", "%.2f"%r2_score_result)
     # -------------------------------------------------------------
     # CLUSTERING SCORE
     #
@@ -209,6 +214,11 @@ if is_labeled_data:
         print("MUTUAL INFORMATION: %.2f" % mutual_info_score_result)
         print("V-MEASURE CLUSTER MEASURE: %.2f" % v_measure_score_result)
         print("***************************************************************")
+        resultMap.put("ADJUSTED_MUTUAL_INFORMATION", "%.2f"%adjusted_mutual_info_score_result)
+        resultMap.put("COMPLETENESS_SCORE", "%.2f"%completeness_score_result)
+        resultMap.put("HOMOGENEITY_METRIC", "%.2f"%homogeneity_score_result)
+        resultMap.put("MUTUAL_INFORMATION", "%.2f"%mutual_info_score_result)
+        resultMap.put("V-MEASURE_CLUSTER_MEASURE", "%.2f"%v_measure_score_result)
 else:
     if NVIDIA_RAPIDS_ENABLED:
         for colname in dataframe:
