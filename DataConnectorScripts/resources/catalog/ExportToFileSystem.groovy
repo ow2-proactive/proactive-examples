@@ -10,6 +10,7 @@ import javax.net.ssl.KeyManager
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+import javax.ws.rs.core.UriBuilder
 import org.apache.commons.io.IOUtils
 import java.util.regex.Pattern
 import org.apache.commons.vfs2.*
@@ -154,7 +155,7 @@ def createKeyStore(String certificate, String clientPrivateKey) throws IOExcepti
 void exportFiles() {
     try {
         optsLocal = new FileSystemOptions()
-        startRemoteUrl = createFileUri(host, port, username).resolve(remoteDir).toString()
+        startRemoteUrl =  UriBuilder.fromUri(createFileUri(host, port, username)).path(remoteDir).build().toString()
         println "startRemoteUrl: " + startRemoteUrl
         // Set remoteSrc for cleanup in release()
         remoteSrc = fsManager.resolveFile(startRemoteUrl, optsRemote);
