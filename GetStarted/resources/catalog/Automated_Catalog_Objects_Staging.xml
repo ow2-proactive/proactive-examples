@@ -11,6 +11,7 @@
     <variable name="TARGET_PASSWORD" value="${TARGET_USER}" model="PA:CREDENTIAL" description="User password needed to access ProActive target environment. This password must be added to the third-party credentials vault (the user login is the key and the password is the credential)." group="Target Parameters" advanced="true" hidden="false"/>
     <variable name="COMMIT_MESSAGE" value="new version 1"  description="When promoting an object in the Catalog, users can add a specific commit message. We recommend to always specify commit messages at any commit for an easier differentiation between stored versions." group="Target Parameters" advanced="false" hidden="false"/>
     <variable name="PROMOTION_TAG" value="test-staging" model="PA:NOT_EMPTY_STRING" description="The tag of catalog objects that allows to determine those objects to be staged from the source to the target ProActive environment." group="Source Parameters" advanced="false" hidden="false"/>
+    <variable name="PROMOTION_TAG_REMOVAL" value="True" model="PA:BOOLEAN" description="If true, the provided promotion tag will be removed from the catalog objects in both source and target environments" group="Source Parameters" advanced="false" hidden="false"/>
     <variable name="CALLED_SINGLE_CATALOG_OBJECT_STAGING_PATH" value="basic-examples/Single_Catalog_Object_Staging" model="PA:CATALOG_OBJECT" description="single Workflow Staging to submit from the ProActive Catalog" group="Source Parameters" advanced="false" hidden="true"/>
   </variables>
   <description>
@@ -593,7 +594,7 @@ import java.util.ArrayList;
 def promotionTag = variables.get("PROMOTION_TAG").toLowerCase()
 def jsonSlurper = new JsonSlurperClassic()
 def catalog_object_list = jsonSlurper.parseText(result.toString()) as ArrayList
-def catalog_object_names = catalog_object_list.findAll { it.tags?.trim() && it.tags.toLowerCase().contains(promotionTag)}.collect { it.bucket_name + "/" + it.name }
+def catalog_object_names = catalog_object_list.findAll { it.tags?.trim() && it.tags.toLowerCase().contains(promotionTag)}.collect { it.bucket_name + "/" + it.name + "#" + it.tags }
 result = catalog_object_names
 ]]>
           </code>
@@ -624,14 +625,36 @@ result = catalog_object_names
         <script>
           <code language="groovy">
             <![CDATA[
+import java.net.URLEncoder
+
 List promoted_catalog_objects = []
 for (item in results) {
     promoted_catalog_objects.addAll(item.value() as ArrayList)
 }
 println "Number of catalog objects to be staged: " + promoted_catalog_objects.size()
-println "List of catalog objects to be staged: " + promoted_catalog_objects
+println "List of catalog objects to be staged: " + promoted_catalog_objects.collect{ it.split('#')[0]}
 
 variables.put("PROMOTED_CATALOG_OBJECTS", promoted_catalog_objects)
+
+promotionTagRemoval = variables.get("PROMOTION_TAG_REMOVAL") as boolean
+if(promotionTagRemoval) {
+    println ("PROMOTION_TAG_REMOVAL = TRUE")
+    println ("---> Promotion Tag to be removed from Catalog objects in both source and target environments")
+	sourceSessionid = variables.get("SOURCE_SESSIONID")
+	sourceBaseUrl = variables.get("SOURCE_ENVIRONMENT")
+	promotionTag = variables.get("PROMOTION_TAG")
+	regex = promotionTag + ",*"
+	promoted_catalog_objects.each{ catalogObject ->
+    	bucketName = catalogObject.split('#')[0].split('/')[0]
+    	name = catalogObject.split('#')[0].split('/')[1]
+    	tags = catalogObject.split('#')[1]
+    	tags = URLEncoder.encode(tags.replaceAll(regex,"").replaceAll(",\$", ""), "UTF-8")
+    	path = "/catalog/buckets/" + bucketName + "/resources/"  + name
+    	removePromotionTagCmd = ["curl", "-X", "PUT", sourceBaseUrl + path + "?tags=" + tags, "-H", "sessionID:" + sourceSessionid]
+    	removePromotionTagCmd.execute().waitForProcessOutput(System.out, System.err)
+	}
+}
+
 ]]>
           </code>
         </script>
@@ -693,7 +716,7 @@ targetEnvironment = variables.get("TARGET_ENVIRONMENT")
 targetUser = variables.get("TARGET_USER")
 targetPassword = variables.get("TARGET_PASSWORD")
 commitMessage = variables.get("COMMIT_MESSAGE")
-sourceObjectPath = variables.get("PROMOTED_CATALOG_OBJECTS")[variables.get("PA_TASK_REPLICATION") as int]
+sourceObjectPath = variables.get("PROMOTED_CATALOG_OBJECTS")[variables.get("PA_TASK_REPLICATION") as int].split('#')[0]
 def jobid
 def jobStatus
 def promotionStatus = [:]

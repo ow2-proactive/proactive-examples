@@ -97,15 +97,20 @@ try {
 interceptor.stop()
 
 outputType = variables.get("OUTPUT_TYPE")
+outputFile = variables.get("OUTPUT_FILE")
+if(!outputFile){
+    outputFile = "query-result.csv"
+}
 if (outputType == "HTML"){
     result = getHtmlPreview(rs).toString().getBytes()
     resultMetadata.put("file.extension", ".html")
     resultMetadata.put("file.name", "output.html")
     resultMetadata.put("content.type", "text/html")
 } else {
-    result = getCsvPreview(rs)
+    csvFile = new File(outputFile) << getCsvPreview(rs).toString()
+    result = csvFile.getBytes()
     resultMetadata.put("file.extension", ".csv")
-    resultMetadata.put("file.name", "result.csv")
+    resultMetadata.put("file.name", outputFile)
     resultMetadata.put("content.type", "text/csv")
 }
 
@@ -121,8 +126,8 @@ if(storeResultVariable){
 }
 
 /**
-* This method initializes the default data base properties (port, connection protocol and drivers, etc)
-*/
+ * This method initializes the default data base properties (port, connection protocol and drivers, etc)
+ */
 def init(String protocol, String port, String dataSourceClassName){
     RDBMS_PROTOCOL = protocol
     RDBMS_DEFAULT_PORT = port
@@ -130,8 +135,8 @@ def init(String protocol, String port, String dataSourceClassName){
 }
 
 /**
-* This methods allows to download the results from the Scheduler Portal in a CSV format.
-*/
+ * This methods allows to download the results from the Scheduler Portal in a CSV format.
+ */
 def getCsvPreview(ResultSet rs) throws IOException, SQLException {
 
     ResultSetMetaData rsmd = rs.getMetaData()
@@ -159,8 +164,8 @@ def getCsvPreview(ResultSet rs) throws IOException, SQLException {
 }
 
 /**
-* This methods allows to preview the results in the Scheduler Portal in a HTML format.
-*/
+ * This methods allows to preview the results in the Scheduler Portal in a HTML format.
+ */
 def getHtmlPreview(ResultSet rs) throws IOException, SQLException {
 
     ResultSetMetaData md = rs.getMetaData()
