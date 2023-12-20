@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <job
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Automated_Catalog_Objects_Staging" projectName="4. Tools" tags="CI-CD,Workflow Staging" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
+  xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="Automated_Catalog_Objects_Staging" projectName="CI-CD Tools" tags="CI-CD,Workflow Staging,Automation" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="1"  >
   <variables>
     <variable name="SOURCE_ENVIRONMENT" value="https://proactive-source-env" model="PA:URL" description="The URL of the source ProActive server" group="Source Parameters" advanced="false" hidden="false"/>
     <variable name="SOURCE_USER" value="my_user" model="PA:NOT_EMPTY_STRING" description="User login needed to access ProActive source environment" group="Source Parameters" advanced="true" hidden="false"/>
@@ -12,16 +12,16 @@
     <variable name="COMMIT_MESSAGE" value="new version 1"  description="When promoting an object in the Catalog, users can add a specific commit message. We recommend to always specify commit messages at any commit for an easier differentiation between stored versions." group="Target Parameters" advanced="false" hidden="false"/>
     <variable name="PROMOTION_TAG" value="test-staging" model="PA:NOT_EMPTY_STRING" description="The tag of catalog objects that allows to determine those objects to be staged from the source to the target ProActive environment." group="Source Parameters" advanced="false" hidden="false"/>
     <variable name="PROMOTION_TAG_REMOVAL" value="True" model="PA:BOOLEAN" description="If true, the provided promotion tag will be removed from the catalog objects in both source and target environments" group="Source Parameters" advanced="false" hidden="false"/>
-    <variable name="CALLED_SINGLE_CATALOG_OBJECT_STAGING_PATH" value="basic-examples/Single_Catalog_Object_Staging" model="PA:CATALOG_OBJECT" description="single Workflow Staging to submit from the ProActive Catalog" group="Source Parameters" advanced="false" hidden="true"/>
+    <variable name="CALLED_SINGLE_CATALOG_OBJECT_STAGING_PATH" value="it-ci-cd/Single_Catalog_Object_Staging" model="PA:CATALOG_OBJECT" description="single Workflow Staging to submit from the ProActive Catalog" group="Source Parameters" advanced="false" hidden="true"/>
   </variables>
   <description>
-    <![CDATA[ A workflow that automates the staging of catalog objects from a source to a target ProActive environment.
-The goal of this workflow is to: (i) browse the catalog of objects in the source environment, (ii) detect all objects having a specific tag and (iii) create a copy of these objects in the catalog of the target environment. This workflow calls a basic workflow to handle the copy of each tagged object in the source catalog. ]]>
+    <![CDATA[A workflow that automates the staging of catalog objects from a source to a target ProActive environment. The goal of this workflow is to: (i) browse the catalog of objects in the source environment, (ii) detect all objects having a specific tag (called promotion tag) and (iii) create a copy of these objects in the catalog of the target environment. The workflow provides the possibility to remove the promotion tag from the catalog objects in both source and target environments.
+    This workflow calls a basic workflow to handle the copy of each tagged object in the source catalog. ]]>
   </description>
   <genericInformation>
     <info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/automated_catalog_objects_staging.png"/>
     <info name="group" value="public-objects"/>
-    <info name="bucketName" value="basic-examples"/>
+    <info name="bucketName" value="it-ci-cd"/>
   </genericInformation>
   <taskFlow>
     <task name="Authenticate_Source_Environment"
@@ -717,6 +717,7 @@ targetUser = variables.get("TARGET_USER")
 targetPassword = variables.get("TARGET_PASSWORD")
 commitMessage = variables.get("COMMIT_MESSAGE")
 sourceObjectPath = variables.get("PROMOTED_CATALOG_OBJECTS")[variables.get("PA_TASK_REPLICATION") as int].split('#')[0]
+sourceObjectPathWithTags = variables.get("PROMOTED_CATALOG_OBJECTS")[variables.get("PA_TASK_REPLICATION") as int]
 def jobid
 def jobStatus
 def promotionStatus = [:]
@@ -751,10 +752,10 @@ if( jobid == null ){
 isFinished = schedulerapi.isJobFinished(jobid)
 jobInfo = schedulerapi.getJobInfo(jobid as String)
 jobStatus = jobInfo.getStatus()
-promotionStatus[sourceObjectPath] = "Promotion Successful"
+promotionStatus[sourceObjectPathWithTags] = "Promotion Successful"
 isJobFaulty = jobStatus.toString().toUpperCase().equals("FAILED") || jobStatus.toString().toUpperCase().equals("CANCELED") || jobStatus.toString().toUpperCase().equals("KILLED") || (jobStatus.toString().toUpperCase().equals("FINISHED") && jobInfo.getNumberOfFaultyTasks() > 0)
 if(isJobFaulty){
-    promotionStatus[sourceObjectPath] = "Promotion Failed"
+    promotionStatus[sourceObjectPathWithTags] = "Promotion Failed"
 }
 
 variables.put("isFinished", isFinished)
@@ -812,18 +813,40 @@ if(!variables.get("isFinished")){
         <script>
           <code language="groovy">
             <![CDATA[
+import java.net.URLEncoder
+
 List successful_catalog_objects_staging = []
-List failed_catalog_objects_statging = []
+List failed_catalog_objects_staging = []
+List failed_catalog_objects_tags = []
 for (item in results) {
      Map.Entry<String,String> entry = (item.value() as Map).entrySet().iterator().next()
     if(entry.getValue() == "Promotion Successful"){
-        successful_catalog_objects_staging.add(entry.getKey())
+        successful_catalog_objects_staging.add(entry.getKey().split('#')[0])
     } else {
-        failed_catalog_objects_statging.add(entry.getKey())
+        failed_catalog_objects_staging.add(entry.getKey().split('#')[0])
+        failed_catalog_objects_tags.add(entry.getKey().split('#')[1])
     }
 }
+
+promotionTagRemoval = variables.get("PROMOTION_TAG_REMOVAL") as boolean
+if (promotionTagRemoval && failed_catalog_objects_staging.size() > 0) {
+	sourceSessionid = variables.get("SOURCE_SESSIONID")
+	sourceBaseUrl = variables.get("SOURCE_ENVIRONMENT")
+	promotionTag = variables.get("PROMOTION_TAG")
+	failed_catalog_objects_staging.eachWithIndex{ catalogObject,i ->
+    	bucketName = catalogObject.split('/')[0]
+    	name = catalogObject.split('/')[1]
+    	tags = URLEncoder.encode(failed_catalog_objects_tags[i], "UTF-8")
+    	path = "/catalog/buckets/" + bucketName + "/resources/"  + name
+    	removePromotionTagCmd = ["curl", "-X", "PUT", sourceBaseUrl + path + "?tags=" + tags, "-H", "sessionID:" + sourceSessionid]
+    	removePromotionTagCmd.execute().waitForProcessOutput(System.out, System.err)
+	}
+}
+
+resultMap.put("Successful staging operations", successful_catalog_objects_staging)
+resultMap.put("Failed staging operations", failed_catalog_objects_staging)
 println "Successful catalog objects staging: " + successful_catalog_objects_staging
-println "Failed catalog objects statging: " + failed_catalog_objects_statging
+println "Failed catalog objects staging: " + failed_catalog_objects_staging
 ]]>
           </code>
         </script>
