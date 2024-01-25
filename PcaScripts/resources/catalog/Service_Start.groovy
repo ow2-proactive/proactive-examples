@@ -165,7 +165,6 @@ if (!instance_exists){
 
         // Acquire service endpoint
         serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
-        def instanceId = serviceInstanceData.getInstanceId()
         endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
 
         // Acquire service job id
@@ -174,12 +173,12 @@ if (!instance_exists){
         println("SERVICE_JOB_ID: " + serviceJobId)
 
         if (publishService) {
-            schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, enableServiceActions)
+            schedulerapi.registerService(variables.get("PA_JOB_ID"), serviceInstanceId as int, enableServiceActions)
         }
 
-        println("INSTANCE_ID: " + instanceId)
+        println("INSTANCE_ID: " + serviceInstanceId)
         println("ENDPOINT: " + endpoint)
-        variables.put("INSTANCE_ID_" + instanceName, instanceId)
+        variables.put("INSTANCE_ID_" + instanceName, serviceInstanceId)
         variables.put("ENDPOINT_" + instanceName, endpoint)
         result = endpoint
 
