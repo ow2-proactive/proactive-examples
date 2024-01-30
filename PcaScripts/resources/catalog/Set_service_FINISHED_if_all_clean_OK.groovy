@@ -27,9 +27,9 @@ def any_clean_failed = all_clean_status.split("\\|").any{ cmd_err -> cmd_err == 
 def current_status = any_clean_failed ? "ERROR" : action
 
 // Update service instance data : (status, endpoint)
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(session_id, instance_id)
+def service_instance_data = service_instance_rest_api.getServiceInstance(session_id, instance_id)
 service_instance_data.setInstanceStatus(current_status)
-service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, service_instance_data)
+service_instance_rest_api.updateServiceInstance(session_id, instance_id, service_instance_data)
 
 if(action.equals("FINISHED")){
     // Inform other jobs that the service is finished and deleted.

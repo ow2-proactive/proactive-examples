@@ -24,9 +24,9 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBaseP
 // Update service instance data : (status, endpoint)
 def status = new File(instanceName+"_status").text.trim()
 def currentStatus = (!status.equals(ALREADY_REMOVED_MESSAGE) && !status.equals(instanceName)) ? "ERROR" : action
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId)
 serviceInstanceData.setInstanceStatus(currentStatus)
-serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+serviceInstanceRestApi.updateServiceInstance(sessionId, instanceId, serviceInstanceData)
 
 if(action.equals("FINISHED")){
     // Inform other jobs that the service is finished and deleted.

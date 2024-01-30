@@ -26,7 +26,7 @@ def session_id = schedulerapi.getSession()
 def service_instance_rest_api = new ServiceInstanceRestApi(new ApiClient().setBasePath(pca_url))
 
 // Retrieve service variables
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(session_id, service_instance_id)
+def service_instance_data = service_instance_rest_api.getServiceInstance(session_id, service_instance_id)
 for  (i = 1; i < args.length; i = i + 2) {
     if (args[i+1].contains("%{")) {
         // var_to_retrieve can contain a reference to another variable in the target service

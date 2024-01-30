@@ -24,12 +24,12 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
 
 // Update service instance model (add Deployment, Groups)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId)
 
 // If service instance is NOT RUNNING then it should be in ERROR
 def currentStatus = serviceInstanceData.getInstanceStatus()
 if (!currentStatus.equals("RUNNING")) {
     serviceInstanceData.setInstanceStatus("ERROR")
-    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+    serviceInstanceData = serviceInstanceRestApi.updateServiceInstance(sessionId, instanceId, serviceInstanceData)
     println(serviceInstanceData)
 }
