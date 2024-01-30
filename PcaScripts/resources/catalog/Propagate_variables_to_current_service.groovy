@@ -19,7 +19,7 @@ def session_id = schedulerapi.getSession()
 def service_instance_rest_api = new ServiceInstanceRestApi(new ApiClient().setBasePath(pca_url))
 
 // Update the service instance
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(session_id, instance_id)
+def service_instance_data = service_instance_rest_api.getServiceInstance(session_id, instance_id)
 for  (i = 0; i < args.length-1; i = i+2) {
     if ("VARIABLE_VALUE".equals(args[i+1])) {
         service_instance_data.getVariables().put(args[i], variables.containsKey(args[i]) ? variables.get(args[i]) : "" )
@@ -27,4 +27,4 @@ for  (i = 0; i < args.length-1; i = i+2) {
         service_instance_data.getVariables().put(args[i], args[i+1])
     }
 }
-service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, service_instance_data)
+service_instance_rest_api.updateServiceInstance(session_id, instance_id, service_instance_data)

@@ -25,7 +25,7 @@ println("   SERVICE_ID:    " + serviceId)
 println("   INSTANCE_NAME: " + instanceName)
 
 // Check existing service instances
-List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId, null)
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstances(sessionId, null)
 
 for (ServiceInstanceData serviceInstanceData : service_instances) {
     if ( serviceInstanceData.getServiceId() == serviceId ) {

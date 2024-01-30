@@ -66,7 +66,7 @@ if (binding.variables["args"]) {
 if (!Strings.isNullOrEmpty(serviceId)) {
     // Get the service workflow
     // Check that the provided serviceId belongs to the existing Service Activation list
-    List<CloudAutomationWorkflow> listStartingWorkflows = catalogRestApi.getWorkflowsByServiceIdUsingGET(sessionId, serviceId)
+    List<CloudAutomationWorkflow> listStartingWorkflows = catalogRestApi.getWorkflowsByServiceId(sessionId, serviceId)
     if (!listStartingWorkflows) {
         throw new IllegalArgumentException("The provided SERVICE_ID is not valid.")
     }
@@ -90,7 +90,7 @@ if (!Strings.isNullOrEmpty(serviceId)) {
     }
 } else if (serviceActivationWorkflow != null) {
     //Identifying the starting workflow, the service ID and the default variables inside the catalog
-    def cloudAutomationWorkflow = catalogRestApi.getWorkflowByCatalogObjectUsingGET(sessionId, bucketName, startingWorkflowName)
+    def cloudAutomationWorkflow = catalogRestApi.getWorkflowByCatalogObject(sessionId, bucketName, startingWorkflowName)
     if (cloudAutomationWorkflow != null) {
         serviceId = cloudAutomationWorkflow.getGenericInformation().getServiceId()
         serviceVariables = cloudAutomationWorkflow.getVariables().collectEntries {var -> [var.getName(), var.getValue()]}
@@ -105,7 +105,7 @@ println("INSTANCE_NAME: " + instanceName)
 
 // Check existing service instances
 boolean instance_exists = false
-List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstancesUsingGET(sessionId, null)
+List<ServiceInstanceData> service_instances = serviceInstanceRestApi.getServiceInstances(sessionId, null)
 for (ServiceInstanceData serviceInstanceData : service_instances) {
     if ( (serviceInstanceData.getServiceId() == serviceId) && (serviceInstanceData.getInstanceStatus()  == "RUNNING")){
         if (serviceInstanceData.getVariables().get("INSTANCE_NAME") == instanceName) {
@@ -146,7 +146,7 @@ if (!instance_exists){
     serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
 
     // Run service
-    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstanceUsingPOST(sessionId, serviceDescription, variables.get("PA_JOB_ID"))
+    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstance(sessionId, serviceDescription, variables.get("PA_JOB_ID"))
 
     // Acquire service Instance ID
     def serviceInstanceId = serviceInstanceData.getInstanceId()
@@ -164,7 +164,7 @@ if (!instance_exists){
     if (runningState == 1) {
 
         // Acquire service endpoint
-        serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, serviceInstanceId)
+        serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, serviceInstanceId)
         endpoint = serviceInstanceData.getDeployments().iterator().next().getEndpoint().getUrl()
 
         // Acquire service job id

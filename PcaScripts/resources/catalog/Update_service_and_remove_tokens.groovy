@@ -26,7 +26,7 @@ def sessionId = schedulerapi.getSession()
 def service_instance_rest_api = new ServiceInstanceRestApi(new ApiClient().setBasePath(pca_url))
 
 // Get service instance
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(sessionId, instance_id)
+def service_instance_data = service_instance_rest_api.getServiceInstance(sessionId, instance_id)
 
 // Set the service instance status
 if (service_instance_status != "null") {
@@ -34,7 +34,7 @@ if (service_instance_status != "null") {
 }
 
 // Update service instance
-service_instance_data = service_instance_rest_api.updateServiceInstanceUsingPUT(sessionId, instance_id, service_instance_data)
+service_instance_data = service_instance_rest_api.updateServiceInstance(sessionId, instance_id, service_instance_data)
 
 // Remove tokens if the main job is finished
 def submitted_main_job_id = service_instance_data.getJobSubmissions().get(0).getJobId()

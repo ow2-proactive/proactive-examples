@@ -40,7 +40,7 @@ try {
     def ipUtilsRestApi = new IpUtilsRestApi(apiClient)
 
     // Handle service parameters
-    def hostname = ipUtilsRestApi.getMyRemotePublicAddrUsingGET(sessionId)
+    def hostname = ipUtilsRestApi.getMyRemotePublicAddr(sessionId)
     if (hostname.equals("127.0.0.1")) {
         hostname = variables.get("PA_NODE_HOST")
     }
@@ -119,7 +119,7 @@ try {
     }
 
     // Update service instance model (add Deployment, Groups)
-    def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+    def serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId)
     serviceInstanceData.setInstanceStatus("RUNNING")
     if(deployment != null){
         serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
@@ -128,7 +128,7 @@ try {
         serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
         serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
     }
-    serviceInstanceData = serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+    serviceInstanceData = serviceInstanceRestApi.updateServiceInstance(sessionId, instanceId, serviceInstanceData)
     println(serviceInstanceData)
 
     schedulerapi.registerService(variables.get("PA_JOB_ID"), instanceId as int, true)

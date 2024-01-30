@@ -44,9 +44,9 @@ def eventRequest = new EventRequest()
         .message(eventMessage);
 
 try {
-    result = eventRestApi.createEventUsingPOST(sessionId, eventRequest).toString()
+    result = eventRestApi.createEvent(sessionId, eventRequest).toString()
     println(result)
 } catch (ApiException e) {
-    System.err.println("Exception when calling EventRestApi#createEventUsingPOST")
+    System.err.println("Exception when calling EventRestApi#createEvent")
     e.printStackTrace();
 }

@@ -16,7 +16,7 @@ def sessionId = schedulerapi.getSession()
 def serviceInstanceRestApi = new ServiceInstanceRestApi(new ApiClient().setBasePath(pcaUrl))
 
 // If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
-def currentStatus = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId).getInstanceStatus()
+def currentStatus = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId).getInstanceStatus()
 if (currentStatus.equals("FINISHED")){
     variables.put("IS_FINISHED",true)
     if(credentialsKey){
@@ -50,9 +50,9 @@ if (currentStatus.equals("FINISHED")){
         currentStatus = 'ERROR'
         println("[ERROR] An internal error occured in singularity container: " + instanceName)
         // Update docker container is not running
-        def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+        def serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId)
         serviceInstanceData.setInstanceStatus(currentStatus)
-        serviceInstanceRestApi.updateServiceInstanceUsingPUT(sessionId, instanceId, serviceInstanceData)
+        serviceInstanceRestApi.updateServiceInstance(sessionId, instanceId, serviceInstanceData)
         // Tell the CRON loop to stop
         variables.put("IS_FINISHED",true)
         // Exit with error

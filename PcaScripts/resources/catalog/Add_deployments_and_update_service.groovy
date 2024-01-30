@@ -29,7 +29,7 @@ def session_id = schedulerapi.getSession()
 def service_instance_rest_api = new ServiceInstanceRestApi(new ApiClient().setBasePath(pca_url))
 
 // Get the service instance data (SERVICE INSTANCE REST API)
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(session_id, instance_id)
+def service_instance_data = service_instance_rest_api.getServiceInstance(session_id, instance_id)
 
 
 // Iterate over deployments
@@ -91,7 +91,7 @@ if (nb_deployments > 0) {
     service_instance_data.setInstanceStatus("RUNNING")
 
     // Update service instance (SERVICE INSTANCE REST API)
-    service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, service_instance_data)
+    service_instance_rest_api.updateServiceInstance(session_id, instance_id, service_instance_data)
 
     // Register the service (SCHEDULER API)
     schedulerapi.registerService(pa_job_id, instance_id as int, true)
@@ -108,7 +108,7 @@ if (nb_deployments > 0) {
     service_instance_data.setInstanceStatus("ERROR")
 
     // Update service instance (SERVICE INSTANCE REST API)
-    service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, service_instance_data)
+    service_instance_rest_api.updateServiceInstance(session_id, instance_id, service_instance_data)
 
     // Ensure the service is not registered (SCHEDULER API)
     schedulerapi.registerService(pa_job_id, instance_id as int, false)
