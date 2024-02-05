@@ -427,10 +427,10 @@ println('END if')
       </controlFlow>
       <metadata>
         <positionTop>
-            218.375
+            70.59375
         </positionTop>
         <positionLeft>
-            588.4921875
+            482.84375
         </positionLeft>
       </metadata>
     </task>
@@ -454,10 +454,10 @@ println("END: Drift Detected")
       <controlFlow block="start"/>
       <metadata>
         <positionTop>
-            346.3828125
+            199
         </positionTop>
         <positionLeft>
-            442.9921875
+            335.9375
         </positionLeft>
       </metadata>
     </task>
@@ -476,10 +476,10 @@ println("Else")
       </scriptExecutable>
       <metadata>
         <positionTop>
-            346.3828125
+            199
         </positionTop>
         <positionLeft>
-            588.4921875
+            482.84375
         </positionLeft>
       </metadata>
     </task>
@@ -498,10 +498,10 @@ println("Continuation")
       </scriptExecutable>
       <metadata>
         <positionTop>
-            346.3828125
+            199
         </positionTop>
         <positionLeft>
-            725.4921875
+            621.25
         </positionLeft>
       </metadata>
     </task>
@@ -524,10 +524,10 @@ println("End")
       <controlFlow block="end"/>
       <metadata>
         <positionTop>
-            600.3828125
+            453.796875
         </positionTop>
         <positionLeft>
-            442.9921875
+            335.9375
         </positionLeft>
       </metadata>
     </task>
@@ -553,35 +553,47 @@ println("End")
             <![CDATA[
 import org.ow2.proactive.notification.client.ApiClient
 import org.ow2.proactive.notification.client.api.EventRestApi
+import org.ow2.proactive.notification.client.api.SubscriptionRestApi
+import org.ow2.proactive.notification.client.api.ChannelRestApi
 import org.ow2.proactive.notification.client.model.EventRequest
-import org.ow2.proactive.notification.client.model.Event
+import org.ow2.proactive.notification.client.model.ChannelSubscriptionUpdate
+import org.ow2.proactive.notification.client.model.ChannelSubscriptionUpdate.SubscriptionTypeEnum
+import org.ow2.proactive.notification.client.model.ChannelRequest
+import org.ow2.proactive.notification.client.model.ChannelSubscription
+import org.ow2.proactive.notification.client.model.Subscription
+import org.ow2.proactive.notification.client.model.NotificationMethod.TypeEnum
 import org.ow2.proactive.notification.client.ApiException
+
 import groovy.json.JsonBuilder
 import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
 import java.net.URL
 
-// Get notification-service URL
-def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
-def notifUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/notification-service")
-// Instantiate Notification RestApi instance
-def apiClient = new ApiClient()
-apiClient.setBasePath(notifUrl)
-def eventRestApi = new EventRestApi(apiClient)
-
-// Get Job variables
-def jobId = new Long(genericInformation.get("PARENT_JOB_ID"))
+def jobId = genericInformation.get("PARENT_JOB_ID") != null ? new Long(genericInformation.get("PARENT_JOB_ID")) : new Long(variables.get("PA_JOB_ID"))
 def eventMessage = variables.get("MESSAGE")
 def eventSeverity = variables.get("SEVERITY")
 def channelsToNotify = variables.get("CHANNELS")
 
-// Set notification message
-eventMessage = (eventMessage == null || eventMessage.isEmpty()) ? "You have a notification.": eventMessage;
-// Set channels to notify
+// Set channels to notify or exit immediately if none provided
 channelsToNotify = (channelsToNotify != null && !channelsToNotify.equals('all')) ? Arrays.asList(channelsToNotify.split(',')): null;
 if (channelsToNotify == null || channelsToNotify.isEmpty()) {
     println("No channel to be notified!")
     return
 }
+
+// Get notification-service URL
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def notifUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/notification-service")
+
+// Instantiate Notification REST clients
+def apiClient = new ApiClient()
+apiClient.setBasePath(notifUrl)
+def eventRestApi = new EventRestApi(apiClient)
+def subscriptionRestApi = new SubscriptionRestApi(apiClient)
+def channelRestApi = new ChannelRestApi(apiClient)
+
+// Set notification message
+eventMessage = (eventMessage == null || eventMessage.isEmpty()) ? "You have a notification.": eventMessage;
 
 // Set notification severity
 eventSeverity = (eventSeverity == null || eventSeverity.isEmpty()) ? EventRequest.EventSeverityEnum.INFO: EventRequest.EventSeverityEnum.valueOf(eventSeverity);
@@ -597,48 +609,41 @@ def url = new URL(ciUrl)
 def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
 
 // Function to create a channel
-def createChannel(String sessionId, String proactiveUrl, String name, List userGroups) {
-    // URL of the notification service for channel creation
-    def url = new URL("$proactiveUrl/notification-service/channel")
-    
-    // Open a connection to the URL
-    def connection = url.openConnection()
-    
-    // Set the request method to POST and set the necessary headers
-    connection.requestMethod = 'POST'
-    connection.setRequestProperty('Accept', '*/*')
-    connection.setRequestProperty('sessionid', sessionId)
-    connection.setRequestProperty('Content-Type', 'application/json')
-    connection.doOutput = true
-    
-    // Create the JSON payload
-    def payload = new JsonBuilder([
-        name: name,
-        userGroups: userGroups
-    ]).toString()
-    
-    // Write the JSON payload to the request body
-    connection.outputStream.withWriter('UTF-8') { writer ->
-        writer.write(payload)
-    }
-    
-    // Check the response code to determine if the request was successful
-    if (connection.responseCode == HttpURLConnection.HTTP_OK || connection.responseCode == HttpURLConnection.HTTP_CREATED) {
-        // Read the response from the input stream
-        def response = connection.inputStream.text.trim()
-        // println("Channel created successfully. Response: $response")
-        return response
-    } else {
-        // Handle the error response
-        // println("Failed to create channel. Response Code: ${connection.responseCode}")
-        return null
+def createChannel(channelRestApi, String sessionId, String name, List userGroups) {
+    println("About to create channel "+ name)
+    def channelRequest = new ChannelRequest()
+    	.name(name)
+    	.userGroups(userGroups);
+    try {
+    	def result = channelRestApi.createChannelUsingPOST(channelRequest, sessionId)
+    	println("Channel "+ name + " created")
+        return result;
+    } catch (ApiException e) {
+        println("Error " + e.getCode() + " when creating channel "+ name)
+        println e.getResponseBody();
+        return;
     }
 }
 
 // Function to fetch available channels
-def fetchAvailableChannels(String sessionId, String proactiveUrl) {
+def fetchAvailableChannels(channelRestApi, String sessionId) {
+    println("About to retrieve available channels")
+    try {
+    	def result = channelRestApi.getUserAvailableChannelsUsingGET(sessionId)
+    	println("Available channels successfully retrieved");
+        return result;
+    } catch (ApiException e) {
+        println("Error " + e.getCode() + " when retrieving available channels")
+        println e.getResponseBody();
+        return;
+    }
+}
+
+// Function to fetch available channels
+// TODO when Notification client is updated, do directly eventRestApi.getUserAvailablehannels();
+def fetchUserAlreadySubscribedChannels(String sessionId, String proactiveUrl) {
     // URL of the notification service
-    def url = new URL("$proactiveUrl/notification-service/channels/available")
+    def url = new URL("$proactiveUrl/notification-service/subscription/channel")
     
     // Open a connection to the URL
     def connection = url.openConnection()
@@ -654,8 +659,9 @@ def fetchAvailableChannels(String sessionId, String proactiveUrl) {
         def response = connection.inputStream.text.trim()
         // println("Response: $response")
         // return response
-        def availableChannels = new JsonSlurper().parseText(response)
-        return availableChannels
+        def channelSubscription = new JsonSlurper().parseText(response)
+        println "Already subscribed channels = "+ channelSubscription.channels
+        return channelSubscription.channels;
     } else {
         // Handle the error response
         println("Failed to fetch channels. Response Code: ${connection.responseCode}")
@@ -664,26 +670,63 @@ def fetchAvailableChannels(String sessionId, String proactiveUrl) {
 }
 
 // Get available channels (JSON)
-def availableChannels = fetchAvailableChannels(sessionId, proactiveUrl)
+def availableChannels = fetchAvailableChannels(channelRestApi, sessionId)
 println "availableChannels: $availableChannels"
-// availableChannels: [[id:7, name:mlops_channel_1, userGroups:[allGroupsAuthorizedForChannel]], [id:8, name:mlops_channel_2, userGroups:[allGroupsAuthorizedForChannel]], [id:9, name:mlops_channel_3, userGroups:[allGroupsAuthorizedForChannel]], [id:10, name:test, userGroups:[allGroupsAuthorizedForChannel]], [id:11, name:mlops_test_1, userGroups:[server-admins]], [id:12, name:mlops_test_2, userGroups:[server-admins]]]
 
 // Check if the channel(s) exist(s), if not, create it
+def channelsToSubscribe = new ArrayList();
+
 for (channelToNotify in channelsToNotify) {
-    boolean channelExists = availableChannels?.find { it.name == channelToNotify }
-    if (!channelExists) {
+     def channelExists = availableChannels.find { it.name == channelToNotify }
+     println("Found channel: $channelExists")
+    if (channelExists == null) {
         println "Channel does not exist: $channelToNotify"
-        // Create the channel if it does not exist
-        def response = createChannel(sessionId, proactiveUrl, channelToNotify, ["allGroupsAuthorizedForChannel"])
-        if (response == null) {
-            println("Failed to create channel: $channelToNotify")
-        } else {
-            println("Channel $channelToNotify created successfully. Response: $response")
-        }
+        def newChannel = createChannel(channelRestApi, sessionId, channelToNotify, ["allGroupsAuthorizedForChannel"]);
+        channelsToSubscribe.add(newChannel)
+    } else {
+        channelsToSubscribe.add(channelExists)
     }
 }
 
+// This should always be true (checked at the start of script) , but lets keep it.
+if (!channelsToSubscribe.isEmpty()) {
+    println "Subscribing to channels "+ channelsToSubscribe;
+
+    // Retrieve user's Channel Subscription
+    Subscription userChannelSubscription = subscriptionRestApi.getChannelSubscriptionUsingGET(sessionId);
+
+    // Compute the new List of subscribed channels (previous subscribed channels + new channels)
+    def newSubscribedChannels = new ArrayList();
+    newSubscribedChannels.addAll(fetchUserAlreadySubscribedChannels(sessionId, proactiveUrl));
+    newSubscribedChannels.addAll(channelsToSubscribe);
+    
+    // Create the update object that used to query the notif service
+    def channelSubscriptionUpdate = new ChannelSubscriptionUpdate()
+        .id(userChannelSubscription.id)
+        .active(true) // Activate the subscription 
+        .cleanPeriod(userChannelSubscription.cleanPeriod)
+    
+    // Activate the portal notification
+    def portalNotification = userChannelSubscription.notificationMethods.find { it.getType() == TypeEnum.PORTAL }
+	portalNotification.active = true
+    
+    channelSubscriptionUpdate.notificationMethods(userChannelSubscription.notificationMethods)
+        .subscriptionType(SubscriptionTypeEnum.CHANNEL)
+        .channels(newSubscribedChannels)
+        .followedEvents(userChannelSubscription.followedEvents);
+                          
+    println "Update Channel Subscription"
+    try {
+        subscriptionRestApi.updateChannelSubscriptionUsingPUT(sessionId, channelSubscriptionUpdate);
+    } catch (ApiException e) {
+        println ("Error " + e.getCode() + " when update User's Channel Subscription. Please do it manually.")
+        println ("You just need to add the channels to the subscription, activate the portal notification method and activate the subscription")
+        println e.getResponseBody();
+    }        
+}
+
 // Create event
+println "Creating event that notifies channels "+ channelsToNotify
 def eventRequest = new EventRequest()
         .bucketName(genericInformation.get("bucketName"))
         .workflowName(variables.get("PA_JOB_NAME"))
@@ -706,10 +749,10 @@ try {
       </scriptExecutable>
       <metadata>
         <positionTop>
-            463.5
+            327.390625
         </positionTop>
         <positionLeft>
-            429.921875
+            335.9375
         </positionLeft>
       </metadata>
     </task>
@@ -723,13 +766,13 @@ try {
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2476px;
-            height:3424px;
+            width:2364px;
+            height:4884px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-213.375px;left:-424.921875px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1955" style="top: 218.383px; left: 588.492px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Perform_Drift_Detection</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1958" style="top: 346.39px; left: 442.992px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">If_Drift_Detected</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1961" style="top: 346.39px; left: 588.492px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1964" style="top: 346.39px; left: 725.492px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1967" style="top: 600.39px; left: 442.992px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">End</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_ active-task" id="jsPlumb_1_1970" style="top: 463.508px; left: 429.922px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that sends a notification with a custom message and severity to one or more notification channels"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_notification.png" width="20px">&nbsp;<span class="name">Channel_Notification</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:432.5px;top:257.5px" width="166" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 0 88 C -10 38 155 50 145 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.01598125,60.59109050000001 L40.15557354763794,59.135880037679655 L31.881182181027235,55.069622850516225 L34.63410589815416,46.27067910665242 L19.01598125,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.01598125,60.59109050000001 L40.15557354763794,59.135880037679655 L31.881182181027235,55.069622850516225 L34.63410589815416,46.27067910665242 L19.01598125,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1978" style="position: absolute; transform: translate(-50%, -50%); left: 515px; top: 301.5px;">if</div><svg style="position:absolute;left:572.9817132113825px;top:257.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1982" style="position: absolute; transform: translate(-50%, -50%); left: 580px; top: 301.5px;">else</div><svg style="position:absolute;left:577.5px;top:257.5px" width="158" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 137 88 C 147 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M119.18932075000001,60.59109050000001 L103.86471661471113,45.957003302751005 L106.43869780298155,54.80994749338217 L98.08357360809329,58.70762624976946 L119.18932075000001,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M119.18932075000001,60.59109050000001 L103.86471661471113,45.957003302751005 L106.43869780298155,54.80994749338217 L98.08357360809329,58.70762624976946 L119.18932075000001,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1986" style="position: absolute; transform: translate(-50%, -50%); left: 656px; top: 301.5px;">continuation</div><svg style="position:absolute;left:482.5px;top:503.5px" width="24.5" height="97" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 96 C -10 46 13.5 50 3.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.5346063750000005,73.1106345 L5.917748284439431,53.67979044445129 L-1.5046807910372668,59.14856970672895 L-8.04431650883162,52.649864860488556 L-2.5346063750000005,73.1106345" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.5346063750000005,73.1106345 L5.917748284439431,53.67979044445129 L-1.5046807910372668,59.14856970672895 L-8.04431650883162,52.649864860488556 L-2.5346063750000005,73.1106345" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:486px;top:385.5px" width="25" height="79" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 78 C -10 28 14 50 4 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4673279999999997,58.93977600000001 L6.068757650514381,39.54556960306068 L-1.3771904604811314,44.98228338331087 L-7.888734966174757,38.455432063541814 L-2.4673279999999997,58.93977600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.4673279999999997,58.93977600000001 L6.068757650514381,39.54556960306068 L-1.3771904604811314,44.98228338331087 L-7.888734966174757,38.455432063541814 L-2.4673279999999997,58.93977600000001" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 652px; top: 248px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 578px; top: 248px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 490.5px; top: 376px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 433px; top: 336px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 628px; top: 376px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 578px; top: 336px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 765px; top: 376px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 715px; top: 336px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 483px; top: 630px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 483px; top: 590px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 486.5px; top: 494px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 486.5px; top: 454px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-65.59375px;left:-330.9375px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_39" style="top: 70.6px; left: 482.85px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Perform_Drift_Detection</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_42" style="top: 199px; left: 335.95px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">If_Drift_Detected</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_45" style="top: 199px; left: 482.85px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_48" style="top: 199px; left: 621.25px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_51" style="top: 453.8px; left: 335.95px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">End</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_54" style="top: 327.4px; left: 335.95px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that sends a notification with a custom message and severity to one or more notification channels"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_notification.png" width="20px">&nbsp;<span class="name">Channel_Notification</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:325.5px;top:110.5px" width="168" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 157 50 147 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.317306749999997,60.59109050000001 L40.46362217334927,59.23708015431549 L32.20878849757397,55.13126464636996 L35.00379631971922,46.345598406741516 L19.317306749999997,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.317306749999997,60.59109050000001 L40.46362217334927,59.23708015431549 L32.20878849757397,55.13126464636996 L35.00379631971922,46.345598406741516 L19.317306749999997,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_62" style="position: absolute; transform: translate(-50%, -50%); left: 409px; top: 154.5px;">if</div><svg style="position:absolute;left:467.98171321138256px;top:110.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_66" style="position: absolute; transform: translate(-50%, -50%); left: 475px; top: 154.5px;">else</div><svg style="position:absolute;left:472.5px;top:110.5px" width="159" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 138 88 C 148 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_70" style="position: absolute; transform: translate(-50%, -50%); left: 551.5px; top: 154.5px;">continuation</div><svg style="position:absolute;left:375.5px;top:366.5px" width="37.5" height="88" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 87 C -10 37 26.5 50 16.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4225760000000007,65.388768 L10.255522775434093,47.70764787170483 L2.000849132624986,51.81378511377463 L-3.3194601107912747,44.284222739079844 L-1.4225760000000007,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4225760000000007,65.388768 L10.255522775434093,47.70764787170483 L2.000849132624986,51.81378511377463 L-3.3194601107912747,44.284222739079844 L-1.4225760000000007,65.388768" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:383px;top:238.5px" width="30" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9 88 C 19 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 547px; top: 101px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 473px; top: 101px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 383.5px; top: 229px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 326px; top: 189px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 523px; top: 229px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 473px; top: 189px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 661px; top: 229px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 611px; top: 189px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 376px; top: 484px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 376px; top: 444px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 392.5px; top: 357px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 392.5px; top: 317px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
