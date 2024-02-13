@@ -1,5 +1,5 @@
 // Check if loop task has ordered to finish the loop
-def isFinished = variables.get('IS_FINISHED') as boolean
+def isFinished = variables.get('IS_FINISHED').toBoolean()
 loop = isFinished ? false : '*/1 * * * *'
 
 // Set a time marker to fetch logs since this marker.
