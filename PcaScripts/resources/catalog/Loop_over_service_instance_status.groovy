@@ -34,7 +34,7 @@ def session_id = schedulerapi.getSession()
 def service_instance_rest_api = new ServiceInstanceRestApi(new ApiClient().setBasePath(pca_url))
 
 // If service instance is FINISHED or PAUSED then stop this loop and job and delete the sync channel
-def service_instance_data = service_instance_rest_api.getServiceInstanceUsingGET(session_id, instance_id)
+def service_instance_data = service_instance_rest_api.getServiceInstance(session_id, instance_id)
 def current_status = service_instance_data.getInstanceStatus()
 
 if (current_status.equals("FINISHED")){
@@ -79,9 +79,9 @@ if (current_status.equals("FINISHED")){
         current_status = 'ERROR'
 
         // Update service instance status
-        def serviceInstanceData = service_instance_rest_api.getServiceInstanceUsingGET(session_id, instance_id)
+        def serviceInstanceData = service_instance_rest_api.getServiceInstance(session_id, instance_id)
         serviceInstanceData.setInstanceStatus(current_status)
-        service_instance_rest_api.updateServiceInstanceUsingPUT(session_id, instance_id, serviceInstanceData)
+        service_instance_rest_api.updateServiceInstance(session_id, instance_id, serviceInstanceData)
 
         // Break the CRON loop
         variables.put("IS_FINISHED",true)

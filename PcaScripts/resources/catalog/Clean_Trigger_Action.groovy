@@ -32,7 +32,7 @@ apiClient.setBasePath(pcaUrl)
 def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 
 // Update service instance model (add Deployment, Groups)
-def serviceInstanceData = serviceInstanceRestApi.getServiceInstanceUsingGET(sessionId, instanceId)
+def serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId)
 
 // Get the main
 def submittedMainJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId()

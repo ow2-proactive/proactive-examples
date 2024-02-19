@@ -7,8 +7,18 @@ if (variables.get("SKIP_WEB_VALIDATION") && variables.get("SKIP_WEB_VALIDATION")
 import org.ow2.proactive.notification.client.ApiClient
 import org.ow2.proactive.notification.client.api.ValidationRestApi
 import org.ow2.proactive.notification.client.model.ValidationRequest
-import org.ow2.proactive.notification.client.model.Validation
 import org.ow2.proactive.notification.client.ApiException
+import com.google.common.collect.Sets
+import org.apache.commons.lang3.StringUtils
+
+Set authorizedUsers = Sets.newHashSet(variables.get("AUTHORIZED_USERS").split("\\s*,\\s*"))
+Set authorizedGroups = Sets.newHashSet(variables.get("AUTHORIZED_GROUPS").split("\\s*,\\s*"))
+boolean isJobSubmitterAuthorized = Boolean.parseBoolean(variables.get("IS_JOB_SUBMITTER_AUTHORIZED"));
+
+// Check that at least one user will see the Validation
+if (!isJobSubmitterAuthorized && (authorizedGroups.isEmpty() || (authorizedGroups.size() == 1 && StringUtils.isBlank(authorizedGroups.toArray()[0]))) && (authorizedUsers.isEmpty() || (authorizedUsers.size() == 1 && StringUtils.isBlank(authorizedUsers.toArray()[0])))) {
+    throw new IllegalArgumentException("At least the Job submitter, a user or a user group must be authorized on the Validation")
+}
 
 //Get notification-service URL
 def notifUrl = variables.get('PA_NOTIFICATION_SERVICE_REST_URL')
@@ -29,6 +39,14 @@ if (validationMessage == null || validationMessage.isEmpty()) {
     validationMessage = "Validation request custom message."
 }
 
+// Get event severity or set default
+def eventSeverity = variables.get("SEVERITY")
+if (eventSeverity == null || eventSeverity.isEmpty()) {
+    eventSeverity = ValidationRequest.EventSeverityEnum.WARNING
+} else {
+    eventSeverity = ValidationRequest.EventSeverityEnum.valueOf(eventSeverity)
+}
+
 //Get session id
 schedulerapi.connect()
 def sessionId = schedulerapi.getSession()
@@ -40,13 +58,17 @@ schedulerapi.pauseJob(variables.get("PA_JOB_ID"))
 def validationRequest = new ValidationRequest()
         .bucketName(genericInformation.get("bucketName"))
         .workflowName(variables.get("PA_JOB_NAME"))
+        .authorizedUsers(authorizedUsers)
+        .authorizedGroups(authorizedGroups)
+        .isCreatedByAuthorizedToAction(isJobSubmitterAuthorized)
         .jobId(jobId)
         .message(validationMessage)
+        .eventSeverity(eventSeverity)
 
 try {
-    Validation result = validationRestApi.createValidationUsingPOST(sessionId, validationRequest)
+    validationRestApi.createValidation(sessionId, validationRequest)
     println("Validation request sent!")
 } catch (ApiException e) {
-    println("[WARNING] Something went wrong while creating the Web Validation")
+    println("[WARNING] Something went wrong while creating the Web Validation. Please manually handle the paused Job")
     e.printStackTrace();
 }
