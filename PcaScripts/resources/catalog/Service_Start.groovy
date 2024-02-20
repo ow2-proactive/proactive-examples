@@ -146,7 +146,7 @@ if (!instance_exists){
     serviceDescription.putVariablesItem("INSTANCE_NAME", instanceName)
 
     // Run service
-    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstance(sessionId, serviceDescription, variables.get("PA_JOB_ID"))
+    def serviceInstanceData = serviceInstanceRestApi.createRunningServiceInstance(sessionId, serviceDescription, Integer.parseInt(variables.get("PA_JOB_ID")))
 
     // Acquire service Instance ID
     def serviceInstanceId = serviceInstanceData.getInstanceId()
