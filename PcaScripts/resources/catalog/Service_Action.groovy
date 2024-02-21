@@ -83,7 +83,7 @@ service.setWorkflowName(action)
 if( !actionVariables.isEmpty() ){
     actionVariables.each{ k, v -> service.putVariablesItem("${k}", "${v}") }
 }
-def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceAction(sessionId, instanceId as int, service, variables.get("PA_JOB_ID"))
+def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceAction(sessionId, instanceId as int, service, Integer.parseInt(variables.get("PA_JOB_ID")))
 
 if (action.toLowerCase().contains("finish")) {
     try {
