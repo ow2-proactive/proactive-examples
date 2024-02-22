@@ -556,12 +556,14 @@ import org.ow2.proactive.notification.client.ApiClient
 import org.ow2.proactive.notification.client.api.EventRestApi
 import org.ow2.proactive.notification.client.api.SubscriptionRestApi
 import org.ow2.proactive.notification.client.api.ChannelRestApi
+import org.ow2.proactive.notification.client.api.UserSubscriptionsRestApi
 import org.ow2.proactive.notification.client.model.EventRequest
 import org.ow2.proactive.notification.client.model.ChannelSubscriptionUpdate
 import org.ow2.proactive.notification.client.model.ChannelSubscriptionUpdate.SubscriptionTypeEnum
 import org.ow2.proactive.notification.client.model.ChannelRequest
 import org.ow2.proactive.notification.client.model.ChannelSubscription
 import org.ow2.proactive.notification.client.model.Subscription
+import org.ow2.proactive.notification.client.model.Subscription.SubscriptionTypeEnum
 import org.ow2.proactive.notification.client.model.PortalNotificationMethod
 import org.ow2.proactive.notification.client.model.PortalNotificationMethod.TypeEnum
 import org.ow2.proactive.notification.client.ApiException
@@ -593,6 +595,7 @@ apiClient.setBasePath(notifUrl)
 def eventRestApi = new EventRestApi(apiClient)
 def subscriptionRestApi = new SubscriptionRestApi(apiClient)
 def channelRestApi = new ChannelRestApi(apiClient)
+def userSubscriptionsRestApi = new UserSubscriptionsRestApi(apiClient)
 
 // Set notification message
 eventMessage = (eventMessage == null || eventMessage.isEmpty()) ? "You have a notification.": eventMessage;
@@ -639,36 +642,6 @@ def fetchAvailableChannels(channelRestApi, String sessionId) {
     }
 }
 
-// Function to fetch available channels
-// TODO when Notification client is updated, do directly eventRestApi.getUserAvailablehannels();
-def fetchUserAlreadySubscribedChannels(String sessionId, String proactiveUrl) {
-    // URL of the notification service
-    def url = new URL("$proactiveUrl/notification-service/subscription/channel")
-    
-    // Open a connection to the URL
-    def connection = url.openConnection()
-    
-    // Set the request method and properties analogous to the cURL headers
-    connection.requestMethod = 'GET'
-    connection.setRequestProperty('Accept', '*/*')
-    connection.setRequestProperty('sessionid', sessionId)
-    
-    // Check the response code to determine if the request was successful
-    if (connection.responseCode == 200) {
-        // Read the response from the input stream
-        def response = connection.inputStream.text.trim()
-        println("fetchUserAlreadySubscribedChannels.response: $response")
-        // return response
-        def channelSubscription = new JsonSlurper().parseText(response)
-        println "Already subscribed channels = "+ channelSubscription.channels
-        return channelSubscription.channels;
-    } else {
-        // Handle the error response
-        println("Failed to fetch channels. Response Code: ${connection.responseCode}")
-        return null
-    }
-}
-
 // Get available channels (JSON)
 def availableChannels = fetchAvailableChannels(channelRestApi, sessionId)
 println "availableChannels: $availableChannels"
@@ -695,27 +668,33 @@ if (!channelsToSubscribe.isEmpty()) {
     // Retrieve user's Channel Subscription
     Subscription userChannelSubscription = subscriptionRestApi.getChannelSubscription(sessionId);
 
+    if (userChannelSubscription == null) {
+        // User never connected to the notification service, first we need to GET UserSubscriptions to create them
+        def userUserSubscriptions = userSubscriptionsRestApi.getUserSubscriptions(sessionId);
+        userChannelSubscription = userUserSubscriptions.getSubscriptions().find { it.getSubscriptionType() == Subscription.SubscriptionTypeEnum.CHANNEL}
+    }
+
     // Compute the new List of subscribed channels (previous subscribed channels + new channels)
     def newSubscribedChannels = new ArrayList();
     try {
-        newSubscribedChannels.addAll(fetchUserAlreadySubscribedChannels(sessionId, proactiveUrl));
+        newSubscribedChannels.addAll(userChannelSubscription.getChannels());
     } catch (Exception e) {
         println ("Error " + e + " when fetching User's Channel Subscription.")
     }
     newSubscribedChannels.addAll(channelsToSubscribe);
-    
+
     // Create the update object that used to query the notif service
     def channelSubscriptionUpdate = new ChannelSubscriptionUpdate()
         .id(userChannelSubscription.id)
-        .active(true) // Activate the subscription 
+        .active(true) // Activate the subscription
         .cleanPeriod(userChannelSubscription.cleanPeriod)
-    
+
     // Activate the portal notification
     def portalNotification = userChannelSubscription.notificationMethods.find { it.getActualInstance().getType() == PortalNotificationMethod.TypeEnum.PORTAL}
 	portalNotification.getActualInstance().active = true
-    
+
     channelSubscriptionUpdate.notificationMethods(userChannelSubscription.notificationMethods)
-        .subscriptionType(SubscriptionTypeEnum.CHANNEL)
+        .subscriptionType(ChannelSubscriptionUpdate.SubscriptionTypeEnum.CHANNEL)
         .channels(newSubscribedChannels)
         .followedEvents(userChannelSubscription.followedEvents);
     
