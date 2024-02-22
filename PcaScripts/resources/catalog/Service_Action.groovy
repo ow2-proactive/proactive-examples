@@ -43,7 +43,7 @@ if (Strings.isNullOrEmpty(action) && Strings.isNullOrEmpty(serviceActionWorkflow
 }
 
 if (!Strings.isNullOrEmpty(action)) {
-    List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceId(sessionId, Long.parseLong(instanceId)).get(instanceId.toString())
+    List<CloudAutomationWorkflow> listExecutableActions = catalogRestApi.listExecutableActionsByInstanceId(sessionId, instanceId as Long).get(instanceId.toString())
     for (CloudAutomationWorkflow actionIterator : listExecutableActions) {
         if (actionIterator.getName().equals(action)){
             bucketName = actionIterator.getBucket()
@@ -83,7 +83,7 @@ service.setWorkflowName(action)
 if( !actionVariables.isEmpty() ){
     actionVariables.each{ k, v -> service.putVariablesItem("${k}", "${v}") }
 }
-def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceAction(sessionId, Long.parseLong(instanceId), service, Integer.parseInt(variables.get("PA_JOB_ID")))
+def serviceInstanceData = serviceInstanceRestApi.launchServiceInstanceAction(sessionId, instanceId as Long, service, Integer.parseInt(variables.get("PA_JOB_ID")))
 
 if (action.toLowerCase().contains("finish")) {
     try {
