@@ -8,12 +8,23 @@ import org.ow2.proactive.notification.client.ApiClient
 import org.ow2.proactive.notification.client.api.ValidationRestApi
 import org.ow2.proactive.notification.client.model.ValidationRequest
 import org.ow2.proactive.notification.client.ApiException
-import com.google.common.collect.Sets
 import org.apache.commons.lang3.StringUtils
 
-Set authorizedUsers = Sets.newHashSet(variables.get("AUTHORIZED_USERS").split("\\s*,\\s*"))
-Set authorizedGroups = Sets.newHashSet(variables.get("AUTHORIZED_GROUPS").split("\\s*,\\s*"))
-boolean isJobSubmitterAuthorized = Boolean.parseBoolean(variables.get("IS_JOB_SUBMITTER_AUTHORIZED"));
+Set<String> authorizedUsers = Optional.ofNullable(variables.get("AUTHORIZED_USERS"))
+        .map { it.split("\\s*,\\s*")}
+        .orElse(Collections.emptySet())
+
+Set<String> authorizedGroups = Optional.ofNullable(variables.get("AUTHORIZED_GROUPS"))
+        .map { it.split("\\s*,\\s*")}
+        .orElse(Collections.emptySet())
+
+boolean isJobSubmitterAuthorized;
+try {
+    isJobSubmitterAuthorized = Boolean.parseBoolean(variables.get("IS_JOB_SUBMITTER_AUTHORIZED"));
+} catch (Exception ignored) {
+    // Either the variable is not present or not a valid boolean. Default to true
+    isJobSubmitterAuthorized = true;
+}
 
 // Check that at least one user will see the Validation
 if (!isJobSubmitterAuthorized && (authorizedGroups.isEmpty() || (authorizedGroups.size() == 1 && StringUtils.isBlank(authorizedGroups.toArray()[0]))) && (authorizedUsers.isEmpty() || (authorizedUsers.size() == 1 && StringUtils.isBlank(authorizedUsers.toArray()[0])))) {
