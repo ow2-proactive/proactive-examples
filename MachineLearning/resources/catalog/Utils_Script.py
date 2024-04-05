@@ -395,8 +395,12 @@ def export_dataframe_html(dataframe):
         nrows = len(dataframe.index)
         info = "Total of " + str(nrows) + " rows"
     print(info)
-    with pd.option_context('display.max_colwidth', -1):
-        result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
+    try:
+        with pd.option_context('display.max_colwidth', -1):
+            result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
+    except:
+        with pd.option_context('display.max_colwidth', None):
+            result = dataframe.to_html(escape=False, classes='table table-bordered table-striped', justify='center')
     result = """
     <!DOCTYPE html>
     <html>
