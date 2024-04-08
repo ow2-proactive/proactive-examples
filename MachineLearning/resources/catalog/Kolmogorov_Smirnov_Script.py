@@ -1,5 +1,3 @@
-# Copyright Activeeon 2007-2024. All rights reserved.
-
 # -------------------------------------------------------------
 # You can use the following search space to optimize the hyperparameters
 # SEARCH_SPACE: {"contamination": choice([0, 0.1, 0.2, 0.3])}

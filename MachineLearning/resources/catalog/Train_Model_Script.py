@@ -1,4 +1,3 @@
-# Copyright Activeeon 2007-2024. All rights reserved.
 """Proactive Train Model for Machine Learning
 
 This module contains the Python script for the Train Model task.
@@ -310,7 +309,7 @@ else:
         else:
             from sklearn.cluster import KMeans
             model = KMeans(**alg.input_variables.__dict__)
-# -------------------------------------------------------------
+    # -------------------------------------------------------------
     # Drift algorithms
     #
     if alg.name == 'KolmogorovSmirnov':
