@@ -422,8 +422,7 @@ if model is not None:
         resultMetadata.put("task.model_id", model_id)
 else:
     raiser("Algorithm not found!")
-    # Example usage
-print("Current directory contents:", os.listdir('.'))
+
 # -------------------------------------------------------------
 # Transfer data to the next tasks
 #
