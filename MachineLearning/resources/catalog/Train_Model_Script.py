@@ -309,6 +309,19 @@ else:
         else:
             from sklearn.cluster import KMeans
             model = KMeans(**alg.input_variables.__dict__)
+    # -------------------------------------------------------------
+    # Drift algorithms
+    #
+    if alg.name == 'KolmogorovSmirnov':
+        from alibi_detect.cd import KSDrift
+        x_ref = dataframe.drop([LABEL_COLUMN], axis=1).values
+        data_ref = x_ref.astype('float32')
+        model = KSDrift(x_ref=data_ref, **alg.input_variables.__dict__)
+    elif alg.name == 'SpotDiff':
+        from alibi_detect.cd import SpotTheDiffDrift
+        x_ref = dataframe.drop([LABEL_COLUMN], axis=1).values
+        data_ref = x_ref.astype('float32')
+        model = SpotTheDiffDrift(x_ref=data_ref, **alg.input_variables.__dict__)
 # -------------------------------------------------------------
 dataframe_train = None
 dataframe_label = None
@@ -385,6 +398,9 @@ if model is not None:
         #
         if alg.name == 'TPOT_Regressor' or alg.name == 'TPOT_Classifier':
             model = model.fitted_pipeline_
+    elif alg.type == 'drift_detection':
+        from alibi_detect.saving import save_detector
+        save_detector(model, '.')
     else:
         # -------------------------------------------------------------
         # Non-supervised algorithms
@@ -401,8 +417,9 @@ if model is not None:
     # -------------------------------------------------------------
     # Dumps and compress the model
     #
-    model_id = compress_and_transfer_data(model, "model")
-    resultMetadata.put("task.model_id", model_id)
+    if alg.type != 'drift_detection':
+        model_id = compress_and_transfer_data(model, "model")
+        resultMetadata.put("task.model_id", model_id)
 else:
     raiser("Algorithm not found!")
 
