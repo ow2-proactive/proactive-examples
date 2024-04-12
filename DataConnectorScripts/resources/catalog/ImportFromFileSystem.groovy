@@ -33,6 +33,16 @@ import java.security.spec.PKCS8EncodedKeySpec
 import org.bouncycastle.util.io.pem.PemObject
 import org.bouncycastle.util.io.pem.PemReader
 import java.io.FileReader
+import org.apache.commons.net.io.CopyStreamListener
+import org.apache.commons.net.io.CopyStreamEvent
+import org.apache.commons.net.io.Util
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.math.BigDecimal
+import java.math.MathContext
+import java.math.RoundingMode
 
 URI_SCHEME = args[0]
 
@@ -168,15 +178,15 @@ void importFiles() {
         // Set remoteSrc for cleanup in release()
         remoteSrc = fsManager.resolveFile(localDir);
         (new File(localDir)).mkdirs()
-        remoteFile = fsManager.resolveFile(startUrl, optsRemote)
+        remoteFileRoot = fsManager.resolveFile(startUrl, optsRemote)
         // Set src for cleanup in release()
-        src = remoteFile
-        remoteBasePath = remoteFile.getName()
-        children = this.remoteFile.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
-        children.each { f ->
-            String relativePath = File.separator + remoteBasePath.getRelativeName(f.getName());
-            if (f.getType() == FileType.FILE && !f.isContentOpen() && f.getContent().getSize() > 0) {
-                println("Examining remote file " + f.getName());
+        src = remoteFileRoot
+        remoteBasePath = remoteFileRoot.getName()
+        children = this.remoteFileRoot.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
+        children.each { remoteFile ->
+            String relativePath = File.separator + remoteBasePath.getRelativeName(remoteFile.getName());
+            if (remoteFile.getType() == FileType.FILE && !remoteFile.isContentOpen() && remoteFile.getContent().getSize() > 0) {
+                println("Examining remote file " + remoteFile.getName());
                 standardPath = new File(localDir, relativePath);
                 if(syncFiles && standardPath.exists() && !standardPath.isDirectory()) {
                     println("The file " + standardPath.getName() + " will not be imported from the " + URI_SCHEME + " server as it already exists in the local directory " + localDir)
@@ -185,14 +195,14 @@ void importFiles() {
                     println("Standard local path is " + standardPath);
                     LocalFile localFile = (LocalFile) fsManager.resolveFile(localUrl.toString());
                     println("Resolved local file name: " + localFile.getName());
-                    createParentFolderAndCopyFile(localFile, f)
+                    createParentFolderAndCopyFile(localFile, remoteFile)
                     if(cut) {
-                        println("Deleting remote file " + f.getName())
-                        f.delete()
+                        println("Deleting remote file " + remoteFile.getName())
+                        remoteFile.delete()
                     }
                 }
             } else {
-                println("Ignoring non-file " + f.getName());
+                println("Ignoring non-file " + remoteFile.getName());
             }
         }
     } catch (FileSystemException ex) {
@@ -203,7 +213,7 @@ void importFiles() {
 /**
  * Create the parent folder if it does not exist and copy the file locally
  */
-void createParentFolderAndCopyFile(LocalFile localFile, FileObject f) {
+void createParentFolderAndCopyFile(LocalFile localFile, FileObject remoteFile) {
     if (!localFile.getParent().exists()) {
         if (!localFile.getParent().isWriteable()) {
             throw new RuntimeException("This folder " + localFile.getParent() + " is read-only")
@@ -215,7 +225,35 @@ void createParentFolderAndCopyFile(LocalFile localFile, FileObject f) {
     if (!localFile.isWriteable()) {
         throw new RuntimeException("This file " + localFile + " is read-only")
     }
-    localFile.copyFrom(f, new AllFileSelector());
+    copyThroughStream(remoteFile, localFile)
+}
+
+
+void copyThroughStream(FileObject sourceFile, FileObject destinationFile) throws IOException {
+    CopyStreamListener listener = new CopyStreamListener() {
+        ProgressPrinter printer = new ProgressPrinter();
+
+        @Override
+        public void bytesTransferred(CopyStreamEvent event) {
+            /* do nothing */
+        }
+
+        @Override
+        public void bytesTransferred(long totalBytesTransferred, int bytesTransferred, long streamSize) {
+            printer.handleProgress(totalBytesTransferred, streamSize);
+        }
+    }
+    InputStream sourceFileIn = sourceFile.getContent().getInputStream();
+    try {
+        OutputStream destinationFileOut = destinationFile.getContent().getOutputStream();
+        try {
+            Util.copyStream(sourceFileIn, destinationFileOut, Util.DEFAULT_COPY_BUFFER_SIZE, sourceFile.getContent().getSize(), listener);
+        } finally {
+            destinationFileOut.close();
+        }
+    } finally {
+        sourceFileIn.close();
+    }
 }
 
 /**
@@ -304,6 +342,48 @@ void initializeAuthentication() {
     }
     FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
     SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
+}
+
+
+class ProgressPrinter {
+    static final int SIZE_OF_PROGRESS_BAR = 50;
+    boolean printedBefore = false;
+    BigDecimal progress = new BigDecimal(0);
+
+    void handleProgress(long totalBytesTransferred, long streamSize) {
+
+        BigDecimal numerator = BigDecimal.valueOf(totalBytesTransferred);
+        BigDecimal denominator = BigDecimal.valueOf(streamSize);
+        BigDecimal fraction = numerator.divide(denominator, new MathContext(2, RoundingMode.HALF_EVEN));
+        if (fraction.equals(progress)) {
+            /** don't bother refreshing if no progress made */
+            return;
+        }
+
+        BigDecimal outOfTwenty = fraction.multiply(new BigDecimal(SIZE_OF_PROGRESS_BAR));
+        BigDecimal percentage = fraction.movePointRight(2);
+        StringBuilder builder = new StringBuilder();
+        if (printedBefore) {
+            builder.append('\r');
+        }
+
+        builder.append("[");
+        for (int i = 0; i < SIZE_OF_PROGRESS_BAR; i++) {
+            if (i < outOfTwenty.intValue()) {
+                builder.append("#");
+            } else {
+                builder.append(" ");
+            }
+        }
+
+        builder.append("] ");
+        builder.append(percentage.setScale(0, BigDecimal.ROUND_HALF_EVEN).toPlainString()).append("%");
+
+        println(builder);
+        // track progress
+        printedBefore = true;
+        progress = fraction;
+    }
 }
 
 result = true
