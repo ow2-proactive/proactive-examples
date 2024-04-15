@@ -33,6 +33,16 @@ import java.security.spec.PKCS8EncodedKeySpec
 import org.bouncycastle.util.io.pem.PemObject
 import org.bouncycastle.util.io.pem.PemReader
 import java.io.FileReader
+import org.apache.commons.net.io.CopyStreamListener
+import org.apache.commons.net.io.CopyStreamEvent
+import org.apache.commons.net.io.Util
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.math.BigDecimal
+import java.math.MathContext
+import java.math.RoundingMode
 
 URI_SCHEME = args[0]
 
@@ -173,17 +183,17 @@ void exportFiles() {
         src = localFileRoot
         localBasePath = localFileRoot.getName()
         children = localFileRoot.findFiles(new org.objectweb.proactive.extensions.dataspaces.vfs.selector.FileSelector(filePattern))
-        children.each { f ->
-            String relativePath = localBasePath.getRelativeName(f.getName());
-            if (f.getType() == FileType.FILE) {
-                println("Examining local file " + f.getName());
+        children.each { localFile ->
+            String relativePath = localBasePath.getRelativeName(localFile.getName());
+            if (localFile.getType() == FileType.FILE) {
+                println("Examining local file " + localFile.getName());
                 String remoteUrl = startRemoteUrl + "/" + relativePath;
                 println("  Remote url is " + remoteUrl);
                 FileObject remoteFile = fsManager.resolveFile(remoteUrl, optsRemote);
                 println("Resolved remote file name: " + remoteFile.getName());
-                createParentFolderAndCopyFile(remoteFile, f)
+                createParentFolderAndCopyFile(remoteFile, localFile)
             } else {
-                println("Ignoring non-file " + f.getName());
+                println("Ignoring non-file " + localFile.getName());
             }
         }
     } catch (FileSystemException ex) {
@@ -194,7 +204,7 @@ void exportFiles() {
 /**
  * Create the parent folder if it does not exist and copy the file to the remote server
  */
-void createParentFolderAndCopyFile(FileObject remoteFile, FileObject f) {
+void createParentFolderAndCopyFile(FileObject remoteFile, FileObject localFile) {
     if (!remoteFile.getParent().exists()) {
         if (!remoteFile.getParent().isWriteable()) {
             throw new RuntimeException("This folder " + remoteFile.getParent() + " is read-only")
@@ -206,8 +216,37 @@ void createParentFolderAndCopyFile(FileObject remoteFile, FileObject f) {
     if (!remoteFile.isWriteable()) {
         throw new RuntimeException("This file " + remoteFile + " is read-only")
     }
-    remoteFile.copyFrom(f, new AllFileSelector());
+    copyThroughStream(localFile, remoteFile)
 }
+
+
+void copyThroughStream(FileObject sourceFile, FileObject destinationFile) throws IOException {
+    CopyStreamListener listener = new CopyStreamListener() {
+        ProgressPrinter printer = new ProgressPrinter();
+
+        @Override
+        public void bytesTransferred(CopyStreamEvent event) {
+            /* do nothing */
+        }
+
+        @Override
+        public void bytesTransferred(long totalBytesTransferred, int bytesTransferred, long streamSize) {
+            printer.handleProgress(totalBytesTransferred, streamSize);
+        }
+    }
+    InputStream sourceFileIn = sourceFile.getContent().getInputStream();
+    try {
+        OutputStream destinationFileOut = destinationFile.getContent().getOutputStream();
+        try {
+            Util.copyStream(sourceFileIn, destinationFileOut, Util.DEFAULT_COPY_BUFFER_SIZE, sourceFile.getContent().getSize(), listener);
+        } finally {
+            destinationFileOut.close();
+        }
+    } finally {
+        sourceFileIn.close();
+    }
+}
+
 
 /**
  * Release system resources, close connections to the local and remote the filesystems.
@@ -295,6 +334,47 @@ void initializeAuthentication() {
     }
     FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
     SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
+}
+
+class ProgressPrinter {
+    static final int SIZE_OF_PROGRESS_BAR = 50;
+    boolean printedBefore = false;
+    BigDecimal progress = new BigDecimal(0);
+
+    void handleProgress(long totalBytesTransferred, long streamSize) {
+
+        BigDecimal numerator = BigDecimal.valueOf(totalBytesTransferred);
+        BigDecimal denominator = BigDecimal.valueOf(streamSize);
+        BigDecimal fraction = numerator.divide(denominator, new MathContext(2, RoundingMode.HALF_EVEN));
+        if (fraction.equals(progress)) {
+            /** don't bother refreshing if no progress made */
+            return;
+        }
+
+        BigDecimal outOfTwenty = fraction.multiply(new BigDecimal(SIZE_OF_PROGRESS_BAR));
+        BigDecimal percentage = fraction.movePointRight(2);
+        StringBuilder builder = new StringBuilder();
+        if (printedBefore) {
+            builder.append('\r');
+        }
+
+        builder.append("[");
+        for (int i = 0; i < SIZE_OF_PROGRESS_BAR; i++) {
+            if (i < outOfTwenty.intValue()) {
+                builder.append("#");
+            } else {
+                builder.append(" ");
+            }
+        }
+
+        builder.append("] ");
+        builder.append(percentage.setScale(0, BigDecimal.ROUND_HALF_EVEN).toPlainString()).append("%");
+
+        println(builder);
+        // track progress
+        printedBefore = true;
+        progress = fraction;
+    }
 }
 
 result = true
