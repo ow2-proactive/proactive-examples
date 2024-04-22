@@ -47,7 +47,7 @@ public class MetadataJsonFilesTest {
 
     private final static String WORKFLOW_KIND_VALUE = "workflow";
 
-    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:_[A-Z\\d\\$][a-zA-Z\\d{}]*)*$";
+    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d\\.\\s]*)(?:_[A-Z\\d\\$][a-zA-Z\\d{}]*)*$";
 
     private final String packageDirPath;
 
@@ -122,8 +122,8 @@ public class MetadataJsonFilesTest {
             JSONArray objects = (JSONArray) catalog.get(OBJECTS_KEY_NAME);
             objects.forEach(objectJsonObject -> {
                 String workflowName = (String) ((JSONObject) objectJsonObject).get(WORKFLOW_NAME_KEY_NAME);
-                JSONObject metatdata = (JSONObject) ((JSONObject) objectJsonObject).get(METADATA_KEY_NAME);
-                String workflowKind = (String) (metatdata).get(WORKFLOW_KIND_KEY_NAME);
+                JSONObject metadata = (JSONObject) ((JSONObject) objectJsonObject).get(METADATA_KEY_NAME);
+                String workflowKind = (String) (metadata).get(WORKFLOW_KIND_KEY_NAME);
                 if (workflowKind.toLowerCase().startsWith(WORKFLOW_KIND_VALUE)) {
                     Assert.assertTrue(workflowName +
                                       " is invalid! Try an underscore-spaced name with Capitals or digits (e.g. Workflow_Name but not workflow_name)",
