@@ -66,7 +66,7 @@ public class WorkflowsTest {
 
     private final static String WORKFLOW_KIND_VALUE = "workflow";
 
-    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d]*)(?:[_A-Z\\d][a-zA-Z\\d]*)*$";
+    public static final String WORKFLOW_NAME_PATTERN = "^(?:[A-Z\\d][a-zA-Z\\d\\.\\s]*)(?:[_A-Z\\d\\$][a-zA-Z\\d{}]*)*$";
 
     private final String filePath;
 

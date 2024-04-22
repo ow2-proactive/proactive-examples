@@ -1,0 +1,298 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="File_Listener_Job_Action" onTaskError="continueJobExecution" priority="normal" projectName="2. File Listeners Blueprint" tags="Memory,Triggers" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" description="Hostname or IP address of the server to be monitored" group="Source Settings" hidden="false" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/hosts)" name="SERVER_TO_MONITOR" value=""/>
+    <variable advanced="false" description="Folder on the given server that will be monitored for new files presence" group="Source Settings" hidden="false" model="PA:REGEXP(^$|^.+/$)" name="SOURCE_FOLDER_PATH" value="/tmp/source-folder/"/>
+    <variable advanced="false" description="Only filenames which match the supplied regular expression are be considered" group="Source Settings" hidden="false" model="PA:NOT_EMPTY_STRING" name="FILENAME_PATTERN" value=".*"/>
+    <variable advanced="false" description="Action workflow to submit from the Catalog" group="Action" hidden="false" model="PA:LIST(event-file-listener/Folder_To_Folder_File_Transfer_Task,event-file-listener/Postgres_File_Export_Task,event-file-listener/SFTP_File_Transfer_Task,event-file-listener/FTP_File_Transfer_Task)" name="ACTION_WORKFLOW" value="event-file-listener/Folder_To_Folder_File_Transfer_Task"/>
+    <variable advanced="false" description="A boolean indicating whether to delete the detected file after the action workflow. Default value is False." group="Source Settings" hidden="false" model="PA:BOOLEAN" name="DELETE_DETECTED_FILE" value="False"/>
+  </variables>
+  <description>
+    <![CDATA[ This file listener workflow monitors a folder (SOURCE_FOLDER_PATH) on a given server (SERVER_TO_MONITOR). A file event is detected when a new file matching a specific pattern (FILENAME_PATTERN) arrives to this folder or an existing one is modified.
+For each new file detected, the file listener will submit a post action workflow (POST_ACTION_WORKFLOW) to the scheduler to process the file.
+
+The file listener can be interactively terminated by sending the Terminate_Monitoring signal. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="event-file-listener"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/file_trigger.png"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="File_Listener">
+      <description>
+        <![CDATA[ This file listener workflow monitors a folder (SOURCE_FOLDER_PATH) on a given server (SERVER_TO_MONITOR). A file event is detected when a new file matching a specific pattern (FILENAME_PATTERN) arrives to this folder or an existing one is modified.
+For each new file detected, the file listener will submit a post action workflow (POST_ACTION_WORKFLOW) to the scheduler to process the file.
+
+The file listener can be interactively terminated by sending the Terminate_Monitoring signal. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/file_trigger.png"/>
+      </genericInformation>
+      <depends>
+        <task ref="Init_File_Listner"/>
+      </depends>
+      <selection>
+        <script type="static">
+          <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/check_host_name/raw">
+            <arguments>
+              <argument value="${SERVER_TO_MONITOR}"/>
+            </arguments>
+          </file>
+        </script>
+        <script type="dynamic">
+          <code language="groovy">
+            <![CDATA[
+import groovy.io.FileType
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.Files
+import java.time.ZonedDateTime
+
+if (signalapi.isReceived("Terminate_Monitoring")) {
+    selected = true;
+    return;
+}
+
+inputFilesFolder = new File(variables.get("SOURCE_FOLDER_PATH"));
+filesToProcess = new ArrayList();
+channelId = variables.get("CHANNEL_ID")
+selected = false;
+pattern = variables.get("FILENAME_PATTERN")
+checkSubFolders = false
+if (variables.get("CHECK_SUB-FOLDERS")) {
+    checkSubFolders = variables.get("CHECK_SUB-FOLDERS").toBoolean()
+}
+endDate = variables.get("END_DATE")
+parsedEndDate = null
+if(endDate){
+    parsedEndDate = ZonedDateTime.parse(endDate)
+}
+
+// list files in the monitored folder
+if(checkSubFolders){
+    inputFilesFolder.eachFileRecurse(FileType.FILES, { file->
+        key = file.getAbsolutePath()
+        attr = Files.readAttributes(file.toPath(), BasicFileAttributes.class)
+        //value = attr.size()
+        value = attr.lastModifiedTime().toMillis()
+        if ((!synchronizationapi.containsKey(channelId, key) || (synchronizationapi.get(channelId, key) != null && synchronizationapi.get(channelId, key) != value) )&& file.getName() ==~ /${pattern}/ || (parsedEndDate && parsedEndDate.isBefore(ZonedDateTime.now()))) {
+            // if key is not there then we spotted a new file
+            selected = true;
+        }
+    })
+} else {
+    inputFilesFolder.eachFile(FileType.FILES, { file->
+        key = file.getAbsolutePath()
+        attr = Files.readAttributes(file.toPath(), BasicFileAttributes.class)
+        //value = attr.size()
+        value = attr.lastModifiedTime().toMillis()
+        if ((!synchronizationapi.containsKey(channelId, key) || (synchronizationapi.get(channelId, key) != null && synchronizationapi.get(channelId, key) != value) )&& file.getName() ==~ /${pattern}/ || (parsedEndDate && parsedEndDate.isBefore(ZonedDateTime.now()))) {
+            // if key is not there then we spotted a new file
+            selected = true;
+        }
+    })
+}
+]]>
+          </code>
+        </script>
+      </selection>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.io.FileType
+import org.apache.commons.io.FilenameUtils
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.Files
+import java.sql.Timestamp
+
+if (signalapi.isReceived("Terminate_Monitoring")) {
+    result = true;
+    return;
+}
+
+sourceFolderPath = new File(variables.get("SOURCE_FOLDER_PATH"))
+schedulerapi.connect()
+pattern = variables.get("FILENAME_PATTERN")
+checkSubFolders = false
+//if true, list files in the monitored folder and in its sub-folders
+if (variables.get("CHECK_SUB-FOLDERS")?.trim()) {
+    checkSubFolders = variables.get("CHECK_SUB-FOLDERS").toBoolean()
+}
+channelId = variables.get("CHANNEL_ID")
+
+//Please add the catalog path of the post action workflow you want to submit using the variable 'ACTION_WORKFLOW'
+postActionWorkflow = variables.get("ACTION_WORKFLOW")
+
+if(checkSubFolders){
+    sourceFolderPath.eachFileRecurse(FileType.FILES, { file->
+        fileTrigger(file)
+    })
+} else {
+    sourceFolderPath.eachFile(FileType.FILES, { file->
+        fileTrigger(file)
+    })
+}
+
+/*
+* check the presence of a new file arrival in the monitored folder matching the defined pattern
+*
+* @param file
+*/
+void fileTrigger(def file) {
+    key = file.getAbsolutePath()
+    attr = Files.readAttributes(file.toPath(), BasicFileAttributes.class)
+    //value = attr.size()
+    value = attr.lastModifiedTime().toMillis()
+    previousValue = synchronizationapi.putIfAbsent(channelId, key, value)
+    if ((previousValue == null || previousValue != value) && file.getName() ==~ /${pattern}/) {
+        //the listner has detected a new file arrival matching the defined pattern
+        if(previousValue != null ){
+            synchronizationapi.put(channelId, key, value)
+        }
+
+        // variables submitted to the post action workflow
+        detectedFilePathVariableName = "DETECTED_FILE_NAME_AND_PATH"
+        fileBaseName = FilenameUtils.getBaseName(key)
+        // push file to userspace
+        userspaceapi.connect()
+        userspaceapi.pushFile(file, file.getName())
+        workflow_variables = [(detectedFilePathVariableName) : key, "DELETE_DETECTED_FILE": variables.get("DELETE_DETECTED_FILE"), "SOURCE_FOLDER_PATH": sourceFolderPath, "FILE_BASE_NAME": fileBaseName, "SOURCE_FILE": file.getName()]
+        def generic_infos_map = ["PARENT_JOB_ID" : variables.get("PA_JOB_ID")]
+
+        println "Submitting the post action workflow " + postActionWorkflow + " to process the detected file : " + key
+        resultMap.put("File path: " + key, "Date: " + new Timestamp(value))
+        // submitting the job
+        jobid = schedulerapi.submitFromCatalog(variables.get("PA_CATALOG_REST_URL"), postActionWorkflow, workflow_variables, generic_infos_map)
+
+        println "Job submitted with job id " + jobid
+    }
+}
+
+
+schedulerapi.disconnect()
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <loop target="File_Listener">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+import java.time.ZonedDateTime
+
+frequency = variables.get("FREQUENCY")
+pollTime = variables.get("POLLING_INTERVAL")
+endDate = variables.get("END_DATE")
+parsedEndDate = null
+if(endDate){
+    parsedEndDate = ZonedDateTime.parse(endDate)
+}
+if (frequency == "Until success" || signalapi.isReceived("Terminate_Monitoring")) {
+    loop = false;
+} else {
+    if(parsedEndDate == null || (parsedEndDate && parsedEndDate.isAfter(ZonedDateTime.now()))) {
+        if (pollTime && pollTime != '0') {
+            println("Polling the folder " + variables.get("SOURCE_FOLDER_PATH") + " for new file(s) arrival")
+            loop = '*/' + pollTime + ' * * * *'
+        } else {
+            loop = true
+        }
+    } else {
+        println "The end date is reached so the file listener schedule is terminated"
+        loop = false
+    }
+}
+]]>
+            </code>
+          </script>
+        </loop>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            336.8541564941406
+        </positionTop>
+        <positionLeft>
+            390.42706298828125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="End_File_Listner">
+      <description>
+        <![CDATA[ Clean up the synchronization api channel used by this workflow. ]]>
+      </description>
+      <depends>
+        <task ref="File_Listener"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+if (variables.get("POST_ACTION_WORKFLOW")) {
+    synchronizationapi.deleteChannel(variables.get("CHANNEL_ID"))
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            464.8437805175781
+        </positionTop>
+        <positionLeft>
+            390.42706298828125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Init_File_Listner">
+      <description>
+        <![CDATA[ Create the synchronization api channel used by this workflow. ]]>
+      </description>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+channelId = "FileTrigger_" + variables.get("PA_JOB_ID")
+variables.put("CHANNEL_ID", channelId)
+synchronizationapi.createChannel(channelId, true)
+signalapi.readyForSignal("Terminate_Monitoring")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            208.84375
+        </positionTop>
+        <positionLeft>
+            390.42706298828125
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2867px;
+            height:3971px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-203.84375px;left:-385.42706298828125px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_22" style="top: 336.854px; left: 390.437px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This file listener workflow monitors a folder (SOURCE_FOLDER_PATH) on a given server (SERVER_TO_MONITOR). A file event is detected when a new file matching a specific pattern (FILENAME_PATTERN) arrives to this folder or an existing one is modified.
+For each new file detected, the file listener will submit a post action workflow (POST_ACTION_WORKFLOW) to the scheduler to process the file.
+
+The file listener can be interactively terminated by sending the Terminate_Monitoring signal."><img src="/automation-dashboard/styles/patterns/img/wf-icons/file_trigger.png" width="20px">&nbsp;<span class="name">File_Listener</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_25" style="top: 464.844px; left: 390.437px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Clean up the synchronization api channel used by this workflow."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">End_File_Listner</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_28" style="top: 208.844px; left: 390.437px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Create the synchronization api channel used by this workflow."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Init_File_Listner</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:429.5px;top:248.5px" width="26" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 15 50 5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.40953125,66.78168750000002 L6.41844882380946,47.518594087559144 L-1.1087489198275216,52.84224829573104 L-7.520990380459522,46.21781175738666 L-2.40953125,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.40953125,66.78168750000002 L6.41844882380946,47.518594087559144 L-1.1087489198275216,52.84224829573104 L-7.520990380459522,46.21781175738666 L-2.40953125,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:479.5px;top:326.5px" width="61" height="61" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 40 C 50 -10 -10 50 0 0 " transform="translate(10.5,10.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#316b31" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M13.55903999999999,26.37184000000001 L31.950657715430147,15.848133532719785 L22.731266562420885,15.794966176056539 L21.37378389148668,6.67590697029889 L13.55903999999999,26.37184000000001" class="" stroke="#316b31" fill="#316b31" transform="translate(10.5,10.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_39" style="position: absolute; transform: translate(-50%, -50%); left: 504.5px; top: 356.5px;">loop</div><svg style="position:absolute;left:429.5px;top:376.5px" width="28.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 7.5 88 C 17.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M9.6924,66.303232 L14.047579150003148,45.56600907668218 L7.882160168186493,52.42075989481225 L0.1651070448154046,47.37624890849568 L9.6924,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M9.6924,66.303232 L14.047579150003148,45.56600907668218 L7.882160168186493,52.42075989481225 L0.1651070448154046,47.37624890849568 L9.6924,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 430px; top: 367px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 430px; top: 327px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint loop-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 480px; top: 327px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint loop-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 480px; top: 367px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#316b31" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 437.5px; top: 495px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 437.5px; top: 455px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 435px; top: 239px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
