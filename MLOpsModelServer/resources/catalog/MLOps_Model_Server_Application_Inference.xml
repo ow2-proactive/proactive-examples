@@ -74,48 +74,57 @@ from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 
 
-
 def test_iris_classification_model(args, triton_client):
-    drift_data = args.drift_data
-    # Infer
-    inputs = []
-    outputs = []
-    inputs.append(grpcclient.InferInput('float_input', [1, 4], "FP32"))
+    # Load Iris dataset
     iris = load_iris()
     X, y = iris.data, iris.target
-    _, X_test, _, y_test = train_test_split(X, y, random_state=42)
+    _, X_test, _, y_test = train_test_split(X, y, random_state=None)
     input_data = X_test[1].astype(np.float32)
-    print(input_data)
-    if(drift_data == "true"):
+    print("Input data:\n", input_data)
+    
+    # Simulate data drift if specified
+    drift_data = args.drift_data and args.drift_data.lower() == "true"
+    if drift_data:
         print("Drift Data")
         noise_std = 1.0
         noise = np.random.normal(0, noise_std, input_data.shape)
-        input_data = input_data + noise
-        print(input_data)
-    # Initialize the data
-    print("initialization of data")
-    input_data = np.expand_dims(input_data, axis=0)
-    print(input_data)
-    inputs[0].set_data_from_numpy(np.array(input_data, dtype=np.float32))
-    print(inputs[0])
-
-    outputs.append(grpcclient.InferRequestedOutput('label'))
-    outputs.append(grpcclient.InferRequestedOutput('probabilities'))
-    # Test with outputs
-    results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
-    # print("response:\n", results.get_response())
-    statistics = triton_client.get_inference_statistics(model_name=args.model_name)
-    # print("statistics:\n", statistics)
-    if len(statistics.model_stats) != 1:
-        print("FAILED: Inference Statistics")
+        input_data += noise
+        print("Drifted input data:\n", input_data)
+    
+    # Prepare input and output tensors
+    inputs = [grpcclient.InferInput('float_input', [1, 4], "FP32")]
+    inputs[0].set_data_from_numpy(np.expand_dims(input_data, axis=0))
+    print("input0_data:\n", inputs[0])
+    
+    outputs = [
+        grpcclient.InferRequestedOutput('label'),
+        grpcclient.InferRequestedOutput('probabilities')
+    ]
+    
+    # Perform inference
+    try:
+        results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
+    except InferenceServerException as e:
+        print(f"Inference failed: {str(e)}")
         sys.exit(1)
-    # Get the output arrays from the results
+    
+    # Check inference statistics
+    try:
+        statistics = triton_client.get_inference_statistics(model_name=args.model_name)
+        if len(statistics.model_stats) != 1:
+            print("FAILED: Inference Statistics")
+            sys.exit(1)
+    except InferenceServerException as e:
+        print(f"Failed to retrieve inference statistics: {str(e)}")
+        sys.exit(1)
+    
+    # Get and print output data
     output0_data = results.as_numpy('label')
     output1_data = results.as_numpy('probabilities')
-
-    print("output0_data : ", output0_data)
-    print("output1_data : ", output1_data)
+    print("output0_data:\n", output0_data)
+    print("output1_data:\n", output1_data)
     print('PASS: iris-classification-model')
+
 
 def test_model_simple(args, triton_client):
     # Infer
@@ -680,7 +689,7 @@ def test_model_image_classification(args, triton_client):
 def main(args):
     print("model-server: ", args.model_server)
     print("model-name:   ", args.model_name)
-    print("drift-data: ", args.drift_data)
+    print("drift-data:   ", args.drift_data)
     try:
         # triton_client = httpclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
         triton_client = grpcclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
@@ -816,13 +825,6 @@ ciPasswd = connectionInfo.getPassword()
 ciUrl = connectionInfo.getUrl()
 def sessionId = schedulerapi.getSession()
 
-user_credentials = [
-  sessionId: sessionId,
-  ciLogin: ciLogin,
-  ciPasswd: ciPasswd,
-  ciUrl: ciUrl
-]
-// def sessionId = 'your_session_id'
 def url = new URL(ciUrl)
 def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
 def instanceId = variables.get("MODEL_SERVER_ID")
@@ -862,13 +864,14 @@ String MODEL_NAME = variables.get("MODEL_NAME")
 String IMAGE_PATH = variables.get("IMAGE_PATH")
 String TASK_FILE_PATH = variables.get("TASK_FILE_PATH")
 String DRIFT_DATA = variables.get("DRIFT_DATA")
-println("INFERENCE_FREQUENCY: " + INFERENCE_FREQUENCY)
-println("SIGNAL_FREQUENCY_CHECK : " + SIGNAL_FREQUENCY_CHECK)
-println("INFERENCE_FREQUENCY: " + INFERENCE_FREQUENCY)
-println("MODEL_NAME: " + MODEL_NAME)
-println("IMAGE_PATH: " + IMAGE_PATH)
-println("TASK_FILE_PATH: " + TASK_FILE_PATH)
-println("DRIFT_DATA: " + DRIFT_DATA)
+
+println("INFERENCE_FREQUENCY:    " + INFERENCE_FREQUENCY)
+println("SIGNAL_FREQUENCY_CHECK: " + SIGNAL_FREQUENCY_CHECK)
+println("INFERENCE_FREQUENCY:    " + INFERENCE_FREQUENCY)
+println("MODEL_NAME:             " + MODEL_NAME)
+println("IMAGE_PATH:             " + IMAGE_PATH)
+println("TASK_FILE_PATH:         " + TASK_FILE_PATH)
+println("DRIFT_DATA:             " + DRIFT_DATA)
 
 // Create the inference script file
 def create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA) {
@@ -963,7 +966,6 @@ while (true) {
             signalVariables.add(new JobVariable("DRIFT_DATA_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'iris-classification-model' ? showVar('DRIFT_DATA') : hideVar('DRIFT_DATA'))", "Handler for DRIFT_DATA variable.", "", false, true))
             signalVariables.add(new JobVariable("DRIFT_DATA", ""+DRIFT_DATA, "PA:Boolean", "If True, input data will be drifted", "", false, false))
 
-
             // Define the Update_Frequency_Parameter signal
             List <JobVariable> signalVariables_frequency = new java.util.ArrayList<JobVariable>()
             signalVariables_frequency.add(new JobVariable("INFERENCE_FREQUENCY", ""+INFERENCE_FREQUENCY, "PA:Integer", "The frequency (in ms) to send a new inference request for the selected model.", "", false, false))
@@ -972,7 +974,8 @@ while (true) {
             List <JobVariable> signalVariables_drift = new java.util.ArrayList<JobVariable>()
             signalVariables_drift.add(new JobVariable("DRIFT_DATA", ""+DRIFT_DATA, "PA:Boolean", "If True, input data will be drifted", "", false, false))
             signalVariables_drift.add(new JobVariable("MODEL_NAME", "iris-classification-model", "PA:LIST(iris-classification-model)", "Name of the model to be tested.", "", false, false))
-            signalVariables_drift.add(new JobVariable("DRIFT_DATA_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'iris-classification-model' ? showVar('DRIFT_DATA') :     hideVar('DRIFT_DATA'))", "Handler for DRIFT_DATA variable.", "", false, true))
+            signalVariables_drift.add(new JobVariable("DRIFT_DATA_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'iris-classification-model' ? showVar('DRIFT_DATA') : hideVar('DRIFT_DATA'))", "Handler for DRIFT_DATA variable.", "", false, true))
+
             // Read the variable SIGNALS
             signals = variables.get("SIGNALS")
 
