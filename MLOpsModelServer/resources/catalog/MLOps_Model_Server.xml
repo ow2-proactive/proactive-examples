@@ -10,11 +10,14 @@
     <variable advanced="true" description="True if an https endpoint will be exposed as the service endpoint." group="Proactive Service Parameters" hidden="false" model="PA:Boolean" name="HTTPS_ENABLED" value="False"/>
     <variable advanced="false" description="Path to the model repository." group="MLOps_Model_Server Service Configuration" hidden="false" name="MODEL_REGISTRY_PATH" value="/opt/models"/>
     <variable advanced="false" description="The model control mode determines how changes to the model repository are handled by Triton. Triton operates in one of three model control modes: NONE, EXPLICIT or POLL." group="MLOps_Model_Server Service Configuration" hidden="false" model="PA:LIST(none,explicit,poll)" name="MODEL_CONTROL_MODE" value="explicit"/>
+    <variable advanced="false" description="If True, additional modules will be added to the container." group="MLOps_Model_Server Service Configuration" hidden="false" model="PA:Boolean" name="EXTRA_MODULES_ENABLED" value="true"/>
+    <variable advanced="false" description="Additional modules to be added to the container." group="MLOps_Model_Server Service Configuration" hidden="false" name="EXTRA_MODULES" value="torch alibi-detect"/>
     <variable advanced="true" description="If specified, it specifies the port number for the HTTP inference." group="MLOps_Model_Server Service Configuration" hidden="false" name="HTTP_INFERENCE_SERVICE_PORT" value="-1"/>
     <variable advanced="true" description="If specified, it specifies the port number for the GRPC inference." group="MLOps_Model_Server Service Configuration" hidden="false" name="GRPC_INFERENCE_SERVICE_PORT" value="-1"/>
     <variable advanced="true" description="If specified, it specifies the port number for the HTTP metrics." group="MLOps_Model_Server Service Configuration" hidden="false" name="METRICS_PORT" value="-1"/>
     <variable advanced="true" description="Docker image used to start the NVIDIA Triton Inference Server." group="MLOps_Model_Server Service Configuration" hidden="false" name="DOCKER_IMAGE" value="nvcr.io/nvidia/tritonserver:22.10-py3"/>
     <variable advanced="false" hidden="true" model="PA:SPEL(variables['GPU_ENABLED'].toLowerCase() == 'true' ? showVar('GPU_INDEX') : hideVar('GPU_INDEX'))" name="GPU_ENABLED_HANDLER" value=""/>
+    <variable advanced="false" hidden="true" model="PA:SPEL(variables['EXTRA_MODULES_ENABLED'].toLowerCase() == 'true' ? showVar('EXTRA_MODULES') : hideVar('EXTRA_MODULES'))" name="EXTRA_MODULES_ENABLED_HANDLER" value=""/>
   </variables>
   <description>
     <![CDATA[ This service is based on NVIDIA Triton Inference Server which is part of the NVIDIA AI platform. Triton is an open-source inference serving software that helps standardize model deployment and execution and delivers fast and scalable AI in production. ]]>
@@ -60,9 +63,12 @@ echo BEGIN "$variables_PA_TASK_NAME"
 ################################################################################
 ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
 DOCKER_IMAGE=$variables_DOCKER_IMAGE
+
 GPU_ENABLED=$variables_GPU_ENABLED
 GPU_INDEX=$variables_GPU_INDEX
-################################################################################
+
+EXTRA_MODULES_ENABLED=$variables_EXTRA_MODULES_ENABLED
+EXTRA_MODULES=$variables_EXTRA_MODULES
 
 HTTP_SERVER_INTERNAL_PORT=8000
 GRPC_SERVER_INTERNAL_PORT=8001
@@ -75,6 +81,7 @@ MODEL_CONTROL_MODE=$variables_MODEL_CONTROL_MODE
 HTTP_SERVER_PORT=$variables_HTTP_INFERENCE_SERVICE_PORT
 GRPC_SERVER_PORT=$variables_GRPC_INFERENCE_SERVICE_PORT
 PROMETHEUS_SERVER_PORT=$variables_METRICS_PORT
+################################################################################
 
 PATH=$PATH:/usr/sbin
 
@@ -125,6 +132,7 @@ if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
     exit 128
 else
     echo "Running $INSTANCE_NAME container"
+
     GPU_PARAMS=''
     if [ "${GPU_ENABLED,,}" = "true" ]; then
         if [ "${GPU_INDEX,,}" = "all" ]; then
@@ -133,6 +141,12 @@ else
             GPU_PARAMS="--gpus device=$GPU_INDEX"
         fi
     fi
+    
+    INSTALL_EXTRA_MODULES=''
+    if [ "${EXTRA_MODULES_ENABLED,,}" = "true" ]; then
+        INSTALL_EXTRA_MODULES="python3 -m pip install $EXTRA_MODULES &&"
+    fi
+
     MOUNT_PATH=''
     MODEL_REPOSITORY=''
     if [[ $MODEL_REGISTRY_PATH = s3://* ]]; then
@@ -141,6 +155,7 @@ else
         MOUNT_PATH="-v $MODEL_REGISTRY_PATH:/models"
         MODEL_REPOSITORY="--model-repository=/models"
     fi
+    
     MODEL_CONTROL_MODE_PARAM=''
     if [ "${MODEL_CONTROL_MODE,,}" = "none" ]; then
         MODEL_CONTROL_MODE_PARAM='--model-control-mode=none'
@@ -151,8 +166,23 @@ else
     if [ "${MODEL_CONTROL_MODE,,}" = "poll" ]; then
         MODEL_CONTROL_MODE_PARAM='--model-control-mode=poll --repository-poll-secs=5'
     fi
-    echo "docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM"
-    docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM --response-cache-byte-size=1024
+
+    echo "GPU_PARAMS=$GPU_PARAMS"
+    echo "INSTANCE_NAME=$INSTANCE_NAME"
+    echo "HTTP_SERVER_PORT=$HTTP_SERVER_PORT"
+    echo "HTTP_SERVER_INTERNAL_PORT=$HTTP_SERVER_INTERNAL_PORT"
+    echo "GRPC_SERVER_PORT=$GRPC_SERVER_PORT"
+    echo "GRPC_SERVER_INTERNAL_PORT=$GRPC_SERVER_INTERNAL_PORT"
+    echo "PROMETHEUS_SERVER_PORT=$PROMETHEUS_SERVER_PORT"
+    echo "PROMETHEUS_SERVER_INTERNAL_PORT=$PROMETHEUS_SERVER_INTERNAL_PORT"
+    echo "MOUNT_PATH=$MOUNT_PATH"
+    echo "DOCKER_IMAGE=$DOCKER_IMAGE"
+    echo "INSTALL_EXTRA_MODULES=$INSTALL_EXTRA_MODULES"
+    echo "MODEL_REPOSITORY=$MODEL_REPOSITORY"
+    echo "MODEL_CONTROL_MODE_PARAM=$MODEL_CONTROL_MODE_PARAM"
+    
+    echo "docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE bash -c $INSTALL_EXTRA_MODULES tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM"
+    docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE bash -c "$INSTALL_EXTRA_MODULES tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM --response-cache-byte-size=1024"
 
     if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
