@@ -47,10 +47,10 @@ import java.math.RoundingMode
 URI_SCHEME = args[0]
 
 //Set connection parameters and retrieve the SFTP/FTP password
-URL_KEY = URI_SCHEME + "://<username>@<host>";
 host = variables.get("HOST")
-username = variables.get("USERNAME")
 port = variables.get("PORT")
+username = variables.get("USERNAME")
+password = credentials.get(variables.get("SSH_PASSWORD"))
 keyManager = null
 optsRemote = new FileSystemOptions()
 fsManager = null
@@ -266,25 +266,6 @@ void release() {
     }
 }
 
-/**
- * Checks whether the provided host, username and port values are empty or not, then
- * returns the SFTP/FTP password using the third party credentials mechanism
- */
-def checkParametersAndReturnPassword() {
-    if (host.isEmpty()) {
-        throw new IllegalArgumentException("HOST variable is not provided by the user. Empty value is not allowed.")
-    }
-    if (username.isEmpty()) {
-        throw new IllegalArgumentException("USERNAME variable is not provided by the user. Empty value is not allowed.")
-    }
-    def urlKey = URI_SCHEME + "://" + username + "@" + host;
-    def password = credentials.get(urlKey)
-    if (!password?.trim()) {
-        throw new IllegalArgumentException("Please add your " + URI_SCHEME + " password to 3rd-party credentials under the key :\"" +
-                URL_KEY + "\"");
-    }
-    return password
-}
 
 /**
  * Initializes the connection to the remote SFTP/FTP server
@@ -317,7 +298,6 @@ void initializeAuthentication() {
             throw new RuntimeException("Failed to set user authenticator", ex);
         }
     } else {
-        password = checkParametersAndReturnPassword()
         def auth = new StaticUserAuthenticator(null, username, password)
         try {
             DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(optsRemote, auth)
