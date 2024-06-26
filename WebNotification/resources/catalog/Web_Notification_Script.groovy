@@ -4,6 +4,12 @@ import org.ow2.proactive.notification.client.model.EventRequest
 import org.ow2.proactive.notification.client.model.Event
 import org.ow2.proactive.notification.client.ApiException
 
+// Skip web notification
+if (variables.get("ACTIVATE_NOTIFICATIONS") && !variables.get("ACTIVATE_NOTIFICATIONS").toBoolean()) {
+    println("Skipping web notification ...");
+    return;
+}
+
 //Get notification-service URL
 def notifUrl = variables.get('PA_NOTIFICATION_SERVICE_REST_URL')
 
