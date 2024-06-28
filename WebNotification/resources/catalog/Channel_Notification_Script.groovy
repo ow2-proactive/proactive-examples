@@ -21,7 +21,7 @@ def channelsToNotify = variables.get("CHANNELS")
 // Set notification message
 eventMessage = (eventMessage == null || eventMessage.isEmpty()) ? "You have a notification.": eventMessage;
 // Set channels to notify
-channelsToNotify = (channelsToNotify != null && !channelsToNotify.equals('all')) ? Arrays.asList(channelsToNotify.split(',')): null;
+channelsToNotify = (channelsToNotify != null && !channelsToNotify.equals('all')) ? new HashSet(Arrays.asList(channelsToNotify.split(','))): null;
 // Set notification severity
 eventSeverity = (eventSeverity == null || eventSeverity.isEmpty()) ? EventRequest.EventSeverityEnum.INFO: EventRequest.EventSeverityEnum.valueOf(eventSeverity);
 
