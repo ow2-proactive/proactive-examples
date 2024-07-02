@@ -1,10 +1,6 @@
-
 import base64
-import json
 import logging
-import re
 import shutil
-import time
 import uuid
 import pandas as pd
 import requests
@@ -14,6 +10,7 @@ from os import makedirs
 from os.path import join, exists
 from PIL import Image
 from ast import literal_eval as make_tuple
+from duckduckgo_search import DDGS
 
 def raiser(msg): raise Exception(msg)
 
@@ -31,7 +28,7 @@ if 'variables' in locals():
     data_path = variables.get("DATA_FOLDER") if variables.get("DATA_FOLDER") else raiser("DATA_FOLDER not defined!")
     img_size =  variables.get("IMG_SIZE") if variables.get("IMG_SIZE") else raiser("IMG_SIZE not defined!")
 
-# Get an unique ID
+# Get a unique ID
 ID = str(uuid.uuid4())
 
 # Get image size
@@ -44,16 +41,11 @@ if exists(images_path):
 makedirs(images_path)
 print("images_path: " + images_path)
 
-
-def raiser(msg): raise Exception(msg)
-
-
 def get_thumbnail(path):
     i = Image.open(path)
     extension = i.format
     i.thumbnail((200, 200), Image.LANCZOS)
     return i, extension
-
 
 def image_base64(im):
     if isinstance(im, str):
@@ -62,29 +54,11 @@ def image_base64(im):
         im.save(buffer, extension)
         return base64.b64encode(buffer.getvalue()).decode()
 
-
 def image_formatter(im):
-    return f'<img src="data:image/extension;base64,{image_base64(im)}" height="img_size" width="img_size">'
+    return f'<img src="data:image/extension;base64,{image_base64(im)}" height="{img_size[1]}" width="{img_size[0]}">'
 
-
-#def image_formatter_url(im_url):
-#    return """<img src="{0}" height="100" width="100"/>""".format(im_url)
-
-
-def variables_get(name, default_value=None):
-    if 'variables' in locals():
-        if variables.get(name) is not None:
-            return variables.get(name)
-        else:
-            return default_value
-    else:
-        return default_value
-
-
-# search image from bing navigator
 def search_bing(query_size, search_term):
     # Bing API config
-    # https://docs.microsoft.com/en-us/azure/cognitive-services/bing-image-search/quickstarts/python
     subscription_key = "70b641bdd21647089d79c0ab0949ede1"
     search_url = "https://api.cognitive.microsoft.com/bing/v7.0/images/search"
 
@@ -98,111 +72,56 @@ def search_bing(query_size, search_term):
 
     return thumbnail_urls
 
-
-# Search image from DuckDuckGo navigator    
 def search_duckduckgo(query_size, search_term):
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
 
-    url = 'https://duckduckgo.com/'
-    thumbnail_image = []
-    list_size = query_size - 1
-    params = {
-        'q': search_term,
-    }
+    logger.debug("Using duckduckgo_search library for image search")
+    ddgs = DDGS()
 
-    logger.debug("Hitting DuckDuckGo for Token")
-
-    #   First make a request to above URL, and parse out the 'vqd'
-    #   This is a special token, which should be used in the subsequent request
-    res = requests.post(url, data=params)
-    search_obj = re.search(r'vqd=([\d-]+)\&', res.text, re.M | re.I)
-
-    if not search_obj:
-        logger.error("Token Parsing Failed !")
-        return -1
-
-    logger.debug("Obtained Token")
-
-    headers = {
-        'authority': 'duckduckgo.com',
-        'accept': 'application/json, text/javascript, */*; q=0.01',
-        'sec-fetch-dest': 'empty',
-        'x-requested-with': 'XMLHttpRequest',
-        'sec-fetch-site': 'same-origin',
-        'sec-fetch-mode': 'cors',
-        'referer': 'https://duckduckgo.com/',
-        'accept-language': 'en-US,en;q=0.9',
-    }
-
-    params = (
-        ('l', 'us-en'),
-        ('o', 'json'),
-        ('q', search_term),
-        ('vqd', search_obj.group(1)),
-        ('f', ',,,'),
-        ('p', '1'),
-        ('v7exp', 'a'),
-    )
-
-    request_url = url + "i.js"
-    logger.debug("Hitting Url : %s", request_url)
-
-    while True:
-        while True:
-            try:
-                res = requests.get(request_url, headers=headers, params=params)
-                data = json.loads(res.text)
-                break
-            except ValueError as e:
-                logger.debug("Hitting Url Failure - Sleep and Retry: %s", request_url)
-                time.sleep(5)
-                continue
-
-        logger.debug("Hitting Url Success : %s", request_url)
-
-        if list_size < query_size:
-            thumbnail_image += data["results"]
-        else:
-            break
-
-        if "next" not in data:
-            logger.debug("No Next Page - Exiting")
-            exit(0)
-
-        list_size = len(thumbnail_image)
-        request_url = url + data["next"]
-        thumbnail_img = thumbnail_image[0: query_size]
-        thumbnail_urls = [i['thumbnail'] for i in thumbnail_img if 'thumbnail' in i]
-
-    return thumbnail_urls
-
+    try:
+        results = ddgs.images(
+            keywords=search_term,
+            region="wt-wt",
+            safesearch="moderate",
+            max_results=query_size,
+        )
+        thumbnail_urls = [result['image'] for result in results]
+        return thumbnail_urls
+    except Exception as e:
+        logger.error(f"DuckDuckGo search failed: {e}")
+        return []
 
 # Check host site option
 thumbnail_urls = search_duckduckgo(query_size, search_term) \
     if search_engine == 'DuckDuckGo' else search_bing(query_size, search_term)
 
-# Create a image dataframe for preview
+# Check if thumbnail_urls is valid
+if not thumbnail_urls:
+    raiser("Failed to retrieve image URLs from DuckDuckGo and Bing.")
+
+# Create an image dataframe for preview
 images_df = pd.DataFrame(columns=['Images'])
 
 # Save images results
 idx = 1
-for i in range(len(thumbnail_urls)):
-    image_url = thumbnail_urls[i]
+for i, image_url in enumerate(thumbnail_urls):
     print(i, image_url)
-    # time.sleep(3)
-    image_data = requests.get(image_url)
-    image_data.raise_for_status()
-    image = Image.open(BytesIO(image_data.content))
-    image_path = join(images_path, str(idx) + ".jpg")
-    image.save(image_path)
-    images_df = images_df.append({'Images': image_path}, ignore_index=True)
-    idx = idx + 1
+    try:
+        image_data = requests.get(image_url)
+        image_data.raise_for_status()
+        image = Image.open(BytesIO(image_data.content))
+        image_path = join(images_path, f"{idx}.jpg")
+        image.save(image_path)
+        images_df = pd.concat([images_df, pd.DataFrame({'Images': [image_path]})], ignore_index=True)
+        idx += 1
+    except Exception as e:
+        logging.error(f"Failed to download or save image from {image_url}: {e}")
 print(images_df)
 
 # Convert dataframe to HTML for preview
 result = ''
-with pd.option_context('display.max_colwidth', -1):
+with pd.option_context('display.max_colwidth', None):
     result = images_df.to_html(
         escape=False,
         formatters=dict(Images=image_formatter),
