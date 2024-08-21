@@ -117,7 +117,7 @@ def getMLOpsDashboardPrometheusEndpointUrl(String sessionid, String proactiveUrl
     def prometheusEndpointUrl = mlopsEndpointUrl.replace("dashboard", "prometheus")
     println "prometheusEndpointUrl: $prometheusEndpointUrl"
     
-    return [prometheusEndpointUrl, instance_name]
+    return [prometheusEndpointUrl, instance_name, mlopsEndpointUrl]
 }
 
 // Usage example
@@ -150,9 +150,11 @@ prometheusEndpointUrl = results[0]
 println "prometheusEndpointUrl: $prometheusEndpointUrl"
 
 instanceName = results[1]
+mlopsEndpointUrl = results[2]
 
 variables.put("PROMETHEUS_ENDPOINT_URL", prometheusEndpointUrl)
 variables.put("INSTANCE_NAME", instanceName)
+variables.put("MLOPS_DASHBOARD_ENDPOINT_URL", mlopsEndpointUrl)
 ]]>
           </code>
         </script>
@@ -172,6 +174,7 @@ __file__ = variables.get("PA_TASK_NAME")
 print("BEGIN " + __file__)
 
 MLOPS_DASHBOARD_INSTANCE = variables.get('MLOPS_DASHBOARD_INSTANCE')
+MLOPS_DASHBOARD_ENDPOINT_URL = variables.get('MLOPS_DASHBOARD_ENDPOINT_URL')
 PROMETHEUS_ENDPOINT_URL = variables.get('PROMETHEUS_ENDPOINT_URL')
 MONITORING_SCOPE = variables.get('MONITORING_SCOPE')
 TIME_FRAME = variables.get('TIME_FRAME')
@@ -193,8 +196,11 @@ VALUE = variables.get('VALUE')
 MIN_VALUE = variables.get('MIN_VALUE')
 MAX_VALUE = variables.get('MAX_VALUE')
 TIMEZONE = variables.get('TIMEZONE')
+CURRENT_JOB_ID = variables.get('PA_JOB_ID')
+DRIFT_MONITORING_INSTANCE_ID = variables.get('DRIFT_MONITORING_INSTANCE_ID')
 
 print(f'{MLOPS_DASHBOARD_INSTANCE=}')
+print(f'{MLOPS_DASHBOARD_ENDPOINT_URL=}')
 print(f'{PROMETHEUS_ENDPOINT_URL=}')
 print(f'{MONITORING_SCOPE=}')
 print(f'{TIME_FRAME=}')
@@ -216,6 +222,8 @@ print(f'{VALUE=}')
 print(f'{MIN_VALUE=}')
 print(f'{MAX_VALUE=}')
 print(f'{TIMEZONE=}')
+print(f'{CURRENT_JOB_ID=}')
+print(f'{DRIFT_MONITORING_INSTANCE_ID=}')
 
 timeframe = {
     'Last 5 minutes':  ['5',  'minutes'],
@@ -366,7 +374,6 @@ def detect_outliers_static_threshold(timestamps, values, comparator, threshold_v
             detected = False
     return outliers
 
-
 ###############################################
 # OUTLIER DETECTION USING STATISTICAL THRESHOLD
 def detect_outliers_statistic_threshold(timestamps, values, threshold):
@@ -388,7 +395,6 @@ def detect_outliers_statistic_threshold(timestamps, values, threshold):
             print(f"[Statistical Threshold] Change detected in data stream at {timestamp}: {value}")
             outliers.append((timestamp, value))
     return outliers
-
 
 ######################################
 # OUTLIER DETECTION USING PAGE HINKLEY
@@ -412,7 +418,6 @@ def detect_outliers_page_hinkley(timestamps, values, min_instances, delta, thres
             print(f"[PageHinkley] Change detected in data stream at {timestamp}: {value}")
             outliers.append((timestamp, value))
     return outliers
-
 
 #################################
 # OUTLIER DETECTION USING HDDM_W
@@ -463,8 +468,6 @@ elif DRIFT_METHOD == 'Page-Hinkley':
     # Detect outliers using Page-Hinkley method
     outliers = detect_outliers_page_hinkley(metric_timestamp_vector, metric_value_vector, float(MIN_INSTANCES), float(DELTA), float(THRESHOLD), float(ALPHA))
 
-alert_message = ''
-
 # Determine the icon based on severity level
 if SEVERITY == 'WARNING':
     icon = '⚠️'
@@ -474,16 +477,30 @@ elif SEVERITY == 'ERROR':
     icon = '❌'  
 elif SEVERITY == 'CRITICAL':
     icon = '🚨'
-    
+
+alert_message = ''
+
 if outliers:
+    PA_CATALOG_REST_PUBLIC_URL = variables.get("PA_CATALOG_REST_PUBLIC_URL")
+    PA_AUTOMATION_DASHBOARD_PUBLIC_URL = PA_CATALOG_REST_PUBLIC_URL.replace("catalog", "automation-dashboard")
+    mlops_dashboard_drift_monitoring_url = f"{MLOPS_DASHBOARD_ENDPOINT_URL}Drift_Notification"
+    print(f'{mlops_dashboard_drift_monitoring_url=}')
+    job_url = f"{PA_AUTOMATION_DASHBOARD_PUBLIC_URL}/#/job-info?jobid={CURRENT_JOB_ID}"
+    # Common information outside the loop
+    common_info = [
+        f'<strong>{icon}</strong>',
+        f'Outlier detected by <b>{DRIFT_METHOD}</b> -'
+    ]
+    if MONITORING_SCOPE == 'Per Model Server' or MONITORING_SCOPE == 'Per Deployed Model':
+        common_info.append(f'Model Server ID: <u>{MODEL_SERVER_ID}</u>,')
+    if MONITORING_SCOPE == 'Per Deployed Model':
+        common_info.append(f'Model Name: <u>{MODEL_NAME}</u>,')
+    alert_message += ' '.join(common_info) + '<br>'
+    # Timestamps and values inside the loop
     for timestamp, value in outliers:
-        alert_message += (
-            '<strong>' + icon + '</strong> '
-            'Outlier detected by <b>' + str(DRIFT_METHOD) + '</b> - '
-            'Timestamp: <u>' + str(timestamp) + '</u>, '
-            'Value: <code>' + str(value) + '</code>'
-            '<br>'
-        )
+        alert_message += f'Timestamp: <u>{timestamp}</u> ({TIMEZONE}), Value: <code>{value}</code><br>'
+    alert_message += f'<a href="{mlops_dashboard_drift_monitoring_url}" target="_blank">Drift Monitoring Instance ID: {DRIFT_MONITORING_INSTANCE_ID}</a><br>'
+    alert_message += f'<a href="{job_url}" target="_blank">Job Details</a>'
     print(f'{alert_message=}')
 
 result = """
