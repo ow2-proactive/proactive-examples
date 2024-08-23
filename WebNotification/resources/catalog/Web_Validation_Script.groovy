@@ -1,5 +1,6 @@
 // Skip web validation (used for automatic workflow tests to skip manual validation)
 if (variables.get("SKIP_WEB_VALIDATION") && variables.get("SKIP_WEB_VALIDATION").toBoolean()) {
+    sleep(10000)
     println("Skipping web validation ...");
     return;
 }
