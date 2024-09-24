@@ -1,0 +1,917 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Copyright Activeeon 2007-2024. All rights reserved. --><job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MLOps_Data_Drift_Notification_Workflow" onTaskError="continueJobExecution" priority="normal" projectName="3. MLOps Model Server Workflows" tags="MLOps,Drift Detection,Notifications,Monitoring" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" description="The MLOps Dashboard instance that need to be monitored." hidden="false" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/tokens?name=PSA_mlops-dashboard.*)" name="MLOPS_DASHBOARD_INSTANCE" value=""/>
+    <variable advanced="false" description="It includes the global metrics and other performance indicators of the MLOps Dashboard, as it pertains to the ML models themselves, encompassing aspects such as model performance, accuracy, and fairness, which are continually assessed for any deviations from desired behavior." hidden="false" model="PA:LIST(Global, Per Model Server, Per Deployed Model)" name="MONITORING_SCOPE" value="Global"/>
+    <variable advanced="false" description="The temporal scope for the chosen drift detection algorithm, intended to encompass a particular historical period for analysis." hidden="false" model="PA:LIST(Last 5 minutes, Last 15 minutes, Last 30 minutes, Last 1 hour, Last 3 hours, Last 6 hours, Last 12 hours, Last 24 hours, Last 2 days, Last 7 days, Last 15 days, Last 30 days)" name="TIME_FRAME" value="Last 5 minutes"/>
+    <variable advanced="false" description="ID of the model server that need to be monitored." hidden="true" model="PA:INTEGER" name="MODEL_SERVER_ID" value="-1"/>
+    <variable advanced="false" description="Name of the model that need to be monitored." hidden="true" model="PA:NOT_EMPTY_STRING" name="MODEL_NAME" value="simple"/>
+    <variable advanced="false" hidden="true" model="PA:SPEL(variables['MONITORING_SCOPE'].toLowerCase() == 'per model server' ? showVar('MODEL_SERVER_ID') : hideVar('MODEL_SERVER_ID'))" name="PER_MODEL_SERVER_HANDLER" value=""/>
+    <variable advanced="false" hidden="true" model="PA:SPEL(variables['MONITORING_SCOPE'].toLowerCase() == 'per deployed model' ? showVar('MODEL_SERVER_ID') &amp;&amp; showVar('MODEL_NAME') : hideVar('MODEL_NAME'))" name="PER_MODEL_HANDLER" value=""/>
+    <variable description="It is used to determine whether a value meets a specified threshold." hidden="true" model="PA:LIST(less_than, less_or_equals_to, equals_to, higher_or_equals_to, higher_than)" name="COMPARATOR" value="higher_than"/>
+    <variable description="When the performance metrics dosen't meet the predefined threshold value, a notification will be automatically generated. It may also involve taking various actions like retraining the model." hidden="true" model="PA:DOUBLE" name="VALUE" value="0"/>
+    <variable advanced="false" description="The notification severity. Depending on the severity level, appropriate actions can be taken to address issues in a timely and effective manner." hidden="false" model="PA:LIST(INFO,WARNING,ERROR,CRITICAL)" name="SEVERITY" value="WARNING"/>
+    <variable advanced="false" description="Comma-separated list of channels which will be notified." hidden="false" model="PA:NOT_EMPTY_STRING" name="CHANNELS" value="mlops_dashboard"/>
+    <variable advanced="false" description="The notification message" hidden="true" model="PA:NOT_EMPTY_STRING" name="MESSAGE" value="This is a channel notification message"/>
+    <variable advanced="false" hidden="true" model="PA:SPEL( variables['MONITORING_SCOPE'] == 'Global'  &amp;&amp; variables['DRIFT_METHOD'] == 'Threshold based' ? t(models['METRIC'] = variables['GLOBAL_METRICS']) : (variables['MONITORING_SCOPE'] == 'Per Model Server' &amp;&amp; variables['DRIFT_METHOD'] == 'Threshold based' ? t(models['METRIC'] = variables['PER_MODEL_SERVER_METRICS']) : (variables['MONITORING_SCOPE'] == 'Per Deployed Model' &amp;&amp; variables['DRIFT_METHOD'] == 'Threshold based' ? t(models['METRIC'] = variables['PER_DEPLOYED_MODEL_METRICS']) : variables['DRIFT_METHOD'] == 'Interval Threshold based' ? hideVar('STATISTICAL_THRESHOLD') &amp;&amp; hideVar('DRIFT_CONFIDENCE') &amp;&amp; hideVar('MIN_INSTANCES') &amp;&amp; hideVar('DELTA') &amp;&amp; hideVar('THRESHOLD') &amp;&amp; hideVar('STATISTICAL_THRESHOLD') &amp;&amp; hideVar('ALPHA') &amp;&amp; hideVar('WARNING_CONFIDENCE') &amp;&amp; showVar('MIN_VALUE') &amp;&amp; showVar('MAX_VALUE') &amp;&amp; t(models['METRIC'] = variables['DRIFT_DETECTION_METRICS'])  : variables['DRIFT_METHOD'] == 'HDDM_W' ? hideVar('STATISTICAL_THRESHOLD') &amp;&amp; hideVar('MIN_VALUE') &amp;&amp; hideVar('MAX_VALUE') &amp;&amp; showVar('DRIFT_CONFIDENCE') &amp;&amp; showVar('WARNING_CONFIDENCE') &amp;&amp; t(models['METRIC'] = variables['DRIFT_DETECTION_METRICS'])  : variables['DRIFT_METHOD'] == 'Page-Hinkley' ? hideVar('MIN_INSTANCES') &amp;&amp; hideVar('MIN_VALUE') &amp;&amp; hideVar('MAX_VALUE') &amp;&amp; hideVar('DELTA') &amp;&amp; hideVar('THRESHOLD') &amp;&amp; hideVar('ALPHA') &amp;&amp; hideVar('STATISTICAL_THRESHOLD') &amp;&amp; hideVar('DRIFT_CONFIDENCE') &amp;&amp; hideVar('WARNING_CONFIDENCE') &amp;&amp; showVar('MIN_INSTANCES') &amp;&amp; showVar('DELTA') &amp;&amp; showVar('THRESHOLD') &amp;&amp; showVar('ALPHA') &amp;&amp; t(models['METRIC'] = variables['DRIFT_DETECTION_METRICS']) : variables['DRIFT_METHOD'] == 'Statistical threshold' ? hideVar('MIN_INSTANCES') &amp;&amp; hideVar('MIN_VALUE') &amp;&amp; hideVar('MAX_VALUE') &amp;&amp; hideVar('DELTA') &amp;&amp; hideVar('THRESHOLD') &amp;&amp; hideVar('ALPHA') &amp;&amp; hideVar('DRIFT_CONFIDENCE') &amp;&amp; hideVar('WARNING_CONFIDENCE') &amp;&amp; showVar('STATISTICAL_THRESHOLD') &amp;&amp; t(models['METRIC'] = variables['DRIFT_DETECTION_METRICS']): true)) )" name="METRIC_LISTS" value=""/>
+    <variable advanced="false" hidden="true" name="GLOBAL_METRICS" value="PA:LIST(avg_inference_time_ms, inference_rate_per_min)"/>
+    <variable advanced="false" hidden="true" name="PER_MODEL_SERVER_METRICS" value="PA:LIST(avg_inference_time_ms, inference_rate_per_min)"/>
+    <variable advanced="false" hidden="true" name="PER_DEPLOYED_MODEL_METRICS" value="PA:LIST(avg_inference_time_ms, inference_rate_per_min)"/>
+    <variable advanced="false" hidden="true" name="DRIFT_DETECTION_METRICS" value="PA:LIST(avg_inference_time_ms, inference_rate_per_min)"/>
+    <variable advanced="false" hidden="false" model="PA:LIST(Africa/Abidjan, Africa/Accra, Africa/Addis_Ababa, Africa/Algiers, Africa/Asmara, Africa/Asmera, Africa/Bamako, Africa/Bangui, Africa/Banjul, Africa/Bissau, Africa/Blantyre, Africa/Brazzaville, Africa/Bujumbura, Africa/Cairo, Africa/Casablanca, Africa/Ceuta, Africa/Conakry, Africa/Dakar, Africa/Dar_es_Salaam, Africa/Djibouti, Africa/Douala, Africa/El_Aaiun, Africa/Freetown, Africa/Gaborone, Africa/Harare, Africa/Johannesburg, Africa/Juba, Africa/Kampala, Africa/Khartoum, Africa/Kigali, Africa/Kinshasa, Africa/Lagos, Africa/Libreville, Africa/Lome, Africa/Luanda, Africa/Lubumbashi, Africa/Lusaka, Africa/Malabo, Africa/Maputo, Africa/Maseru, Africa/Mbabane, Africa/Mogadishu, Africa/Monrovia, Africa/Nairobi, Africa/Ndjamena, Africa/Niamey, Africa/Nouakchott, Africa/Ouagadougou, Africa/Porto-Novo, Africa/Sao_Tome, Africa/Timbuktu, Africa/Tripoli, Africa/Tunis, Africa/Windhoek, America/Adak, America/Anchorage, America/Anguilla, America/Antigua, America/Araguaina, America/Argentina/Buenos_Aires, America/Argentina/Catamarca, America/Argentina/ComodRivadavia, America/Argentina/Cordoba, America/Argentina/Jujuy, America/Argentina/La_Rioja, America/Argentina/Mendoza, America/Argentina/Rio_Gallegos, America/Argentina/Salta, America/Argentina/San_Juan, America/Argentina/San_Luis, America/Argentina/Tucuman, America/Argentina/Ushuaia, America/Aruba, America/Asuncion, America/Atikokan, America/Atka, America/Bahia, America/Bahia_Banderas, America/Barbados, America/Belem, America/Belize, America/Blanc-Sablon, America/Boa_Vista, America/Bogota, America/Boise, America/Buenos_Aires, America/Cambridge_Bay, America/Campo_Grande, America/Cancun, America/Caracas, America/Catamarca, America/Cayenne, America/Cayman, America/Chicago, America/Chihuahua, America/Ciudad_Juarez, America/Coral_Harbour, America/Cordoba, America/Costa_Rica, America/Creston, America/Cuiaba, America/Curacao, America/Danmarkshavn, America/Dawson, America/Dawson_Creek, America/Denver, America/Detroit, America/Dominica, America/Edmonton, America/Eirunepe, America/El_Salvador, America/Ensenada, America/Fort_Nelson, America/Fort_Wayne, America/Fortaleza, America/Glace_Bay, America/Godthab, America/Goose_Bay, America/Grand_Turk, America/Grenada, America/Guadeloupe, America/Guatemala, America/Guayaquil, America/Guyana, America/Halifax, America/Havana, America/Hermosillo, America/Indiana/Indianapolis, America/Indiana/Knox, America/Indiana/Marengo, America/Indiana/Petersburg, America/Indiana/Tell_City, America/Indiana/Vevay, America/Indiana/Vincennes, America/Indiana/Winamac, America/Indianapolis, America/Inuvik, America/Iqaluit, America/Jamaica, America/Jujuy, America/Juneau, America/Kentucky/Louisville, America/Kentucky/Monticello, America/Knox_IN, America/Kralendijk, America/La_Paz, America/Lima, America/Los_Angeles, America/Louisville, America/Lower_Princes, America/Maceio, America/Managua, America/Manaus, America/Marigot, America/Martinique, America/Matamoros, America/Mazatlan, America/Mendoza, America/Menominee, America/Merida, America/Metlakatla, America/Mexico_City, America/Miquelon, America/Moncton, America/Monterrey, America/Montevideo, America/Montreal, America/Montserrat, America/Nassau, America/New_York, America/Nipigon, America/Nome, America/Noronha, America/North_Dakota/Beulah, America/North_Dakota/Center, America/North_Dakota/New_Salem, America/Nuuk, America/Ojinaga, America/Panama, America/Pangnirtung, America/Paramaribo, America/Phoenix, America/Port-au-Prince, America/Port_of_Spain, America/Porto_Acre, America/Porto_Velho, America/Puerto_Rico, America/Punta_Arenas, America/Rainy_River, America/Rankin_Inlet, America/Recife, America/Regina, America/Resolute, America/Rio_Branco, America/Rosario, America/Santa_Isabel, America/Santarem, America/Santiago, America/Santo_Domingo, America/Sao_Paulo, America/Scoresbysund, America/Shiprock, America/Sitka, America/St_Barthelemy, America/St_Johns, America/St_Kitts, America/St_Lucia, America/St_Thomas, America/St_Vincent, America/Swift_Current, America/Tegucigalpa, America/Thule, America/Thunder_Bay, America/Tijuana, America/Toronto, America/Tortola, America/Vancouver, America/Virgin, America/Whitehorse, America/Winnipeg, America/Yakutat, America/Yellowknife, Antarctica/Casey, Antarctica/Davis, Antarctica/DumontDUrville, Antarctica/Macquarie, Antarctica/Mawson, Antarctica/McMurdo, Antarctica/Palmer, Antarctica/Rothera, Antarctica/South_Pole, Antarctica/Syowa, Antarctica/Troll, Antarctica/Vostok, Arctic/Longyearbyen, Asia/Aden, Asia/Almaty, Asia/Amman, Asia/Anadyr, Asia/Aqtau, Asia/Aqtobe, Asia/Ashgabat, Asia/Ashkhabad, Asia/Atyrau, Asia/Baghdad, Asia/Bahrain, Asia/Baku, Asia/Bangkok, Asia/Barnaul, Asia/Beirut, Asia/Bishkek, Asia/Brunei, Asia/Calcutta, Asia/Chita, Asia/Choibalsan, Asia/Chongqing, Asia/Chungking, Asia/Colombo, Asia/Dacca, Asia/Damascus, Asia/Dhaka, Asia/Dili, Asia/Dubai, Asia/Dushanbe, Asia/Famagusta, Asia/Gaza, Asia/Harbin, Asia/Hebron, Asia/Ho_Chi_Minh, Asia/Hong_Kong, Asia/Hovd, Asia/Irkutsk, Asia/Istanbul, Asia/Jakarta, Asia/Jayapura, Asia/Jerusalem, Asia/Kabul, Asia/Kamchatka, Asia/Karachi, Asia/Kashgar, Asia/Kathmandu, Asia/Katmandu, Asia/Khandyga, Asia/Kolkata, Asia/Krasnoyarsk, Asia/Kuala_Lumpur, Asia/Kuching, Asia/Kuwait, Asia/Macao, Asia/Macau, Asia/Magadan, Asia/Makassar, Asia/Manila, Asia/Muscat, Asia/Nicosia, Asia/Novokuznetsk, Asia/Novosibirsk, Asia/Omsk, Asia/Oral, Asia/Phnom_Penh, Asia/Pontianak, Asia/Pyongyang, Asia/Qatar, Asia/Qostanay, Asia/Qyzylorda, Asia/Rangoon, Asia/Riyadh, Asia/Saigon, Asia/Sakhalin, Asia/Samarkand, Asia/Seoul, Asia/Shanghai, Asia/Singapore, Asia/Srednekolymsk, Asia/Taipei, Asia/Tashkent, Asia/Tbilisi, Asia/Tehran, Asia/Tel_Aviv, Asia/Thimbu, Asia/Thimphu, Asia/Tokyo, Asia/Tomsk, Asia/Ujung_Pandang, Asia/Ulaanbaatar, Asia/Ulan_Bator, Asia/Urumqi, Asia/Ust-Nera, Asia/Vientiane, Asia/Vladivostok, Asia/Yakutsk, Asia/Yangon, Asia/Yekaterinburg, Asia/Yerevan, Atlantic/Azores, Atlantic/Bermuda, Atlantic/Canary, Atlantic/Cape_Verde, Atlantic/Faeroe, Atlantic/Faroe, Atlantic/Jan_Mayen, Atlantic/Madeira, Atlantic/Reykjavik, Atlantic/South_Georgia, Atlantic/St_Helena, Atlantic/Stanley, Australia/ACT, Australia/Adelaide, Australia/Brisbane, Australia/Broken_Hill, Australia/Canberra, Australia/Currie, Australia/Darwin, Australia/Eucla, Australia/Hobart, Australia/LHI, Australia/Lindeman, Australia/Lord_Howe, Australia/Melbourne, Australia/NSW, Australia/North, Australia/Perth, Australia/Queensland, Australia/South, Australia/Sydney, Australia/Tasmania, Australia/Victoria, Australia/West, Australia/Yancowinna, Brazil/Acre, Brazil/DeNoronha, Brazil/East, Brazil/West, CET, CST6CDT, Canada/Atlantic, Canada/Central, Canada/Eastern, Canada/Mountain, Canada/Newfoundland, Canada/Pacific, Canada/Saskatchewan, Canada/Yukon, Chile/Continental, Chile/EasterIsland, Cuba, EET, EST, EST5EDT, Egypt, Eire, Etc/GMT, Etc/GMT+0, Etc/GMT+1, Etc/GMT+10, Etc/GMT+11, Etc/GMT+12, Etc/GMT+2, Etc/GMT+3, Etc/GMT+4, Etc/GMT+5, Etc/GMT+6, Etc/GMT+7, Etc/GMT+8, Etc/GMT+9, Etc/GMT-0, Etc/GMT-1, Etc/GMT-10, Etc/GMT-11, Etc/GMT-12, Etc/GMT-13, Etc/GMT-14, Etc/GMT-2, Etc/GMT-3, Etc/GMT-4, Etc/GMT-5, Etc/GMT-6, Etc/GMT-7, Etc/GMT-8, Etc/GMT-9, Etc/GMT0, Etc/Greenwich, Etc/UCT, Etc/UTC, Etc/Universal, Etc/Zulu, Europe/Amsterdam, Europe/Andorra, Europe/Astrakhan, Europe/Athens, Europe/Belfast, Europe/Belgrade, Europe/Berlin, Europe/Bratislava, Europe/Brussels, Europe/Bucharest, Europe/Budapest, Europe/Busingen, Europe/Chisinau, Europe/Copenhagen, Europe/Dublin, Europe/Gibraltar, Europe/Guernsey, Europe/Helsinki, Europe/Isle_of_Man, Europe/Istanbul, Europe/Jersey, Europe/Kaliningrad, Europe/Kiev, Europe/Kirov, Europe/Kyiv, Europe/Lisbon, Europe/Ljubljana, Europe/London, Europe/Luxembourg, Europe/Madrid, Europe/Malta, Europe/Mariehamn, Europe/Minsk, Europe/Monaco, Europe/Moscow, Europe/Nicosia, Europe/Oslo, Europe/Paris, Europe/Podgorica, Europe/Prague, Europe/Riga, Europe/Rome, Europe/Samara, Europe/San_Marino, Europe/Sarajevo, Europe/Saratov, Europe/Simferopol, Europe/Skopje, Europe/Sofia, Europe/Stockholm, Europe/Tallinn, Europe/Tirane, Europe/Tiraspol, Europe/Ulyanovsk, Europe/Uzhgorod, Europe/Vaduz, Europe/Vatican, Europe/Vienna, Europe/Vilnius, Europe/Volgograd, Europe/Warsaw, Europe/Zagreb, Europe/Zaporozhye, Europe/Zurich, GB, GB-Eire, GMT, GMT+0, GMT-0, GMT0, Greenwich, HST, Hongkong, Iceland, Indian/Antananarivo, Indian/Chagos, Indian/Christmas, Indian/Cocos, Indian/Comoro, Indian/Kerguelen, Indian/Mahe, Indian/Maldives, Indian/Mauritius, Indian/Mayotte, Indian/Reunion, Iran, Israel, Jamaica, Japan, Kwajalein, Libya, MET, MST, MST7MDT, Mexico/BajaNorte, Mexico/BajaSur, Mexico/General, NZ, NZ-CHAT, Navajo, PRC, PST8PDT, Pacific/Apia, Pacific/Auckland, Pacific/Bougainville, Pacific/Chatham, Pacific/Chuuk, Pacific/Easter, Pacific/Efate, Pacific/Enderbury, Pacific/Fakaofo, Pacific/Fiji, Pacific/Funafuti, Pacific/Galapagos, Pacific/Gambier, Pacific/Guadalcanal, Pacific/Guam, Pacific/Honolulu, Pacific/Johnston, Pacific/Kanton, Pacific/Kiritimati, Pacific/Kosrae, Pacific/Kwajalein, Pacific/Majuro, Pacific/Marquesas, Pacific/Midway, Pacific/Nauru, Pacific/Niue, Pacific/Norfolk, Pacific/Noumea, Pacific/Pago_Pago, Pacific/Palau, Pacific/Pitcairn, Pacific/Pohnpei, Pacific/Ponape, Pacific/Port_Moresby, Pacific/Rarotonga, Pacific/Saipan, Pacific/Samoa, Pacific/Tahiti, Pacific/Tarawa, Pacific/Tongatapu, Pacific/Truk, Pacific/Wake, Pacific/Wallis, Pacific/Yap, Poland, Portugal, ROC, ROK, Singapore, Turkey, UCT, US/Alaska, US/Aleutian, US/Arizona, US/Central, US/East-Indiana, US/Eastern, US/Hawaii, US/Indiana-Starke, US/Michigan, US/Mountain, US/Pacific, US/Samoa, UTC, Universal, W-SU, WET, Zulu)" name="TIMEZONE" value="Europe/Paris"/>
+  </variables>
+  <description>
+    <![CDATA[ This workflow integrates data drift detection algorithms to identify shifts in the data distribution that could affect the performance of deployed models. When data drift is detected, notifications are automatically triggered and displayed on both the MLOps Dashboard and the Automation Dashboard. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="ai-mlops-dashboard"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/model_server.png"/>
+<info name="Documentation" value="PAIO/PAIOUserGuide.html#_mlops_dashboard"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Perform_Drift_Detection" preciousResult="true">
+      <variables>
+        <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" inherited="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
+        <variable advanced="true" description="Name of the container image being used to run the workflow tasks." group="Container Parameters" hidden="false" inherited="false" model="PA:LIST(docker://activeeon/driftdetection)" name="CONTAINER_IMAGE" value="docker://activeeon/driftdetection"/>
+        <variable advanced="true" description="If True, containers will run based on images containing libraries that are compatible with GPU." group="Container Parameters" hidden="false" inherited="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="false"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_branch"/>
+      </genericInformation>
+      <forkEnvironment javaHome="/usr">
+        <envScript>
+          <script>
+            <file language="groovy" url="${PA_CATALOG_REST_URL}/buckets/scripts/resources/fork_env_ai/raw"/>
+          </script>
+        </envScript>
+      </forkEnvironment>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.io.FileType
+import com.google.common.base.Splitter
+import org.ow2.proactive.scheduler.common.job.JobVariable
+import groovy.json.JsonSlurper
+import java.net.URL
+
+def getMLOpsDashboardPrometheusEndpointUrl(String sessionid, String proactiveUrl, String mlopsDashboardToken, String instanceId) {
+    // Define headers
+    def headers = ['sessionid': sessionid]
+
+    // Define base URL
+    def baseUrl = "$proactiveUrl/cloud-automation-service/serviceInstances/active"
+
+    // Create URL object
+    def url = new URL(baseUrl)
+
+    // Open connection
+    def connection = url.openConnection()
+
+    // Set headers
+    headers.each { key, value ->
+        connection.setRequestProperty(key, value)
+    }
+
+    // Get response
+    def response
+    try {
+        response = connection.getInputStream()
+    } catch (Exception e) {
+        println "Error: Unable to connect to $baseUrl"
+        return [null, null]
+    }
+
+    // Parse JSON response
+    def json = new JsonSlurper().parseText(response.text)
+    // println "json: $json"
+    
+    // Get instance name given its id
+    def instance_name = ""
+    if (instanceId != "-1") {
+        instance_name = json.find{it.instance_id == instanceId.toInteger()}?.variables.INSTANCE_NAME
+    }
+
+    // Fetch MLOPS_ENDPOINT_ID
+    def mlopsDashboardEndpointID = json.variables.find{ it.PSA_TOKEN == mlopsDashboardToken }?.ENDPOINT_ID
+    // println "mlops endpoint id: $mlopsDashboardEndpointID"
+    
+    // Fetch MLOPS_DASHBOARD_URL & Get PROMETHEUS ENDPOINT URL
+    def mlopsEndpointUrl = json.deployments.endpoint.flatten().find{ it.id.contains(mlopsDashboardEndpointID) }?.url
+    println "mlopsEndpointUrl: $mlopsEndpointUrl"
+    
+    def prometheusEndpointUrl = mlopsEndpointUrl.replace("dashboard", "prometheus")
+    println "prometheusEndpointUrl: $prometheusEndpointUrl"
+    
+    return [prometheusEndpointUrl, instance_name, mlopsEndpointUrl]
+}
+
+// Usage example
+schedulerapi.connect()
+connectionInfo = schedulerapi.getConnectionInfo()
+ciLogin = connectionInfo.getLogin()
+ciPasswd = connectionInfo.getPassword()
+String ciUrl = connectionInfo.getUrl()
+def sessionId = schedulerapi.getSession()
+
+user_credentials = [
+    sessionId: sessionId,
+    ciLogin: ciLogin,
+    ciPasswd: ciPasswd,
+    ciUrl: ciUrl
+]
+
+def url = new URL(ciUrl)
+def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
+def mlopsDashboardToken = variables.get("MLOPS_DASHBOARD_INSTANCE")
+
+println "mlopsDashboardToken: $mlopsDashboardToken"
+
+def instanceId = variables.get("MODEL_SERVER_ID")
+println "MODEL_SERVER_ID: $instanceId"
+
+results = getMLOpsDashboardPrometheusEndpointUrl(sessionId, proactiveUrl, mlopsDashboardToken, instanceId)
+println "results: $results"
+prometheusEndpointUrl = results[0]
+println "prometheusEndpointUrl: $prometheusEndpointUrl"
+
+instanceName = results[1]
+mlopsEndpointUrl = results[2]
+
+variables.put("PROMETHEUS_ENDPOINT_URL", prometheusEndpointUrl)
+variables.put("INSTANCE_NAME", instanceName)
+variables.put("MLOPS_DASHBOARD_ENDPOINT_URL", mlopsEndpointUrl)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="cpython">
+            <![CDATA[
+import numpy as np
+import pandas as pd
+import pytz
+import requests
+
+from datetime import datetime, timedelta
+from prometheus_api_client import PrometheusConnect
+
+__file__ = variables.get("PA_TASK_NAME")
+print("BEGIN " + __file__)
+
+MLOPS_DASHBOARD_INSTANCE = variables.get('MLOPS_DASHBOARD_INSTANCE')
+MLOPS_DASHBOARD_ENDPOINT_URL = variables.get('MLOPS_DASHBOARD_ENDPOINT_URL')
+PROMETHEUS_ENDPOINT_URL = variables.get('PROMETHEUS_ENDPOINT_URL')
+MONITORING_SCOPE = variables.get('MONITORING_SCOPE')
+TIME_FRAME = variables.get('TIME_FRAME')
+MODEL_SERVER_ID = variables.get('MODEL_SERVER_ID')
+INSTANCE_NAME = variables.get('INSTANCE_NAME')
+MODEL_NAME = variables.get('MODEL_NAME')
+METRIC = variables.get('METRIC')
+SEVERITY = variables.get('SEVERITY')
+DRIFT_METHOD = variables.get('DRIFT_METHOD')
+DRIFT_CONFIDENCE = variables.get('DRIFT_CONFIDENCE')
+WARNING_CONFIDENCE = variables.get('WARNING_CONFIDENCE')
+MIN_INSTANCES = variables.get('MIN_INSTANCES')
+DELTA = variables.get('DELTA')
+THRESHOLD = variables.get('THRESHOLD')
+ALPHA = variables.get('ALPHA')
+STATISTICAL_THRESHOLD = variables.get('STATISTICAL_THRESHOLD')
+COMPARATOR = variables.get('COMPARATOR')
+VALUE = variables.get('VALUE')
+MIN_VALUE = variables.get('MIN_VALUE')
+MAX_VALUE = variables.get('MAX_VALUE')
+TIMEZONE = variables.get('TIMEZONE')
+CURRENT_JOB_ID = variables.get('PA_JOB_ID')
+DRIFT_MONITORING_INSTANCE_ID = variables.get('DRIFT_MONITORING_INSTANCE_ID')
+DRIFT_MONITORING_TASK_ID = variables.get('TASK_ID')
+
+print(f'{MLOPS_DASHBOARD_INSTANCE=}')
+print(f'{MLOPS_DASHBOARD_ENDPOINT_URL=}')
+print(f'{PROMETHEUS_ENDPOINT_URL=}')
+print(f'{MONITORING_SCOPE=}')
+print(f'{TIME_FRAME=}')
+print(f'{MODEL_SERVER_ID=}')
+print(f'{INSTANCE_NAME=}')
+print(f'{MODEL_NAME=}')
+print(f'{METRIC=}')
+print(f'{SEVERITY=}')
+print(f'{DRIFT_METHOD=}')
+print(f'{DRIFT_CONFIDENCE=}')
+print(f'{WARNING_CONFIDENCE=}')
+print(f'{MIN_INSTANCES=}')
+print(f'{DELTA=}')
+print(f'{THRESHOLD=}')
+print(f'{ALPHA=}')
+print(f'{STATISTICAL_THRESHOLD=}')
+print(f'{COMPARATOR=}')
+print(f'{VALUE=}')
+print(f'{MIN_VALUE=}')
+print(f'{MAX_VALUE=}')
+print(f'{TIMEZONE=}')
+print(f'{CURRENT_JOB_ID=}')
+print(f'{DRIFT_MONITORING_INSTANCE_ID=}')
+print(f'{DRIFT_MONITORING_TASK_ID=}')
+
+timeframe = {
+    'Last 5 minutes':  ['5',  'minutes'],
+    'Last 15 minutes': ['15', 'minutes'],
+    'Last 30 minutes': ['30', 'minutes'],
+    'Last 1 hour':   ['1', 'hours'],
+    'Last 3 hours':  ['3', 'hours'],
+    'Last 6 hours':  ['6', 'hours'],
+    'Last 12 hours': ['12', 'hours'],
+    'Last 24 hours': ['1', 'days'],
+    'Last 2 days':  ['2',  'days'],
+    'Last 7 days':  ['7',  'days'],
+    'Last 5 days':  ['5',  'days'],
+    'Last 30 days': ['30', 'days'],
+}
+
+# Define metric queries
+global_metric_queries = {
+    'avg_inference_time_ms': '(avg(rate(nv_inference_compute_infer_duration_us{job="triton"}[1m])!=0))/1000',
+    'inference_rate_per_min': '(avg(rate(nv_inference_count{job="triton"}[1m])*60!= 0))'
+}
+
+per_model_server_metric_queries = {
+    'avg_inference_time_ms': '(avg(rate(nv_inference_compute_infer_duration_us{job="triton", instance_name="'+INSTANCE_NAME+'"}[1m])!=0))/1000',
+    'inference_rate_per_min': '(avg(rate(nv_inference_count{job="triton", instance_name="'+INSTANCE_NAME+'"}[1m])*60!= 0))'
+}
+
+per_deployed_model_metric_queries = {
+    'avg_inference_time_ms': '(avg(rate(nv_inference_compute_infer_duration_us{job="triton", instance_name="'+INSTANCE_NAME+'", model="'+MODEL_NAME+'"}[1m])!=0))/1000',
+    'inference_rate_per_min': '(avg(rate(nv_inference_count{job="triton", instance_name="'+INSTANCE_NAME+'", model="'+MODEL_NAME+'"}[1m])*60!= 0))'
+}
+
+def get_utc_offsets():
+    now = datetime.now()
+    utc_offsets = {}
+    for tz_name in pytz.all_timezones:
+        # Get the timezone object
+        tz = pytz.timezone(tz_name)
+        # Get the UTC offset for the current datetime
+        utc_offset = tz.utcoffset(now)
+        # Convert UTC offset to hours (rounded to the nearest integer)
+        utc_offset_hours = round(utc_offset.total_seconds() / 3600)
+        utc_offsets[tz_name] = int(utc_offset_hours)
+    return utc_offsets
+
+def query_prometheus(prometheus_url, promql_query, timeframe, timezone):
+    # Get up to date utc offsets 
+    utc_offsets = get_utc_offsets()
+    # Create a PrometheusConnect object with SSL verification disabled
+    prom = PrometheusConnect(url=prometheus_url, disable_ssl=True)
+    # Define the time range
+    end_time = datetime.now()
+    if timeframe[1] == 'minutes':
+        start_time = end_time - timedelta(minutes = int(timeframe[0]))
+    elif timeframe[1] == 'hours':
+        start_time = end_time - timedelta(hours = int(timeframe[0]))
+    elif timeframe[1] == 'days':
+        start_time = end_time - timedelta(days = int(timeframe[0]))
+    # Print the PromQL query
+    print(f'{promql_query=}')
+    # Execute the query with the time range
+    result = prom.custom_query_range(promql_query, start_time, end_time, step="1m")
+    if not result:
+        print("Warning: No data returned from Prometheus query.")
+        return [], [], []
+    # Print the result
+    # for time_series in result:
+    #     # metric = time_series['metric']
+    #     values = time_series['values']
+    #     formatted_values = [(datetime.utcfromtimestamp(value[0]).strftime('%Y-%m-%d %H:%M:%S'), value[1]) for value in values]
+    #     print(f"{formatted_values}")
+    # Add an if statement to check whether the variable result isn't empty
+    metric_timestamp_vector = []
+    utc_offset = utc_offsets.get(timezone)
+    time_series = result[0]
+    time_series = time_series['values']
+    for cols in time_series:
+        timestamp = int(cols[0])
+        metric_timestamp = datetime.utcfromtimestamp(timestamp)
+        adjusted_timestamp = metric_timestamp + timedelta(hours=utc_offset)
+        adjusted_timestamp_str = adjusted_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        metric_timestamp_vector.append(adjusted_timestamp_str)
+        metric_value = float(cols[1])
+        print(f"{adjusted_timestamp_str} {metric_value}")
+    metric_vector = [(adjusted_timestamp_str, cols[1]) for adjusted_timestamp_str, cols in zip(metric_timestamp_vector, time_series)]
+    #metric_timestamp_vector = [datetime.utcfromtimestamp(cols[0]).strftime('%Y-%m-%d %H:%M:%S') for cols in time_series]
+    metric_value_vector = [float(cols[1]) for cols in time_series]
+    # print(f"\n{metric_vector=}\n")
+    # print(f"\n{metric_timestamp_vector=}\n")
+    # print(f"\n{metric_value_vector=}\n")
+    return metric_vector, metric_timestamp_vector, metric_value_vector
+
+###############################################
+# OUTLIER DETECTION USING STATIC INTERVAL
+def detect_outliers_static_interval_threshold(timestamps, values, min_value, max_value):
+    """
+    Detects outliers in the metric values based on the static comparison.
+    :param timestamps: List of timestamps corresponding to the metric values.
+    :param values: List of metric values.
+    :param min_value: Minimum cutoff value.
+    :param max_value: Maximum cutoff value.
+    :return: A list of tuples containing the timestamp and value of each outlier.
+    """
+    # Convert values to a numpy array
+    values = np.array(values, dtype=np.float32)
+    # Identify outliers
+    outliers = []
+    detected = False
+    for timestamp, value in zip(timestamps, values):
+        if value < min_value or value > max_value:
+            detected = True
+        if detected:
+            print(f"[Static Interval Threshold] Change detected in data stream at {timestamp}: {value}")
+            outliers.append((timestamp, value))
+            detected = False
+    return outliers
+
+###############################################
+# OUTLIER DETECTION USING STATIC THRESHOLD
+def detect_outliers_static_threshold(timestamps, values, comparator, threshold_value):
+    """
+    Detects outliers in the metric values based on the static comparison.
+    :param timestamps: List of timestamps corresponding to the metric values.
+    :param values: List of metric values.
+    :param comparator: Type of comparison used as the cutoff.
+    :param threshold_value: The threshold value used as the cutoff.
+    :return: A list of tuples containing the timestamp and value of each outlier.
+    """
+    # Convert values to a numpy array
+    values = np.array(values, dtype=np.float32)
+    # Identify outliers
+    outliers = []
+    detected = False
+    for timestamp, value in zip(timestamps, values):
+        if comparator == 'less_than' and value < threshold_value:
+            detected = True
+        if comparator == 'less_or_equals_to' and value <= threshold_value:
+            detected = True
+        if comparator == 'equals_to' and value == threshold_value:
+            detected = True
+        if comparator == 'higher_or_equals_to' and value >= threshold_value:
+            detected = True
+        if comparator == 'higher_than' and value > threshold_value:
+            detected = True
+        if detected:
+            print(f"[Static Threshold] Change detected in data stream at {timestamp}: {value}")
+            outliers.append((timestamp, value))
+            detected = False
+    return outliers
+
+###############################################
+# OUTLIER DETECTION USING STATISTICAL THRESHOLD
+def detect_outliers_statistic_threshold(timestamps, values, threshold):
+    """
+    Detects outliers in the metric values based on the standard deviation.
+    :param timestamps: List of timestamps corresponding to the metric values.
+    :param values: List of metric values.
+    :param threshold: The number of standard deviations to use as the cutoff. Default is 2.
+    :return: A list of tuples containing the timestamp and value of each outlier.
+    """
+    # Convert values to a numpy array and compute mean and standard deviation
+    values = np.array(values, dtype=np.float32)
+    mean = np.mean(values)
+    std_dev = np.std(values)
+    # Identify outliers
+    outliers = []
+    for timestamp, value in zip(timestamps, values):
+        if abs(value - mean) > threshold * std_dev:
+            print(f"[Statistical Threshold] Change detected in data stream at {timestamp}: {value}")
+            outliers.append((timestamp, value))
+    return outliers
+
+######################################
+# OUTLIER DETECTION USING PAGE HINKLEY
+def detect_outliers_page_hinkley(timestamps, values, min_instances, delta, threshold, alpha):
+    """
+    Detects outliers in the metric values using the Page-Hinkley method.
+    :param timestamps: List of timestamps corresponding to the metric values.
+    :param values: List of metric values.
+    :param min_instances: Minimum number of instances before detecting change. Default is 30.
+    :param delta: Magnitude of change that will cause a signal. Default is 0.005.
+    :param threshold: Threshold for the Page-Hinkley test. Default is 50.
+    :param alpha: Forgetting factor, it determines the weight given to newer data. Default is 0.9999.
+    :return: A list of tuples containing the timestamp and value of each outlier.
+    """
+    from skmultiflow.drift_detection import PageHinkley
+    ph = PageHinkley(min_instances=min_instances, delta=delta, threshold=threshold, alpha=alpha)
+    outliers = []
+    for timestamp, value in zip(timestamps, values):
+        ph.add_element(value)
+        if ph.detected_change():
+            print(f"[PageHinkley] Change detected in data stream at {timestamp}: {value}")
+            outliers.append((timestamp, value))
+    return outliers
+
+#################################
+# OUTLIER DETECTION USING HDDM_W
+def detect_outliers_hddm_w(timestamps, values, drift_confidence, warning_confidence):
+    """
+    Detects outliers in the metric values using the HDDM_W method.
+    :param timestamps: List of timestamps corresponding to the metric values.
+    :param values: List of metric values.
+    :param drift_confidence: Confidence level for drift detection. Default is 0.001.
+    :param warning_confidence: Confidence level for warning detection. Default is 0.005.
+    :return: A list of tuples containing the timestamp and value of each outlier.
+    """
+    from skmultiflow.drift_detection.hddm_w import HDDM_W
+    hddm_w = HDDM_W(drift_confidence=drift_confidence, warning_confidence=warning_confidence)
+    outliers = []
+    for timestamp, value in zip(timestamps, values):
+        hddm_w.add_element(value)
+        if hddm_w.in_warning_zone:
+            print(f"[HDDM_W] Warning zone detected at {timestamp}: {value}")
+        if hddm_w.detected_change():
+            print(f"[HDDM_W] Change detected in data stream at {timestamp}: {value}")
+            outliers.append((timestamp, value))
+    return outliers
+
+# Get metrics from Prometheus
+if MONITORING_SCOPE == 'Global':
+    _, metric_timestamp_vector, metric_value_vector = query_prometheus(PROMETHEUS_ENDPOINT_URL, global_metric_queries[METRIC], timeframe[TIME_FRAME], TIMEZONE)
+elif MONITORING_SCOPE == 'Per Model Server':
+    _, metric_timestamp_vector, metric_value_vector = query_prometheus(PROMETHEUS_ENDPOINT_URL, per_model_server_metric_queries[METRIC], timeframe[TIME_FRAME], TIMEZONE)
+else:
+    _, metric_timestamp_vector, metric_value_vector = query_prometheus(PROMETHEUS_ENDPOINT_URL, per_deployed_model_metric_queries[METRIC], timeframe[TIME_FRAME], TIMEZONE)
+
+outliers = []
+# Apply drift detection method on the time series data
+if DRIFT_METHOD == 'Interval Threshold based':
+    # Detect outliers using static interval threshold
+    outliers = detect_outliers_static_interval_threshold(metric_timestamp_vector, metric_value_vector, float(MIN_VALUE), float(MAX_VALUE))
+if DRIFT_METHOD == 'Threshold based':
+    # Detect outliers using static threshold
+    outliers = detect_outliers_static_threshold(metric_timestamp_vector, metric_value_vector, COMPARATOR, float(VALUE))
+elif DRIFT_METHOD == 'Statistical threshold':
+    # Detect outliers using statistical threshold
+    outliers = detect_outliers_statistic_threshold(metric_timestamp_vector, metric_value_vector, float(STATISTICAL_THRESHOLD))
+elif DRIFT_METHOD == 'HDDM_W':
+    # Detect outliers using HDDM_W method
+    outliers = detect_outliers_hddm_w(metric_timestamp_vector, metric_value_vector, float(DRIFT_CONFIDENCE), float(WARNING_CONFIDENCE))
+elif DRIFT_METHOD == 'Page-Hinkley':
+    # Detect outliers using Page-Hinkley method
+    outliers = detect_outliers_page_hinkley(metric_timestamp_vector, metric_value_vector, float(MIN_INSTANCES), float(DELTA), float(THRESHOLD), float(ALPHA))
+
+# Determine the icon based on severity level
+if SEVERITY == 'WARNING':
+    icon = '⚠️'
+elif SEVERITY == 'INFO':
+    icon = 'ℹ️'
+elif SEVERITY == 'ERROR':
+    icon = '❌'  
+elif SEVERITY == 'CRITICAL':
+    icon = '🚨'
+
+alert_message = ''
+result = ''
+
+if outliers:
+    PA_CATALOG_REST_PUBLIC_URL = variables.get("PA_CATALOG_REST_PUBLIC_URL")
+    PA_AUTOMATION_DASHBOARD_PUBLIC_URL = PA_CATALOG_REST_PUBLIC_URL.replace("catalog", "automation-dashboard")
+    mlops_dashboard_drift_monitoring_url = f"{MLOPS_DASHBOARD_ENDPOINT_URL}Drift_Notification"
+    print(f'{mlops_dashboard_drift_monitoring_url=}')
+    job_url = f"{PA_AUTOMATION_DASHBOARD_PUBLIC_URL}/#/job-info?jobid={CURRENT_JOB_ID}"
+    # Common information outside the loop
+    # common_info = [
+        # f'<strong>{icon}</strong>',
+        # f'Outlier detected by <b>{DRIFT_METHOD}</b> on <b>{METRIC}</b> metric:'
+    # ]
+    
+    if DRIFT_METHOD == "Interval Threshold based":
+        common_info = [
+            f'<strong>{icon}</strong>',
+            f'Outlier detected by <b>{DRIFT_METHOD}</b> on <b>{METRIC}</b> metric:<br>',
+            f'<b>Violation:</b> Value does not fall within the interval [MIN_VALUE={MIN_VALUE}, MAX_VALUE={MAX_VALUE}]'
+        ]
+    elif DRIFT_METHOD == "Threshold based":
+        common_info = [
+            f'<strong>{icon}</strong>',
+            f'Outlier detected by <b>{DRIFT_METHOD}</b> on <b>{METRIC}</b> metric:<br>',
+            f'<b>Violation:</b> Value is {COMPARATOR} {VALUE}'
+        ]
+    elif DRIFT_METHOD == "Statistical threshold":
+        common_info = [
+            f'<strong>{icon}</strong>',
+            f'Outlier detected by <b>{DRIFT_METHOD}</b> on <b>{METRIC}</b> metric:<br>',
+            f'<b>Violation:</b> Value does not satisfy the condition STATISTICAL_THRESHOLD={STATISTICAL_THRESHOLD}'
+        ]
+    elif DRIFT_METHOD == "HDDM_W":
+        common_info = [
+            f'<strong>{icon}</strong>',
+            f'Outlier detected by <b>{DRIFT_METHOD}</b> on <b>{METRIC}</b> metric:<br>',
+            f'<b>Violation:</b> Value breached the conditions WARNING_CONFIDENCE={WARNING_CONFIDENCE}, DRIFT_CONFIDENCE={DRIFT_CONFIDENCE}'
+        ]
+    elif DRIFT_METHOD == "Page-Hinkley":
+        common_info = [
+            f'<strong>{icon}</strong>',
+            f'Outlier detected by <b>{DRIFT_METHOD}</b> on <b>{METRIC}</b> metric:<br>',
+            f'<b>Violation:</b> Value does not satisfy the condition THRESHOLD={THRESHOLD}'
+        ]
+    
+    if MONITORING_SCOPE == 'Per Model Server' or MONITORING_SCOPE == 'Per Deployed Model':
+        common_info.append(f'Model Server ID: <u>{MODEL_SERVER_ID}</u>,')
+    if MONITORING_SCOPE == 'Per Deployed Model':
+        common_info.append(f'Model Name: <u>{MODEL_NAME}</u>,')
+    alert_message += ' '.join(common_info) + '<br>'
+    # Timestamps and values inside the loop
+    for timestamp, value in outliers:
+        alert_message += f'Timestamp: <u>{timestamp}</u> ({TIMEZONE}), Value: <code>{value}</code><br>'
+    alert_message += f'<a href="{mlops_dashboard_drift_monitoring_url}" target="_blank">Drift Monitoring Instance ID: {DRIFT_MONITORING_INSTANCE_ID}</a><br>'
+    alert_message += f'<a href="{job_url}" target="_blank">Job Details</a>'
+    print(f'{alert_message=}')
+    # Update the latest alert job ID
+    MLOPS_DASHBOARD_API_ENDPOINT_URL = MLOPS_DASHBOARD_ENDPOINT_URL.replace('/dashboard/', '/api/')
+    update_url = f"{MLOPS_DASHBOARD_API_ENDPOINT_URL}redis/task/update/latest_alert_job_id"
+    params = {
+        "task_id": DRIFT_MONITORING_TASK_ID,
+        "latest_alert_job_id": CURRENT_JOB_ID
+    }
+    try:
+        response = requests.get(update_url, params=params)
+        response.raise_for_status()
+        print(f"Successfully updated latest alert job ID. Response: {response.json()}")
+    except requests.RequestException as e:
+        print(f"Error updating latest alert job ID: {e}")
+    # Update task result
+    result = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="UTF-8">
+    <title>Drift Notification Preview</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" 
+    integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+    </head>
+    <body>
+    <h1 class="text-center my-4" style="color:#003050;">Drift Notification Preview</h1>
+    <p align="center">{0}</p>
+    </body></html>
+    """.format(alert_message)
+    result = result.encode('utf-8')
+    resultMetadata.put("file.extension", ".html")
+    resultMetadata.put("file.name", "output.html")
+    resultMetadata.put("content.type", "text/html")
+
+variables.put("MESSAGE", alert_message)
+print("END " + __file__)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow>
+        <if continuation="Continuation" else="Else" target="If_Drift_Detected">
+          <script>
+            <code language="groovy">
+              <![CDATA[
+def outliers = variables.get("MESSAGE")
+println('START if')
+println(outliers)
+branch = outliers ? 'if' : 'else'
+println('END if')
+]]>
+            </code>
+          </script>
+        </if>
+      </controlFlow>
+      <metadata>
+        <positionTop>
+            95.015625
+        </positionTop>
+        <positionLeft>
+            412.328125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="If_Drift_Detected">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("START: Drift Detected")
+def alert_message = variables.get("MESSAGE")
+println(alert_message)
+variables.put("MESSAGE", alert_message)
+println("END: Drift Detected")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="start"/>
+      <metadata>
+        <positionTop>
+            223.015625
+        </positionTop>
+        <positionLeft>
+            284.328125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Else">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Else")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            223.015625
+        </positionTop>
+        <positionLeft>
+            412.328125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Continuation">
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("Continuation")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            223.015625
+        </positionTop>
+        <positionLeft>
+            540.328125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="End">
+      <description>
+        <![CDATA[ The simplest task, ran by a Python engine. ]]>
+      </description>
+      <depends>
+        <task ref="Channel_Notification"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+println("End")
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <controlFlow block="end"/>
+      <metadata>
+        <positionTop>
+            479.015625
+        </positionTop>
+        <positionLeft>
+            284.328125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Channel_Notification">
+      <description>
+        <![CDATA[ A task that sends a notification with a custom message and severity to one or more notification channels ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="The notification message" hidden="true" inherited="true" model="PA:NOT_EMPTY_STRING" name="MESSAGE" value="This is a channel notification message"/>
+        <variable advanced="false" description="The notification severity. It can be one of &lt;b&gt;INFO&lt;/b&gt;,&lt;b&gt;WARNING&lt;/b&gt;,&lt;b&gt;ERROR&lt;/b&gt;,&lt;b&gt;CRITICAL&lt;/b&gt;" hidden="true" inherited="true" model="PA:LIST(INFO,WARNING,ERROR,CRITICAL)" name="SEVERITY" value="WARNING"/>
+        <variable advanced="false" description="Comma-separated list of channels which will be notified." hidden="true" inherited="true" model="PA:NOT_EMPTY_STRING" name="CHANNELS" value="mlops_dashboard"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/web_notification.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#channels_section"/>
+      </genericInformation>
+      <depends>
+        <task ref="If_Drift_Detected"/>
+      </depends>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import org.ow2.proactive.notification.client.ApiClient
+import org.ow2.proactive.notification.client.api.EventRestApi
+import org.ow2.proactive.notification.client.api.SubscriptionRestApi
+import org.ow2.proactive.notification.client.api.ChannelRestApi
+import org.ow2.proactive.notification.client.api.UserSubscriptionsRestApi
+import org.ow2.proactive.notification.client.model.EventRequest
+import org.ow2.proactive.notification.client.model.ChannelSubscriptionUpdate
+import org.ow2.proactive.notification.client.model.ChannelSubscriptionUpdate.SubscriptionTypeEnum
+import org.ow2.proactive.notification.client.model.ChannelRequest
+import org.ow2.proactive.notification.client.model.ChannelSubscription
+import org.ow2.proactive.notification.client.model.Subscription
+import org.ow2.proactive.notification.client.model.Subscription.SubscriptionTypeEnum
+import org.ow2.proactive.notification.client.model.PortalNotificationMethod
+import org.ow2.proactive.notification.client.model.PortalNotificationMethod.TypeEnum
+import org.ow2.proactive.notification.client.ApiException
+
+import groovy.json.JsonBuilder
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+import java.net.URL
+
+def jobId = genericInformation.get("PARENT_JOB_ID") != null ? new Long(genericInformation.get("PARENT_JOB_ID")) : new Long(variables.get("PA_JOB_ID"))
+def eventMessage = variables.get("MESSAGE")
+def eventSeverity = variables.get("SEVERITY")
+def channelsToNotify = variables.get("CHANNELS")
+
+// Set channels to notify or exit immediately if none provided
+channelsToNotify = (channelsToNotify != null && !channelsToNotify.equals('all')) ? Arrays.asList(channelsToNotify.split(',')): null;
+if (channelsToNotify == null || channelsToNotify.isEmpty()) {
+    println("No channel to be notified!")
+    return
+}
+
+// Get notification-service URL
+def paSchedulerRestUrl = variables.get('PA_SCHEDULER_REST_URL')
+def notifUrl = paSchedulerRestUrl.replaceAll("/rest\\z", "/notification-service")
+
+// Instantiate Notification REST clients
+def apiClient = new ApiClient()
+apiClient.setBasePath(notifUrl)
+def eventRestApi = new EventRestApi(apiClient)
+def subscriptionRestApi = new SubscriptionRestApi(apiClient)
+def channelRestApi = new ChannelRestApi(apiClient)
+def userSubscriptionsRestApi = new UserSubscriptionsRestApi(apiClient)
+
+// Set notification message
+eventMessage = (eventMessage == null || eventMessage.isEmpty()) ? "You have a notification.": eventMessage;
+
+// Set notification severity
+eventSeverity = (eventSeverity == null || eventSeverity.isEmpty()) ? EventRequest.EventSeverityEnum.INFO: EventRequest.EventSeverityEnum.valueOf(eventSeverity);
+
+// Get session id
+schedulerapi.connect()
+def sessionId = schedulerapi.getSession()
+
+// Get proactive url
+def connectionInfo = schedulerapi.getConnectionInfo()
+String ciUrl = connectionInfo.getUrl()
+def url = new URL(ciUrl)
+def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
+
+// Function to create a channel
+def createChannel(channelRestApi, String sessionId, String name, List userGroups) {
+    println("Creating channel: " + name)
+    def channelRequest = new ChannelRequest().name(name).userGroups(userGroups);
+    try {
+        def result = channelRestApi.createChannel(sessionId, channelRequest)
+        println("Channel created: " + name)
+        return result
+    } catch (ApiException e) {
+        println("Error creating channel: " + e.getCode() + " - " + e.getResponseBody())
+        return null
+    }
+}
+
+// Function to fetch available channels
+def fetchAvailableChannels(channelRestApi, String sessionId) {
+    println("Retrieving available channels")
+    try {
+        def result = channelRestApi.getUserAvailableChannels(sessionId)
+        println("Channels retrieved successfully")
+        return result
+    } catch (ApiException e) {
+        println("Error retrieving channels: " + e.getCode() + " - " + e.getResponseBody())
+        return []
+    }
+}
+
+// Get available channels (JSON)
+def availableChannels = fetchAvailableChannels(channelRestApi, sessionId)
+println "Available channels: $availableChannels"
+
+// Check if the channel(s) exist(s), if not, create it
+def channelsToSubscribe = []
+
+for (channelToNotify in channelsToNotify) {
+    def channelExists = availableChannels.find { it.name == channelToNotify }
+    println("Found channel: $channelExists")
+    if (channelExists == null) {
+        println "Channel does not exist: $channelToNotify"
+        def newChannel = createChannel(channelRestApi, sessionId, channelToNotify, ["allGroupsAuthorizedForChannel"]);
+        if (newChannel) {
+            channelsToSubscribe.add(newChannel)
+        }
+    } else {
+        channelsToSubscribe.add(channelExists)
+    }
+}
+
+// This should always be true (checked at the start of script) , but lets keep it.
+if (!channelsToSubscribe.isEmpty()) {
+    println "Subscribing to channels "+ channelsToSubscribe;
+
+    // Retrieve user's Channel Subscription
+    Subscription userChannelSubscription = subscriptionRestApi.getChannelSubscription(sessionId);
+
+    if (userChannelSubscription == null) {
+        // User never connected to the notification service, first we need to GET UserSubscriptions to create them
+        def userUserSubscriptions = userSubscriptionsRestApi.getUserSubscriptions(sessionId);
+        userChannelSubscription = userUserSubscriptions.getSubscriptions().find { it.getSubscriptionType() == Subscription.SubscriptionTypeEnum.CHANNEL}
+    }
+
+    // Compute the new List of subscribed channels (previous subscribed channels + new channels)
+    def newSubscribedChannels = new ArrayList();
+    try {
+        newSubscribedChannels.addAll(userChannelSubscription.getChannels());
+    } catch (Exception e) {
+        println ("Error " + e + " when fetching User's Channel Subscription.")
+    }
+    newSubscribedChannels.addAll(channelsToSubscribe);
+
+    // Create the update object that used to query the notif service
+    def channelSubscriptionUpdate = new ChannelSubscriptionUpdate()
+        .id(userChannelSubscription.id)
+        .active(true) // Activate the subscription
+        .cleanPeriod(userChannelSubscription.cleanPeriod)
+
+    // Activate the portal notification
+    def portalNotification = userChannelSubscription.notificationMethods.find { it.getActualInstance().getType() == PortalNotificationMethod.TypeEnum.PORTAL}
+    portalNotification.getActualInstance().active = true
+
+    channelSubscriptionUpdate.notificationMethods(userChannelSubscription.notificationMethods)
+        .subscriptionType(ChannelSubscriptionUpdate.SubscriptionTypeEnum.CHANNEL)
+        .channels(newSubscribedChannels)
+        .followedEvents(userChannelSubscription.followedEvents);
+    
+    println "Update Channel Subscription"
+    try {
+        subscriptionRestApi.updateChannelSubscription(sessionId, channelSubscriptionUpdate);
+    } catch (ApiException e) {
+        println ("Error " + e.getCode() + " when update User's Channel Subscription. Please do it manually.")
+        println ("You just need to add the channels to the subscription, activate the portal notification method and activate the subscription")
+        println e.getResponseBody();
+    }        
+}
+
+// Create event
+println "Creating event that notifies channels "+ channelsToNotify
+def eventRequest = new EventRequest()
+        .bucketName(genericInformation.get("bucketName"))
+        .workflowName(variables.get("PA_JOB_NAME"))
+        .eventType(EventRequest.EventTypeEnum.CHANNEL)
+        .eventSeverity(eventSeverity)
+        .channelsToNotify(channelsToNotify.toSet())
+        .jobId(jobId)
+        .message(eventMessage);
+
+try {
+    result = eventRestApi.createEvent(sessionId, eventRequest).toString()
+    println(result)
+} catch (ApiException e) {
+    println("Error creating event: " + e.getCode() + " - " + e.getResponseBody())
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            351.015625
+        </positionTop>
+        <positionLeft>
+            284.328125
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2728px;
+            height:3492px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-90.015625px;left:-279.328125px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1027" style="top: 95.0159px; left: 412.328px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Perform_Drift_Detection</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1030" style="top: 223.016px; left: 284.328px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">If_Drift_Detected</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1033" style="top: 223.016px; left: 412.328px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1036" style="top: 223.016px; left: 540.328px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1039" style="top: 479.016px; left: 284.328px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">End</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_1042" style="top: 351.016px; left: 284.328px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that sends a notification with a custom message and severity to one or more notification channels"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_notification.png" width="20px">&nbsp;<span class="name">Channel_Notification</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:273.5px;top:134.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 138 50 128 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1050" style="position: absolute; transform: translate(-50%, -50%); left: 347.5px; top: 178.5px;">if</div><svg style="position:absolute;left:396.98171321138256px;top:134.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1054" style="position: absolute; transform: translate(-50%, -50%); left: 404px; top: 178.5px;">else</div><svg style="position:absolute;left:401.5px;top:134.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 128 88 C 138 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_1058" style="position: absolute; transform: translate(-50%, -50%); left: 475.5px; top: 178.5px;">continuation</div><svg style="position:absolute;left:323.5px;top:390.5px" width="37.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 26.5 50 16.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4225760000000007,66.303232 L10.200238136178823,48.58572112640825 L1.9584304421338072,52.71762213373894 L-3.385371730082231,45.20471468427444 L-1.4225760000000007,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4225760000000007,66.303232 L10.200238136178823,48.58572112640825 L1.9584304421338072,52.71762213373894 L-3.385371730082231,45.20471468427444 L-1.4225760000000007,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:331px;top:262.5px" width="30" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9 88 C 19 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 476px; top: 125px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 402px; top: 125px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 331.5px; top: 253px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 274px; top: 213px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 452px; top: 253px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 402px; top: 213px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 580px; top: 253px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 530px; top: 213px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 324px; top: 509px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 324px; top: 469px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 340.5px; top: 381px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 340.5px; top: 341px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
