@@ -35,10 +35,9 @@ def serviceInstanceRestApi = new ServiceInstanceRestApi(apiClient)
 def serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId)
 
 // Get the main
-def submittedMainJobId = serviceInstanceData.getJobSubmissions().get(0).getJobId()
-def mainJobState = schedulerapi.getJobState(submittedMainJobId.toString())
+def submittedMainJobId = serviceInstanceData.getJobSubmissions().find {it.getTransitionState().equals("VOID -> RUNNING")}.getJobId()
 
-if (schedulerapi.getJobState(submittedMainJobId.toString()).isFinished()) {
+if (schedulerapi.isJobFinished(submittedMainJobId.toString())) {
     // Add token to the current node
     nodeUrl = variables.get("PA_NODE_URL")
     rmapi.connect()
