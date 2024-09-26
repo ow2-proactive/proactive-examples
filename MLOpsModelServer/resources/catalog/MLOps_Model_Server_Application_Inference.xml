@@ -1,18 +1,19 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MLOps_Model_Server_Application_Inference" onTaskError="continueJobExecution" priority="normal" projectName="3. MLOps Model Server Workflows" tags="MLOps,Model Inference,Triton" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
   <variables>
-    <variable advanced="true" description="GRPC inference url of the model server (e.g. localhost:8001)." group="Model Server" hidden="false" name="GRPC_INFERENCE_URL" value=""/>
-    <variable advanced="false" description="Name of the model to be tested." group="Model Server" hidden="false" model="PA:LIST(simple,simple_identity,simple_int8,simple_sequence,simple_string,densenet_onnx,inception_graphdef, iris-classification-model)" name="MODEL_NAME" value="simple"/>
+    <variable advanced="false" description="Protocol to use for inference (http or grpc)." group="Model Server" hidden="false" model="PA:LIST(http,grpc)" name="INFERENCE_PROTOCOL" value="http"/>
+    <variable advanced="false" description="Name of the model to be tested." group="Model Server" hidden="false" model="PA:LIST(simple,simple_identity,simple_int8,simple_sequence,simple_string,densenet_onnx,inception_graphdef,iris-classification-model)" name="MODEL_NAME" value="simple"/>
     <variable advanced="false" description="Handler for the image path" group="Model Server" hidden="true" model="PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'densenet_onnx' || variables['MODEL_NAME'].toLowerCase() == 'inception_graphdef' ? showVar('IMAGE_PATH') : hideVar('IMAGE_PATH'))" name="IMAGE_PATH_HANDLER" value=""/>
     <variable advanced="false" description="Handler for image path" group="Model Server" hidden="false" model="PA:URL" name="IMAGE_PATH" value="https://activeeon-public.s3.eu-west-2.amazonaws.com/images/bee.jpg"/>
     <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
     <variable advanced="true" description="Name of the container image being used to run the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(,nvcr.io/nvidia/tritonserver:22.10-py3-sdk)" name="CONTAINER_IMAGE" value="nvcr.io/nvidia/tritonserver:22.10-py3-sdk"/>
     <variable advanced="false" description="The frequency (in ms) to send a new inference request for the selected model." group="Model Server" hidden="false" model="PA:Integer" name="INFERENCE_FREQUENCY" value="30000"/>
     <variable advanced="true" description="Time in milliseconds to check if there are any signal updates." group="Model Server" hidden="false" model="PA:Integer" name="SIGNAL_FREQUENCY_CHECK" value="60000"/>
-    <variable advanced="false" description="ID of the model server where the model that need to be consumed is deployed" group="Model Server" hidden="false" name="MODEL_SERVER_ID" value=""/>
-    <variable advanced="true" description="True, if you want to use a specific GRPC_INFERENCE_URL to send inferences instead of the MODEL_SERVER_ID" group="Model Server" hidden="false" model="PA:Boolean" name="USE_GRPC" value="false"/>
+    <variable advanced="false" description="ID of the model server where the model that need to be consumed is deployed" group="Model Server" hidden="false" model="PA:Integer" name="MODEL_SERVER_ID" value="-1"/>
     <variable advanced="false" hidden="true" model="PA:BOOLEAN" name="DRIFT_DATA" value="false"/>
     <variable advanced="false" hidden="true" model="PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'iris-classification-model' ? showVar('DRIFT_DATA') : hideVar('DRIFT_DATA'))" name="DRIFT_DATA_HANDLER" value=""/>
+    <variable advanced="false" description="Handler for USE_PROXY" group="Model Server" hidden="true" model="PA:SPEL(variables['INFERENCE_PROTOCOL'].toLowerCase() == 'http' ? showVar('USE_PROXY') : hideVar('USE_PROXY'))" name="USE_PROXY_HANDLER" value=""/>
+    <variable advanced="false" description="Enable data drift detection (only for HTTP protocol)" group="Model Server" hidden="false" model="PA:BOOLEAN" name="USE_PROXY" value="true"/>
   </variables>
   <description>
     <![CDATA[ Inference workflow that periodically sends inferences consuming a specific deployed model. ]]>
@@ -29,7 +30,7 @@
         <![CDATA[ Inference workflow that periodically sends inferences consuming a specific deployed model. ]]>
       </description>
       <variables>
-        <variable advanced="false" description="List of comma-separated signals expected by this task." hidden="false" inherited="false" model="PA:REGEXP(((\w|-|_)+,?\s?)+)" name="SIGNALS" value="Terminate_Job, Update_Frequency_Parameter, Update_Inference_Parameters, Simulate_Data_Drift"/>
+        <variable advanced="false" description="List of comma-separated signals expected by this task." hidden="false" inherited="false" model="PA:REGEXP(((\w|-|_)+,?\s?)+)" name="SIGNALS" value="Terminate_Job, Update_Frequency_Parameter, Update_Inference_Parameters"/>
         <variable advanced="false" hidden="false" inherited="false" name="TASK_FILE_PATH" value="main.py"/>
       </variables>
       <genericInformation>
@@ -47,91 +48,168 @@
         <script>
           <code language="cpython">
             <![CDATA[
+#!/usr/bin/env python3
+
+"""
+Triton Inference Server Client Test Script
+
+This script provides a comprehensive test suite for various models deployed on the Triton Inference Server.
+It supports testing different model types including iris classification, simple arithmetic, image classification,
+and sequence models. The script can communicate with the server using either HTTP or gRPC protocols.
+
+Key Features:
+- Supports multiple model types: iris classification, simple arithmetic, image classification, etc.
+- Handles both HTTP and gRPC communication methods
+- Provides data drift simulation for testing model robustness
+- Supports batch processing for applicable models
+- Includes preprocessing and postprocessing functions for image-based models
+
+Usage:
+    python3 triton_client.py -s <server_url> -n <model_name> [options]
+
+For detailed usage instructions, run:
+    python3 triton_client.py --help
+
+Required Arguments:
+    -s, --model-server : URL of the Triton Inference Server
+    -n, --model-name   : Name of the deployed model to be tested
+
+Optional Arguments:
+    -x, --model-version : Version of the model (default: latest)
+    -b, --batch-size    : Batch size for inference (default: 1)
+    -l, --scaling       : Type of scaling for image pixels (NONE, INCEPTION, VGG; default: INCEPTION)
+    -i, --image-path    : Path to input image or folder (required for image-based models)
+    -c, --classes       : Number of class results to report for image classification (default: 3)
+    -m, --method        : Communication method (http, grpc; default: http)
+    -d, --drift-data    : Flag to use drift data for testing (default: False)
+    -v, --verbose       : Enable verbose output
+
+Dependencies:
+    - numpy
+    - Pillow
+    - tritonclient
+    - sklearn
+    - gevent
+
+Note: This script requires the Triton Inference Server to be running and accessible at the specified URL.
+"""
+
 import os
 import sys
 import argparse
-import uuid
-import queue
-import gevent.ssl
 import numpy as np
-
 from PIL import Image
 from PIL.Image import Resampling
 
 import tritonclient.http as httpclient
 import tritonclient.grpc as grpcclient
-import grpc
-
 import tritonclient.grpc.model_config_pb2 as mc
 
-from tritonclient.grpc import service_pb2, service_pb2_grpc
 from tritonclient.utils import InferenceServerException
 from tritonclient.utils import triton_to_np_dtype
 
-from tritonclient import utils
-
 from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 
 def test_iris_classification_model(args, triton_client):
-    # Load Iris dataset
+    """
+    Test the iris classification model deployed on the Triton Inference Server.
+
+    This function loads the iris dataset, optionally applies data drift,
+    prepares input tensors, performs inference, and evaluates the model's accuracy.
+
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+        triton_client (tritonclient.http.InferenceServerClient or tritonclient.grpc.InferenceServerClient):
+            Client object for communicating with the Triton server.
+
+    Raises:
+        InferenceServerException: If inference fails.
+        SystemExit: If there's an error in processing.
+
+    Example:
+        test_iris_classification_model(args, triton_client)
+    """
+    # Load and prepare data
     iris = load_iris()
     X, y = iris.data, iris.target
-    _, X_test, _, y_test = train_test_split(X, y, random_state=None)
-    input_data = X_test[1].astype(np.float32)
+    _, X_test, _, y_test = train_test_split(X, y, test_size=0.1, random_state=None)
+    input_data = X_test.astype(np.float32)
     print("Input data:\n", input_data)
-    
     # Simulate data drift if specified
     drift_data = args.drift_data and args.drift_data.lower() == "true"
     if drift_data:
         print("Drift Data")
-        noise_std = 1.0
+        noise_std = 10.0
         noise = np.random.normal(0, noise_std, input_data.shape)
         input_data += noise
         print("Drifted input data:\n", input_data)
-    
-    # Prepare input and output tensors
-    inputs = [grpcclient.InferInput('float_input', [1, 4], "FP32")]
-    inputs[0].set_data_from_numpy(np.expand_dims(input_data, axis=0))
+    # Prepare input tensor
+    if args.method == 'http':
+        inputs = [httpclient.InferInput('float_input', input_data.shape, "FP32")]
+    else:  # grpc
+        inputs = [grpcclient.InferInput('float_input', input_data.shape, "FP32")]
+    inputs[0].set_data_from_numpy(input_data)
     print("input0_data:\n", inputs[0])
-    
-    outputs = [
-        grpcclient.InferRequestedOutput('label'),
-        grpcclient.InferRequestedOutput('probabilities')
-    ]
-    
+    # Prepare output tensors
+    if args.method == 'http':
+        outputs = [
+            httpclient.InferRequestedOutput('label'),
+            httpclient.InferRequestedOutput('probabilities')
+        ]
+    else:  # grpc
+        outputs = [
+            grpcclient.InferRequestedOutput('label'),
+            grpcclient.InferRequestedOutput('probabilities')
+        ]
     # Perform inference
     try:
-        results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
+        results = triton_client.infer(model_name=args.model_name, model_version=args.model_version, inputs=inputs, outputs=outputs)
     except InferenceServerException as e:
         print(f"Inference failed: {str(e)}")
         sys.exit(1)
-    
-    # Check inference statistics
-    try:
-        statistics = triton_client.get_inference_statistics(model_name=args.model_name)
-        if len(statistics.model_stats) != 1:
-            print("FAILED: Inference Statistics")
-            sys.exit(1)
-    except InferenceServerException as e:
-        print(f"Failed to retrieve inference statistics: {str(e)}")
-        sys.exit(1)
-    
     # Get and print output data
     output0_data = results.as_numpy('label')
     output1_data = results.as_numpy('probabilities')
-    print("output0_data:\n", output0_data)
-    print("output1_data:\n", output1_data)
+    print("output0_data (label):\n", output0_data)
+    print("output1_data (probabilities):\n", output1_data)
+    # Calculate and print accuracy
+    accuracy = accuracy_score(y_test, output0_data)
+    print(f"Model accuracy: {accuracy * 100:.2f}%")
     print('PASS: iris-classification-model')
 
 
 def test_model_simple(args, triton_client):
+    """
+    Test a simple arithmetic model that adds and subtracts integers.
+
+    This function prepares input tensors with integer data, sends an inference request
+    to the server, and verifies the output for correct addition and subtraction operations.
+
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+        triton_client (tritonclient.http.InferenceServerClient or tritonclient.grpc.InferenceServerClient):
+            Client object for communicating with the Triton server.
+
+    Raises:
+        InferenceServerException: If inference fails.
+        SystemExit: If there's an error in processing or verification.
+
+    Example:
+        test_model_simple(args, triton_client)
+    """
     # Infer
     inputs = []
     outputs = []
-    inputs.append(grpcclient.InferInput('INPUT0', [1, 16], "INT32"))
-    inputs.append(grpcclient.InferInput('INPUT1', [1, 16], "INT32"))
+    # Prepare input tensors
+    if args.method == 'http':
+        inputs.append(httpclient.InferInput('INPUT0', [1, 16], "INT32"))
+        inputs.append(httpclient.InferInput('INPUT1', [1, 16], "INT32"))
+    else:  # grpc
+        inputs.append(grpcclient.InferInput('INPUT0', [1, 16], "INT32"))
+        inputs.append(grpcclient.InferInput('INPUT1', [1, 16], "INT32"))
     # Create the data for the two input tensors. Initialize the first
     # to unique integers and the second to all ones.
     input0_data = np.arange(start=0, stop=16, dtype=np.int32)
@@ -140,23 +218,26 @@ def test_model_simple(args, triton_client):
     # Initialize the data
     inputs[0].set_data_from_numpy(input0_data)
     inputs[1].set_data_from_numpy(input1_data)
-    outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
-    outputs.append(grpcclient.InferRequestedOutput('OUTPUT1'))
+    # Prepare output tensors
+    if args.method == 'http':
+        outputs.append(httpclient.InferRequestedOutput('OUTPUT0'))
+        outputs.append(httpclient.InferRequestedOutput('OUTPUT1'))
+    else:  # grpc
+        outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
+        outputs.append(grpcclient.InferRequestedOutput('OUTPUT1'))
     # Test with outputs
-    results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
-    # print("response:\n", results.get_response())
-    statistics = triton_client.get_inference_statistics(model_name=args.model_name)
-    # print("statistics:\n", statistics)
-    if len(statistics.model_stats) != 1:
-        print("FAILED: Inference Statistics")
+    try:
+        results = triton_client.infer(model_name=args.model_name, model_version=args.model_version, inputs=inputs, outputs=outputs)
+    except InferenceServerException as e:
+        print(f"Inference failed: {str(e)}")
         sys.exit(1)
     # Get the output arrays from the results
     output0_data = results.as_numpy('OUTPUT0')
     output1_data = results.as_numpy('OUTPUT1')
     print("model-outputs:")
     for i in range(16):
-        print(str(input0_data[0][i]) + " + " + str(input1_data[0][i]) + " = " + str(output0_data[0][i]))
-        print(str(input0_data[0][i]) + " - " + str(input1_data[0][i]) + " = " + str(output1_data[0][i]))
+        print(f"{input0_data[0][i]} + {input1_data[0][i]} = {output0_data[0][i]}")
+        print(f"{input0_data[0][i]} - {input1_data[0][i]} = {output1_data[0][i]}")
         if (input0_data[0][i] + input1_data[0][i]) != output0_data[0][i]:
             print("sync infer error: incorrect sum")
             sys.exit(1)
@@ -169,8 +250,6 @@ def test_model_simple(args, triton_client):
 def test_model_simple_identity(args, triton_client):
     # Example using BYTES input tensor with utf-8 encoded string that
     # has an embedded null character.
-    # null_chars_array = np.array(["he\x00llo".encode('utf-8') for i in range(16)], dtype=np.object_)
-    # null_char_data = null_chars_array.reshape([1, 16])
     null_chars_array = np.array(["he\x00llo".encode('utf-8') for i in range(1)], dtype=np.object_)
     null_char_data = null_chars_array.reshape([1, 1])
     # Example using BYTES input tensor with 16 elements, where each
@@ -182,184 +261,140 @@ def test_model_simple_identity(args, triton_client):
     # np_array = np_bytes_data
     inputs = []
     outputs = []
-    inputs.append(grpcclient.InferInput('INPUT0', np_array.shape, "BYTES"))
+    # Prepare input tensor
+    if args.method == 'http':
+        inputs.append(httpclient.InferInput('INPUT0', np_array.shape, "BYTES"))
+    else:  # grpc
+        inputs.append(grpcclient.InferInput('INPUT0', np_array.shape, "BYTES"))
     inputs[0].set_data_from_numpy(np_array)
-    outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
-    results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
-    if (np_array.dtype == np.object_):
-        print(results.as_numpy('OUTPUT0'))
-        if not np.array_equal(np_array, results.as_numpy('OUTPUT0')):
-            print(results.as_numpy('OUTPUT0'))
-            print("error: incorrect output")
+    # Prepare output tensor
+    if args.method == 'http':
+        outputs.append(httpclient.InferRequestedOutput('OUTPUT0'))
+    else:  # grpc
+        outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
+    # Perform inference
+    try:
+        results = triton_client.infer(model_name=args.model_name, model_version=args.model_version, inputs=inputs, outputs=outputs)
+    except InferenceServerException as e:
+        print(f"Inference failed: {str(e)}")
+        sys.exit(1)
+    # Process results
+    output_data = results.as_numpy('OUTPUT0')
+    print("Output data:", output_data)
+    if np_array.dtype == np.object_:
+        if not np.array_equal(np_array, output_data):
+            print("Error: incorrect output")
+            print("Expected:", np_array)
+            print("Got:", output_data)
             sys.exit(1)
     else:
-        encoded_results = np.char.encode(results.as_numpy('OUTPUT0').astype(str))
-        print(encoded_results)
+        encoded_results = np.char.encode(output_data.astype(str))
         if not np.array_equal(np_array, encoded_results):
-            print("error: incorrect output")
+            print("Error: incorrect output")
+            print("Expected:", np_array)
+            print("Got:", encoded_results)
             sys.exit(1)
     print('PASS: simple_identity')
 
 
 def test_model_simple_int8(args, triton_client):
-    # We use a simple model that takes 2 input tensors of 16 integers
-    # each and returns 2 output tensors of 16 integers each. One
-    # output tensor is the element-wise sum of the inputs and one
-    # output is the element-wise difference.
-    # model_name = "simple_int8"
-    model_version = ""
     batch_size = 1
-    # Create gRPC stub for communicating with the server
-    channel = grpc.insecure_channel(args.model_server)
-    grpc_stub = service_pb2_grpc.GRPCInferenceServiceStub(channel)
-    # Generate the request
-    request = service_pb2.ModelInferRequest()
-    request.model_name = args.model_name
-    request.model_version = model_version
     # Input data
-    input0_data = [i for i in range(16)]
-    input1_data = [1 for i in range(16)]
-    # Populate the inputs in inference request
-    input0 = service_pb2.ModelInferRequest().InferInputTensor()
-    input0.name = "INPUT0"
-    input0.datatype = "INT8"
-    input0.shape.extend([1, 16])
-    input0.contents.int_contents[:] = input0_data
-    input1 = service_pb2.ModelInferRequest().InferInputTensor()
-    input1.name = "INPUT1"
-    input1.datatype = "INT8"
-    input1.shape.extend([1, 16])
-    input1.contents.int_contents[:] = input1_data
-    request.inputs.extend([input0, input1])
-    # Populate the outputs in the inference request
-    output0 = service_pb2.ModelInferRequest().InferRequestedOutputTensor()
-    output0.name = "OUTPUT0"
-    output1 = service_pb2.ModelInferRequest().InferRequestedOutputTensor()
-    output1.name = "OUTPUT1"
-    request.outputs.extend([output0, output1])
-    response = grpc_stub.ModelInfer(request)
-    output_results = []
-    index = 0
-    for output in response.outputs:
-        shape = []
-        for value in output.shape:
-            shape.append(value)
-        output_results.append(
-            np.frombuffer(response.raw_output_contents[index], dtype=np.int8))
-        output_results[-1] = np.resize(output_results[-1], shape)
-        index += 1
-    if len(output_results) != 2:
-        print("expected two output results")
+    input0_data = np.array([i for i in range(16)], dtype=np.int8)
+    input1_data = np.array([1 for _ in range(16)], dtype=np.int8)
+    # Reshape data to match expected input shape
+    input0_data = np.expand_dims(input0_data, axis=0)
+    input1_data = np.expand_dims(input1_data, axis=0)
+    # Initialize the inputs
+    inputs = []
+    if args.method == 'http':
+        inputs.append(httpclient.InferInput('INPUT0', input0_data.shape, "INT8"))
+        inputs.append(httpclient.InferInput('INPUT1', input1_data.shape, "INT8"))
+    else:  # grpc
+        inputs.append(grpcclient.InferInput('INPUT0', input0_data.shape, "INT8"))
+        inputs.append(grpcclient.InferInput('INPUT1', input1_data.shape, "INT8"))
+    inputs[0].set_data_from_numpy(input0_data)
+    inputs[1].set_data_from_numpy(input1_data)
+    # Initialize the outputs
+    outputs = []
+    if args.method == 'http':
+        outputs.append(httpclient.InferRequestedOutput('OUTPUT0'))
+        outputs.append(httpclient.InferRequestedOutput('OUTPUT1'))
+    else:  # grpc
+        outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
+        outputs.append(grpcclient.InferRequestedOutput('OUTPUT1'))
+    # Perform inference
+    try:
+        results = triton_client.infer(
+            model_name=args.model_name,
+            model_version=args.model_version,
+            inputs=inputs,
+            outputs=outputs,
+            client_timeout=None)
+    except InferenceServerException as e:
+        print(f"Inference failed: {str(e)}")
         sys.exit(1)
+    # Get the output arrays from the results
+    output0_data = results.as_numpy('OUTPUT0')
+    output1_data = results.as_numpy('OUTPUT1')
+    # Verify results
     for i in range(16):
-        print(str(input0_data[i]) + " + " + str(input1_data[i]) + " = " + str(output_results[0][0][i]))
-        print(str(input0_data[i]) + " - " + str(input1_data[i]) + " = " + str(output_results[1][0][i]))
-        if (input0_data[i] + input1_data[i]) != output_results[0][0][i]:
+        print(f"{input0_data[0][i]} + {input1_data[0][i]} = {output0_data[0][i]}")
+        print(f"{input0_data[0][i]} - {input1_data[0][i]} = {output1_data[0][i]}")
+        if (input0_data[0][i] + input1_data[0][i]) != output0_data[0][i]:
             print("sync infer error: incorrect sum")
             sys.exit(1)
-        if (input0_data[i] - input1_data[i]) != output_results[1][0][i]:
+        if (input0_data[0][i] - input1_data[0][i]) != output1_data[0][i]:
             print("sync infer error: incorrect difference")
             sys.exit(1)
     print('PASS: simple_int8')
 
 
 def test_model_simple_sequence(args, triton_client):
-    # UserData class
-    class UserData:
-        def __init__(self):
-            self._completed_requests = queue.Queue()
-    # sync_send function
-    def sync_send(triton_client, result_list, values, batch_size, sequence_id, model_name, model_version):
-        count = 1
-        for value in values:
-            # Create the tensor for INPUT
-            value_data = np.full(shape=[batch_size, 1], fill_value=value, dtype=np.int32)
-            inputs = []
-            inputs.append(grpcclient.InferInput('INPUT', value_data.shape, "INT32"))
-            # Initialize the data
-            inputs[0].set_data_from_numpy(value_data)
-            outputs = []
-            outputs.append(grpcclient.InferRequestedOutput('OUTPUT'))
-            # Issue the synchronous sequence inference.
-            result = triton_client.infer(model_name=model_name,
-                                        inputs=inputs,
-                                        outputs=outputs,
-                                        sequence_id=sequence_id,
-                                        sequence_start=(count == 1),
-                                        sequence_end=(count == len(values)))
-            result_list.append(result.as_numpy('OUTPUT'))
-            count = count + 1
-    # We use custom "sequence" models which take 1 input
-    # value. The output is the accumulated value of the inputs. See
-    # src/custom/sequence.
-    offset = 0
-    dyna = False
-    int_sequence_model_name = "simple_dyna_sequence" if dyna else "simple_sequence"
-    string_sequence_model_name = "simple_string_dyna_sequence" if dyna else "simple_sequence"
-    model_version = ""
     batch_size = 1
-    # values = [11, 7, 5, 3, 2, 0, 1]
-    values = [11] # 6 inferences
-    # Will use two sequences and send them synchronously. Note the
-    # sequence IDs should be non-zero because zero is reserved for
-    # non-sequence requests.
-    int_sequence_id0 = 1000 + offset * 2
-    int_sequence_id1 = 1001 + offset * 2
-    # For string sequence IDs, the dyna backend requires that the
-    # sequence id be decodable into an integer, otherwise we'll use
-    # a UUID4 sequence id and a model that doesn't require corrid
-    # control.
-    string_sequence_id0 = str(1002) if dyna else str(uuid.uuid4())
-    int_result0_list = []
-    int_result1_list = []
-    string_result0_list = []
-    user_data = UserData()
-    try:
-        sync_send(triton_client, int_result0_list, 
-                  values, batch_size,
-                  int_sequence_id0, int_sequence_model_name, model_version)
-        # sync_send(triton_client, int_result0_list, 
-        #           [0] + values, batch_size,
-        #           int_sequence_id0, int_sequence_model_name, model_version)
-        # sync_send(triton_client, int_result1_list,
-        #           [100] + [-1 * val for val in values], batch_size,
-        #           int_sequence_id1, int_sequence_model_name, model_version)
-        # sync_send(triton_client, string_result0_list,
-        #           [20] + [-1 * val for val in values], batch_size,
-        #           string_sequence_id0, string_sequence_model_name,
-        #           model_version)
-    except InferenceServerException as error:
-        print(error)
-        sys.exit(1)
-    for i in range(len(int_result0_list)):
-        int_seq0_expected = 1 if (i == 0) else values[i - 1]
-        int_seq1_expected = 101 if (i == 0) else values[i - 1] * -1
-        # For string sequence ID we are testing two different backends
-        if i == 0 and dyna:
-            string_seq0_expected = 20
-        elif i == 0 and not dyna:
-            string_seq0_expected = 21
-        elif i != 0 and dyna:
-            string_seq0_expected = values[i - 1] * -1 + int(
-                string_result0_list[i - 1][0][0])
-        else:
-            string_seq0_expected = values[i - 1] * -1
-        # The dyna_sequence custom backend adds the correlation ID
-        # to the last request in a sequence.
-        if dyna and (i != 0) and (values[i - 1] == 1):
-            int_seq0_expected += int_sequence_id0
-            # int_seq1_expected += int_sequence_id1
-            # string_seq0_expected += int(string_sequence_id0)
-        # print("[" + str(i) + "] " + str(int_result0_list[i][0][0]) + " : " +
-        #       str(int_result1_list[i][0][0]) + " : " +
-        #       str(string_result0_list[i][0][0]))
-        print("[" + str(i) + "] " + str(int_result0_list[i][0][0]))
-        # if ((int_seq0_expected != int_result0_list[i][0][0]) or
-        #     (int_seq1_expected != int_result1_list[i][0][0]) or
-        #     (string_seq0_expected != string_result0_list[i][0][0])):
-        # if ((int_seq0_expected != int_result0_list[i][0][0])):
-        #     print("[ expected ] " + str(int_seq0_expected) + " : " +
-        #           str(int_seq1_expected) + " : " + str(string_seq0_expected))
+    dtype = "INT32"
+    # Prepare sequence input
+    values = [11]  # Single value for simplicity, you can extend this as needed
+    sequence_id = 1000
+    result_list = []
+    for value in values:
+        # Create the tensor for INPUT
+        value_data = np.full(shape=[batch_size, 1], fill_value=value, dtype=np.int32)
+        # Initialize the input
+        if args.method == 'http':
+            inputs = [httpclient.InferInput('INPUT', value_data.shape, dtype)]
+        else:  # grpc
+            inputs = [grpcclient.InferInput('INPUT', value_data.shape, dtype)]
+        
+        inputs[0].set_data_from_numpy(value_data)
+        # Initialize the output
+        if args.method == 'http':
+            outputs = [httpclient.InferRequestedOutput('OUTPUT')]
+        else:  # grpc
+            outputs = [grpcclient.InferRequestedOutput('OUTPUT')]
+        # Issue the synchronous sequence inference.
+        try:
+            result = triton_client.infer(
+                model_name=args.model_name,
+                model_version=args.model_version,
+                inputs=inputs,
+                outputs=outputs,
+                sequence_id=sequence_id,
+                sequence_start=(value == values[0]),
+                sequence_end=(value == values[-1])
+            )
+            result_list.append(result.as_numpy('OUTPUT'))
+        except InferenceServerException as error:
+            print(f"Inference failed: {error}")
+            sys.exit(1)
+    # Process and verify results
+    for i, result in enumerate(result_list):
+        print(f"[{i}] {result[0][0]}")
+        # You can add more specific result verification here if needed
+        # For example:
+        # expected = ... # Calculate expected value
+        # if result[0][0] != expected:
+        #     print(f"Error: Expected {expected}, got {result[0][0]}")
         #     sys.exit(1)
     print("PASS: simple_sequence")
 
@@ -367,8 +402,13 @@ def test_model_simple_sequence(args, triton_client):
 def test_model_simple_string(args, triton_client):
     inputs = []
     outputs = []
-    inputs.append(grpcclient.InferInput('INPUT0', [1, 16], "BYTES"))
-    inputs.append(grpcclient.InferInput('INPUT1', [1, 16], "BYTES"))
+    # Prepare input tensors
+    if args.method == 'http':
+        inputs.append(httpclient.InferInput('INPUT0', [1, 16], "BYTES"))
+        inputs.append(httpclient.InferInput('INPUT1', [1, 16], "BYTES"))
+    else:  # grpc
+        inputs.append(grpcclient.InferInput('INPUT0', [1, 16], "BYTES"))
+        inputs.append(grpcclient.InferInput('INPUT1', [1, 16], "BYTES"))
     # Create the data for the two input tensors. Initialize the first
     # to unique integers and the second to all ones.
     in0 = np.arange(start=0, stop=16, dtype=np.int32)
@@ -387,59 +427,85 @@ def test_model_simple_string(args, triton_client):
     # Initialize the data
     inputs[0].set_data_from_numpy(input0_data)
     inputs[1].set_data_from_numpy(input1_data)
-    outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
-    outputs.append(grpcclient.InferRequestedOutput('OUTPUT1'))
-    # Make inference
-    results = triton_client.infer(model_name=args.model_name, inputs=inputs, outputs=outputs)
+    # Prepare output tensors
+    if args.method == 'http':
+        outputs.append(httpclient.InferRequestedOutput('OUTPUT0'))
+        outputs.append(httpclient.InferRequestedOutput('OUTPUT1'))
+    else:  # grpc
+        outputs.append(grpcclient.InferRequestedOutput('OUTPUT0'))
+        outputs.append(grpcclient.InferRequestedOutput('OUTPUT1'))
+    # Perform inference
+    try:
+        results = triton_client.infer(
+            model_name=args.model_name,
+            model_version=args.model_version,
+            inputs=inputs,
+            outputs=outputs)
+    except InferenceServerException as e:
+        print(f"Inference failed: {str(e)}")
+        sys.exit(1)
     # Get the output arrays from the results
     output0_data = results.as_numpy('OUTPUT0')
     output1_data = results.as_numpy('OUTPUT1')
     for i in range(16):
-        print(str(input0_data[0][i]) + " + " + str(input1_data[0][i]) + " = " + str(output0_data[0][i]))
-        print(str(input0_data[0][i]) + " - " + str(input1_data[0][i]) + " = " + str(output1_data[0][i]))
+        print(f"{input0_data[0][i].decode()} + {input1_data[0][i].decode()} = {output0_data[0][i].decode()}")
+        print(f"{input0_data[0][i].decode()} - {input1_data[0][i].decode()} = {output1_data[0][i].decode()}")
         # Convert result from string to int to check result
         r0 = int(output0_data[0][i])
         r1 = int(output1_data[0][i])
         if expected_sum[0][i] != r0:
-            print("error: incorrect sum")
+            print(f"Error: incorrect sum at index {i}. Expected {expected_sum[0][i]}, got {r0}")
             sys.exit(1)
         if expected_diff[0][i] != r1:
-            print("error: incorrect difference")
+            print(f"Error: incorrect difference at index {i}. Expected {expected_diff[0][i]}, got {r1}")
             sys.exit(1)
     print("PASS: simple_string")
 
 
 def test_model_image_classification(args, triton_client):
-    def parse_model(model_metadata, model_config):
+    def parse_model(model_metadata, model_config, is_http):
         """
         Check the configuration of a model to make sure it meets the
         requirements for an image classification network (as expected by
         this client)
         """
-        if len(model_metadata.inputs) != 1:
-            raise Exception("expecting 1 input, got {}".format(
-                len(model_metadata.inputs)))
-        if len(model_metadata.outputs) != 1:
-            raise Exception("expecting 1 output, got {}".format(
-                len(model_metadata.outputs)))
-        if len(model_config.input) != 1:
-            raise Exception(
-                "expecting 1 input in model configuration, got {}".format(
-                    len(model_config.input)))
-        input_metadata = model_metadata.inputs[0]
-        input_config = model_config.input[0]
-        output_metadata = model_metadata.outputs[0]
-        if output_metadata.datatype != "FP32":
-            raise Exception("expecting output datatype to be FP32, model '" +
-                            model_metadata.name + "' output type is " +
-                            output_metadata.datatype)
+        if is_http:
+            inputs = model_metadata['inputs']
+            outputs = model_metadata['outputs']
+            input_config = model_config['input'][0]
+            output_metadata = outputs[0]
+            max_batch_size = model_config['max_batch_size']
+        else:
+            inputs = model_metadata.inputs
+            outputs = model_metadata.outputs
+            input_config = model_config.config.input[0]
+            output_metadata = outputs[0]
+            max_batch_size = model_config.config.max_batch_size
+        if len(inputs) != 1:
+            raise Exception(f"expecting 1 input, got {len(inputs)}")
+        if len(outputs) != 1:
+            raise Exception(f"expecting 1 output, got {len(outputs)}")
+        if is_http:
+            if len(model_config['input']) != 1:
+                raise Exception(f"expecting 1 input in model configuration, got {len(model_config['input'])}")
+        else:
+            if len(model_config.config.input) != 1:
+                raise Exception(f"expecting 1 input in model configuration, got {len(model_config.config.input)}")
+        input_metadata = inputs[0]
+        if is_http:
+            if output_metadata['datatype'] != "FP32":
+                raise Exception(f"expecting output datatype to be FP32, model '{model_metadata['name']}' output type is {output_metadata['datatype']}")
+        else:
+            if output_metadata.datatype != "FP32":
+                raise Exception(f"expecting output datatype to be FP32, model '{model_metadata.name}' output type is {output_metadata.datatype}")
         # Output is expected to be a vector. But allow any number of
         # dimensions as long as all but 1 is size 1 (e.g. { 10 }, { 1, 10
         # }, { 10, 1, 1 } are all ok). Ignore the batch dimension if there
         # is one.
-        output_batch_dim = (model_config.max_batch_size > 0)
+        output_batch_dim = (max_batch_size > 0)
         non_one_cnt = 0
-        for dim in output_metadata.shape:
+        output_shape = output_metadata['shape'] if is_http else output_metadata.shape
+        for dim in output_shape:
             if output_batch_dim:
                 output_batch_dim = False
             elif dim > 1:
@@ -448,35 +514,36 @@ def test_model_image_classification(args, triton_client):
                     raise Exception("expecting model output to be a vector")
         # Model input must have 3 dims, either CHW or HWC (not counting
         # the batch dimension), either CHW or HWC
-        input_batch_dim = (model_config.max_batch_size > 0)
+        input_batch_dim = (max_batch_size > 0)
         expected_input_dims = 3 + (1 if input_batch_dim else 0)
-        if len(input_metadata.shape) != expected_input_dims:
-            raise Exception(
-                "expecting input to have {} dimensions, model '{}' input has {}".
-                format(expected_input_dims, model_metadata.name,
-                    len(input_metadata.shape)))
-        if type(input_config.format) == str:
+        input_shape = input_metadata['shape'] if is_http else input_metadata.shape
+        if len(input_shape) != expected_input_dims:
+            raise Exception(f"expecting input to have {expected_input_dims} dimensions, model '{model_metadata['name'] if is_http else model_metadata.name}' input has {len(input_shape)}")
+        input_format = input_config['format'] if is_http else input_config.format
+        if isinstance(input_format, str):
             FORMAT_ENUM_TO_INT = dict(mc.ModelInput.Format.items())
-            input_config.format = FORMAT_ENUM_TO_INT[input_config.format]
-        if ((input_config.format != mc.ModelInput.FORMAT_NCHW) and
-            (input_config.format != mc.ModelInput.FORMAT_NHWC)):
+            input_format = FORMAT_ENUM_TO_INT[input_format]
+        if ((input_format != mc.ModelInput.FORMAT_NCHW) and
+            (input_format != mc.ModelInput.FORMAT_NHWC)):
             raise Exception("unexpected input format " +
-                            mc.ModelInput.Format.Name(input_config.format) +
+                            mc.ModelInput.Format.Name(input_format) +
                             ", expecting " +
                             mc.ModelInput.Format.Name(mc.ModelInput.FORMAT_NCHW) +
                             " or " +
                             mc.ModelInput.Format.Name(mc.ModelInput.FORMAT_NHWC))
-        if input_config.format == mc.ModelInput.FORMAT_NHWC:
-            h = input_metadata.shape[1 if input_batch_dim else 0]
-            w = input_metadata.shape[2 if input_batch_dim else 1]
-            c = input_metadata.shape[3 if input_batch_dim else 2]
+        if input_format == mc.ModelInput.FORMAT_NHWC:
+            h = input_shape[1 if input_batch_dim else 0]
+            w = input_shape[2 if input_batch_dim else 1]
+            c = input_shape[3 if input_batch_dim else 2]
         else:
-            c = input_metadata.shape[1 if input_batch_dim else 0]
-            h = input_metadata.shape[2 if input_batch_dim else 1]
-            w = input_metadata.shape[3 if input_batch_dim else 2]
-        return (model_config.max_batch_size, input_metadata.name,
-                output_metadata.name, c, h, w, input_config.format,
-                input_metadata.datatype)
+            c = input_shape[1 if input_batch_dim else 0]
+            h = input_shape[2 if input_batch_dim else 1]
+            w = input_shape[3 if input_batch_dim else 2]
+        return (max_batch_size, 
+                input_metadata['name'] if is_http else input_metadata.name,
+                output_metadata['name'] if is_http else output_metadata.name, 
+                c, h, w, input_format,
+                input_metadata['datatype'] if is_http else input_metadata.datatype)
     def preprocess(img, format, dtype, c, h, w, scaling):
         """
         Pre-process an image to meet the size, type and format
@@ -511,16 +578,17 @@ def test_model_image_classification(args, triton_client):
         # doesn't provide any information as to other channel orderings
         # (like BGR) so we just assume RGB.
         return ordered
-    class UserData:
-        def __init__(self):
-            self._completed_requests = queue.Queue()
     def requestGenerator(client, batched_image_data, input_name, output_name, dtype, args):
         # Set the input data
-        inputs = [grpcclient.InferInput(input_name, batched_image_data.shape, dtype)]
+        if args.method == 'http':
+            inputs = [httpclient.InferInput(input_name, batched_image_data.shape, dtype)]
+        else:  # grpc
+            inputs = [grpcclient.InferInput(input_name, batched_image_data.shape, dtype)]
         inputs[0].set_data_from_numpy(batched_image_data)
-        outputs = [
-            grpcclient.InferRequestedOutput(output_name, class_count=args.classes)
-        ]
+        if args.method == 'http':
+            outputs = [httpclient.InferRequestedOutput(output_name, class_count=args.classes)]
+        else:  # grpc
+            outputs = [grpcclient.InferRequestedOutput(output_name, class_count=args.classes)]
         yield inputs, outputs, args.model_name, args.model_version
     def postprocess(results, output_name, batch_size, supports_batching):
         """
@@ -546,15 +614,13 @@ def test_model_image_classification(args, triton_client):
     except InferenceServerException as e:
         print("failed to retrieve the metadata: " + str(e))
         sys.exit(1)
-    # print('-'*30, "\nmodel_metadata:\n", model_metadata, '-'*30)
     try:
         model_config = triton_client.get_model_config(model_name=args.model_name, model_version=args.model_version)
     except InferenceServerException as e:
         print("failed to retrieve the config: " + str(e))
         sys.exit(1)
-    # print('-'*30, "\nmodel_config:\n", model_config, '-'*30)
-    model_config = model_config.config
-    max_batch_size, input_name, output_name, c, h, w, format, dtype = parse_model(model_metadata, model_config)
+    is_http = args.method == 'http'
+    max_batch_size, input_name, output_name, c, h, w, format, dtype = parse_model(model_metadata, model_config, is_http)
     supports_batching = max_batch_size > 0
     if not supports_batching and args.batch_size != 1:
         print("ERROR: This model doesn't support batching.")
@@ -570,14 +636,10 @@ def test_model_image_classification(args, triton_client):
             if os.path.isfile(os.path.join(args.image_path, f))
         ]
     else:
-        filenames = [
-            args.image_path,
-        ]
+        filenames = [args.image_path]
     assert(len(filenames) > 0)
     filenames.sort()
-    # print("filenames:\n", filenames)
-    # Preprocess the images into input data according to model
-    # requirements
+    # Preprocess the images into input data according to model requirements
     image_data = []
     for filename in filenames:
         img = Image.open(filename)
@@ -585,18 +647,10 @@ def test_model_image_classification(args, triton_client):
     # Send requests of args.batch_size images. If the number of
     # images isn't an exact multiple of args.batch_size then just
     # start over with the first images until the batch is filled.
-    requests = []
     responses = []
-    result_filenames = []
-    request_ids = []
     image_idx = 0
     last_request = False
-    user_data = UserData()
-    # Holds the handles to the ongoing HTTP async requests.
-    async_requests = []
     sent_count = 0
-    # if args.streaming:
-    #     triton_client.start_stream(partial(completion_callback, user_data))
     while not last_request:
         input_filenames = []
         repeated_image_data = []
@@ -616,87 +670,53 @@ def test_model_image_classification(args, triton_client):
                     triton_client, batched_image_data, input_name, output_name, dtype, args):
                 sent_count += 1
                 responses.append(
-                        triton_client.infer(args.model_name,
-                                            inputs,
-                                            request_id=str(sent_count),
-                                            model_version=args.model_version,
-                                            outputs=outputs))
-                # if args.streaming:
-                #     triton_client.async_stream_infer(
-                #         args.model_name,
-                #         inputs,
-                #         request_id=str(sent_count),
-                #         model_version=args.model_version,
-                #         outputs=outputs)
-                # elif args.async_set:
-                #     if args.protocol.lower() == "grpc":
-                #         triton_client.async_infer(
-                #             args.model_name,
-                #             inputs,
-                #             partial(completion_callback, user_data),
-                #             request_id=str(sent_count),
-                #             model_version=args.model_version,
-                #             outputs=outputs)
-                #     else:
-                #         async_requests.append(
-                #             triton_client.async_infer(
-                #                 args.model_name,
-                #                 inputs,
-                #                 request_id=str(sent_count),
-                #                 model_version=args.model_version,
-                #                 outputs=outputs))
-                # else:
-                #     responses.append(
-                #         triton_client.infer(args.model_name,
-                #                             inputs,
-                #                             request_id=str(sent_count),
-                #                             model_version=args.model_version,
-                #                             outputs=outputs))
+                    triton_client.infer(model_name,
+                                        inputs,
+                                        request_id=str(sent_count),
+                                        model_version=model_version,
+                                        outputs=outputs))
         except InferenceServerException as e:
             print("inference failed: " + str(e))
-            # if args.streaming:
-            #     triton_client.stop_stream()
             sys.exit(1)
-    # if args.streaming:
-    #     triton_client.stop_stream()
-    # if args.protocol.lower() == "grpc":
-    #     if args.streaming or args.async_set:
-    #         processed_count = 0
-    #         while processed_count < sent_count:
-    #             (results, error) = user_data._completed_requests.get()
-    #             processed_count += 1
-    #             if error is not None:
-    #                 print("inference failed: " + str(error))
-    #                 sys.exit(1)
-    #             responses.append(results)
-    # else:
-    #     if args.async_set:
-    #         # Collect results from the ongoing async requests
-    #         # for HTTP Async requests.
-    #         for async_request in async_requests:
-    #             responses.append(async_request.get_result())
     for response in responses:
-        this_id = response.get_response().id
-        # if args.protocol.lower() == "grpc":
-        #     this_id = response.get_response().id
-        # else:
-        #     this_id = response.get_response()["id"]
+        if args.method == 'http':
+            this_id = response.get_response()["id"]
+        else:  # grpc
+            this_id = response.get_response().id
         print("Request {}, batch size {}".format(this_id, args.batch_size))
         postprocess(response, output_name, args.batch_size, supports_batching)
     print("PASS: " + args.model_name)
 
 
 def main(args):
+    """
+    Main function that orchestrates the testing of different model types.
+
+    This function creates a Triton client based on the specified method (HTTP or gRPC)
+    and calls the appropriate test function based on the model name.
+
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+
+    Raises:
+        SystemExit: If there's an error in client creation or an invalid model name is provided.
+
+    Example:
+        main(args)
+    """
     print("model-server: ", args.model_server)
     print("model-name:   ", args.model_name)
     print("drift-data:   ", args.drift_data)
+    print("method:       ", args.method)
     try:
-        # triton_client = httpclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
-        triton_client = grpcclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
+        if args.method == 'http':
+            triton_client = httpclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
+        else:  # grpc
+            triton_client = grpcclient.InferenceServerClient(url=args.model_server, verbose=args.verbose)
     except Exception as e:
         print("channel creation failed: " + str(e))
         sys.exit(1)
-    if args.model_name == "iris-classification-model":
+    if "iris-classification-model" in args.model_name:
         test_iris_classification_model(args, triton_client)
     elif args.model_name == "simple":
         test_model_simple(args, triton_client)
@@ -716,11 +736,6 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d',
-                        '--drift_data',
-                        type=str,
-                        default="False",
-                        help='Flag to indicate whether drift data should be used.')
     parser.add_argument('-s',
                         '--model-server',
                         type=str,
@@ -737,12 +752,6 @@ if __name__ == '__main__':
                         required=False,
                         default="",
                         help='Version of model. Default is to use latest version.')
-    parser.add_argument('-v',
-                        '--verbose',
-                        action="store_true",
-                        required=False,
-                        default=False,
-                        help='Enable verbose output.')
     parser.add_argument('-b',
                         '--batch-size',
                         type=int,
@@ -757,7 +766,7 @@ if __name__ == '__main__':
                         default='INCEPTION',
                         help='Type of scaling to apply to image pixels. Default is INCEPTION (only for image-based models).')
     parser.add_argument('-i',
-                        '--image_path',
+                        '--image-path',
                         type=str,
                         nargs='?',
                         default=None,
@@ -768,6 +777,23 @@ if __name__ == '__main__':
                         required=False,
                         default=3,
                         help='Number of class results to report (only for image-based models). Default is 3.')
+    parser.add_argument('-m',
+                        '--method',
+                        type=str,
+                        choices=['http', 'grpc'],
+                        default='http',
+                        help='Communication method with server: "http" or "grpc". Default is "http".')
+    parser.add_argument('-d',
+                        '--drift-data',
+                        type=str,
+                        default="False",
+                        help='Flag to indicate whether drift data should be used.')
+    parser.add_argument('-v',
+                        '--verbose',
+                        action="store_true",
+                        required=False,
+                        default=False,
+                        help='Enable verbose output.')
     args = parser.parse_args()
     main(args)
 ]]>
@@ -783,65 +809,61 @@ import org.ow2.proactive.scheduler.common.job.JobVariable;
 import groovy.json.JsonSlurper
 
 // -------------------------------------------------------------
-// Extract the GRPC_INFERENCE_URL using the MODEL_SERVER_ID
-String getGrpcEndpointUrl(String sessionid, String proactiveUrl, String instanceId) {
+// Extract the INFERENCE_URL using the MODEL_SERVER_ID
+String getInferenceEndpointUrl(String sessionid, String proactiveUrl, Integer modelServerId, String protocol, boolean use_proxy) {
     // Define headers
     def headers = ['sessionid': sessionid]
-
     // Define base URL
-    def baseUrl = "$proactiveUrl/cloud-automation-service/serviceInstances/$instanceId"
-
+    def baseUrl = "$proactiveUrl/cloud-automation-service/serviceInstances/$modelServerId"
     // Create URL object
     def url = new URL(baseUrl)
-
     // Open connection
     def connection = url.openConnection()
-
     // Set headers
     headers.each { key, value ->
         connection.setRequestProperty(key, value)
     }
-
     // Get response
     def response = connection.getInputStream()
-
     // Parse JSON response
     def json = new JsonSlurper().parseText(response.text)
-
-    // Fetch GRPC_ENDPOINT_ID
-    def grpcEndpointId = json.deployments.endpoint.find { it.id.contains("-grpc") }?.id
-
-    // Fetch GRPC_ENDPOINT_URL
-    def grpcEndpointUrl = json.deployments.endpoint.find { it.id == grpcEndpointId }?.url
-
-    return grpcEndpointUrl
+    // Fetch ENDPOINT_ID based on protocol
+    def endpointId
+    if (protocol == "http" && use_proxy) {
+        endpointId = json.deployments.endpoint.find { it.id.contains("-proxy") }?.id
+    } else {
+        endpointId = json.deployments.endpoint.find { it.id.contains("-${protocol}") }?.id
+    }
+    // Fetch ENDPOINT_URL
+    def endpointUrl = json.deployments.endpoint.find { it.id == endpointId }?.url
+    return endpointUrl
 }
 
-// Usage example
-schedulerapi.connect()
-connectionInfo = schedulerapi.getConnectionInfo()
-ciLogin = connectionInfo.getLogin()
-ciPasswd = connectionInfo.getPassword()
-ciUrl = connectionInfo.getUrl()
-def sessionId = schedulerapi.getSession()
+Integer MODEL_SERVER_ID = variables.get("MODEL_SERVER_ID") as Integer
+String INFERENCE_PROTOCOL = variables.get("INFERENCE_PROTOCOL")
+boolean USE_PROXY = variables.get("USE_PROXY") as Boolean
+println("MODEL_SERVER_ID:    " + MODEL_SERVER_ID)
+println("INFERENCE_PROTOCOL: " + INFERENCE_PROTOCOL)
+println("USE_PROXY:          " + USE_PROXY)
 
-def url = new URL(ciUrl)
-def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
-def instanceId = variables.get("MODEL_SERVER_ID")
-def USE_GRPC = variables.get("USE_GRPC")
-println "USE_GRPC: $USE_GRPC"
-
-String GRPC_INFERENCE_URL = ""  // Declare and initialize the variable outside the conditional blocks
-
-if (USE_GRPC == "false") {
-    GRPC_INFERENCE_URL = getGrpcEndpointUrl(sessionId, proactiveUrl, instanceId)
-    println "Using the defined variable MODEL_SERVER_ID to get the GRPC_INFERENCE_URL associated with it."
-} else {
-    GRPC_INFERENCE_URL = variables.get("GRPC_INFERENCE_URL")
-    println "Using the defined variable GRPC_INFERENCE_URL to send inferences."
+def getInferenceUrl(Integer modelServerId, String inferenceProtocol, boolean useProxy) {
+    schedulerapi.connect()
+    connectionInfo = schedulerapi.getConnectionInfo()
+    def sessionId = schedulerapi.getSession()
+    def url = new URL(connectionInfo.getUrl())
+    def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
+    String inferenceUrl = ""
+    if (modelServerId != -1) {
+        inferenceUrl = getInferenceEndpointUrl(sessionId, proactiveUrl, modelServerId, inferenceProtocol, useProxy)
+        println "Using the defined variable MODEL_SERVER_ID to get the ${inferenceProtocol.toUpperCase()}_INFERENCE_URL associated with it."
+    } else {
+        println "ERROR: No valid MODEL_SERVER_ID provided."
+        System.exit(1)
+    }
+    return inferenceUrl
 }
-
-println("GRPC_INFERENCE_URL: " + GRPC_INFERENCE_URL)
+String INFERENCE_URL = getInferenceUrl(MODEL_SERVER_ID, INFERENCE_PROTOCOL, USE_PROXY)
+println("INFERENCE_URL: " + INFERENCE_URL)
 
 // -------------------------------------------------------------
 // Define the containsIgnoreCase function
@@ -874,7 +896,7 @@ println("TASK_FILE_PATH:         " + TASK_FILE_PATH)
 println("DRIFT_DATA:             " + DRIFT_DATA)
 
 // Create the inference script file
-def create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA) {
+def create_inference_script(TASK_FILE_PATH, INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA, INFERENCE_PROTOCOL) {
     def file = new File("inference.sh")
     try {
         if (file.exists()) {
@@ -893,12 +915,12 @@ def create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAG
                 else
                     echo "Downloading $IMAGE_PATH as image.png"
                     wget -O image.png "$IMAGE_PATH"
-                    echo "python $TASK_FILE_PATH -s $GRPC_INFERENCE_URL -n $MODEL_NAME -i image.png -d $DRIFT_DATA"
-                    python $TASK_FILE_PATH -s $GRPC_INFERENCE_URL -n $MODEL_NAME -i image.png -d $DRIFT_DATA
+                    echo "python $TASK_FILE_PATH -s $INFERENCE_URL -n $MODEL_NAME -i image.png -d $DRIFT_DATA -m $INFERENCE_PROTOCOL"
+                    python $TASK_FILE_PATH -s $INFERENCE_URL -n $MODEL_NAME -i image.png -d $DRIFT_DATA -m $INFERENCE_PROTOCOL
                 fi
             else
-                echo "python $TASK_FILE_PATH -s $GRPC_INFERENCE_URL -n $MODEL_NAME -d $DRIFT_DATA"
-                python $TASK_FILE_PATH -s $GRPC_INFERENCE_URL -n $MODEL_NAME -d $DRIFT_DATA
+                echo "python $TASK_FILE_PATH -s $INFERENCE_URL -n $MODEL_NAME -d $DRIFT_DATA -m $INFERENCE_PROTOCOL"
+                python $TASK_FILE_PATH -s $INFERENCE_URL -n $MODEL_NAME -d $DRIFT_DATA -m $INFERENCE_PROTOCOL
             fi
         """
         file << bash_command
@@ -909,7 +931,7 @@ def create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAG
 }
 
 // Create the inference script file using the initial workflow variables values
-create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA)
+create_inference_script(TASK_FILE_PATH, INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA, INFERENCE_PROTOCOL)
 result = null
 int timeWithoutSignalCheck = 0
 int timeSpent = 0
@@ -956,25 +978,23 @@ while (true) {
     if (firstStart == 1 || timeWithoutSignalCheck >= SIGNAL_FREQUENCY_CHECK) {
         signalCheckStartTime = System.currentTimeMillis()
         println("Checking for signals")
-        if (variables.get("READY_SENT") == null || "Update_Frequency_Parameter".equalsIgnoreCase(result) || "Update_Inference_Parameters".equalsIgnoreCase(result) || "Simulate_Data_Drift".equalsIgnoreCase(result)) {
+        if (variables.get("READY_SENT") == null || "Update_Frequency_Parameter".equalsIgnoreCase(result) || "Update_Inference_Parameters".equalsIgnoreCase(result)) {
             // Define the Update_Inference_Parameters signal
+            // JobVariable(String name, String value, String model, String description, String group, boolean advanced, boolean hidden)
             List <JobVariable> signalVariables = new java.util.ArrayList<JobVariable>()
-            signalVariables.add(new JobVariable("GRPC_INFERENCE_URL", GRPC_INFERENCE_URL, "PA:NOT_EMPTY_STRING", "GRPC inference url of the model server (e.g. localhost:8001).", "", false, false))
+            signalVariables.add(new JobVariable("MODEL_SERVER_ID", ""+MODEL_SERVER_ID, "PA:Integer", "ID of the model server where the model that need to be consumed is deployed", "", false, false))
             signalVariables.add(new JobVariable("MODEL_NAME", MODEL_NAME, "PA:LIST(simple,simple_identity,simple_int8,simple_sequence,simple_string,densenet_onnx,inception_graphdef,iris-classification-model)", "Name of the model to be tested.", "", false, false))
             signalVariables.add(new JobVariable("IMAGE_PATH", IMAGE_PATH, "PA:URL", "Path of the image to be used for inference.", "", false, false))
             signalVariables.add(new JobVariable("IMAGE_PATH_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'densenet_onnx' || variables['MODEL_NAME'].toLowerCase() == 'inception_graphdef' ? showVar('IMAGE_PATH') : hideVar('IMAGE_PATH'))", "Handler for IMAGE_PATH variable.", "", false, true))
             signalVariables.add(new JobVariable("DRIFT_DATA_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'iris-classification-model' ? showVar('DRIFT_DATA') : hideVar('DRIFT_DATA'))", "Handler for DRIFT_DATA variable.", "", false, true))
             signalVariables.add(new JobVariable("DRIFT_DATA", ""+DRIFT_DATA, "PA:Boolean", "If True, input data will be drifted", "", false, false))
+            signalVariables.add(new JobVariable("INFERENCE_PROTOCOL", INFERENCE_PROTOCOL, "PA:LIST(http,grpc)", "Protocol to use for inference (http or grpc).", "", false, false))
+            signalVariables.add(new JobVariable("USE_PROXY_HANDLER", "", "PA:SPEL(variables['INFERENCE_PROTOCOL'].toLowerCase() == 'http' ? showVar('USE_PROXY') : hideVar('USE_PROXY'))", "Handler for USE_PROXY variable.", "", false, true))
+            signalVariables.add(new JobVariable("USE_PROXY", ""+USE_PROXY, "PA:Boolean", "Enable data drift detection (only for HTTP protocol)", "", false, false))
 
             // Define the Update_Frequency_Parameter signal
             List <JobVariable> signalVariables_frequency = new java.util.ArrayList<JobVariable>()
             signalVariables_frequency.add(new JobVariable("INFERENCE_FREQUENCY", ""+INFERENCE_FREQUENCY, "PA:Integer", "The frequency (in ms) to send a new inference request for the selected model.", "", false, false))
-
-            // Define the Simulate_Data_Drift signal
-            List <JobVariable> signalVariables_drift = new java.util.ArrayList<JobVariable>()
-            signalVariables_drift.add(new JobVariable("DRIFT_DATA", ""+DRIFT_DATA, "PA:Boolean", "If True, input data will be drifted", "", false, false))
-            signalVariables_drift.add(new JobVariable("MODEL_NAME", "iris-classification-model", "PA:LIST(iris-classification-model)", "Name of the model to be tested.", "", false, false))
-            signalVariables_drift.add(new JobVariable("DRIFT_DATA_HANDLER", "", "PA:SPEL(variables['MODEL_NAME'].toLowerCase() == 'iris-classification-model' ? showVar('DRIFT_DATA') : hideVar('DRIFT_DATA'))", "Handler for DRIFT_DATA variable.", "", false, true))
 
             // Read the variable SIGNALS
             signals = variables.get("SIGNALS")
@@ -991,8 +1011,6 @@ while (true) {
                     signalapi.readyForSignal(signal, signalVariables_frequency)
                 } else if (signal.equals("Update_Inference_Parameters")) {
                     signalapi.readyForSignal(signal, signalVariables)
-                } else if (signal.equals("Simulate_Data_Drift")) {
-                    signalapi.readyForSignal(signal, signalVariables_drift)
                 }
             }
 
@@ -1026,21 +1044,24 @@ while (true) {
                 }
                 if (containsIgnoreCase(s, "Update_Inference_Parameters")) {
                     updatedVariables = receivedSignals.get("Update_Inference_Parameters")
-                    GRPC_INFERENCE_URL = updatedVariables.get("GRPC_INFERENCE_URL")
+                    MODEL_SERVER_ID = updatedVariables.get("MODEL_SERVER_ID") as Integer
                     MODEL_NAME = updatedVariables.get("MODEL_NAME")
                     IMAGE_PATH = updatedVariables.get("IMAGE_PATH")
                     DRIFT_DATA = updatedVariables.get("DRIFT_DATA")
+                    INFERENCE_PROTOCOL = updatedVariables.get("INFERENCE_PROTOCOL")
+                    USE_PROXY = updatedVariables.get("USE_PROXY") as Boolean
+                    INFERENCE_URL = getInferenceUrl(MODEL_SERVER_ID, INFERENCE_PROTOCOL, USE_PROXY)
+                    println("MODEL_SERVER_ID:    " + MODEL_SERVER_ID)
+                    println("MODEL_NAME:         " + MODEL_NAME)
+                    println("IMAGE_PATH:         " + IMAGE_PATH)
+                    println("DRIFT_DATA:         " + DRIFT_DATA)
+                    println("INFERENCE_PROTOCOL: " + INFERENCE_PROTOCOL)
+                    println("USE_PROXY:          " + USE_PROXY)
+                    println("INFERENCE_URL:      " + INFERENCE_URL)
+                    println("TASK_FILE_PATH:     " + TASK_FILE_PATH)
                     result = "Update_Inference_Parameters"
                     // Re-generate the inference script using the new variable values
-                    create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA)
-                }
-                if (containsIgnoreCase(s, "Simulate_Data_Drift")) {
-                    updatedVariables = receivedSignals.get("Simulate_Data_Drift")
-                    DRIFT_DATA = updatedVariables.get("DRIFT_DATA")
-                    MODEL_NAME = updatedVariables.get("MODEL_NAME")
-                    result = "Simulate_Data_Drift"
-                    // Re-generate the inference script using the new variable values
-                    create_inference_script(TASK_FILE_PATH, GRPC_INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA)
+                    create_inference_script(TASK_FILE_PATH, INFERENCE_URL, MODEL_NAME, IMAGE_PATH, DRIFT_DATA, INFERENCE_PROTOCOL)
                 }
             }
         } else {
