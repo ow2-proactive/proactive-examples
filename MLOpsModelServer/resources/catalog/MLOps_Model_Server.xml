@@ -12,9 +12,12 @@
     <variable advanced="false" description="The model control mode determines how changes to the model repository are handled by Triton. Triton operates in one of three model control modes: NONE, EXPLICIT or POLL." group="MLOps_Model_Server Service Configuration" hidden="false" model="PA:LIST(none,explicit,poll)" name="MODEL_CONTROL_MODE" value="poll"/>
     <variable advanced="false" description="If True, additional modules will be added to the container." group="MLOps_Model_Server Service Configuration" hidden="false" model="PA:Boolean" name="EXTRA_MODULES_ENABLED" value="false"/>
     <variable advanced="false" description="Additional modules to be added to the container." group="MLOps_Model_Server Service Configuration" hidden="false" name="EXTRA_MODULES" value=""/>
-    <variable advanced="true" description="If specified, it specifies the port number for the HTTP inference." group="MLOps_Model_Server Service Configuration" hidden="false" name="HTTP_INFERENCE_SERVICE_PORT" value="-1"/>
-    <variable advanced="true" description="If specified, it specifies the port number for the GRPC inference." group="MLOps_Model_Server Service Configuration" hidden="false" name="GRPC_INFERENCE_SERVICE_PORT" value="-1"/>
-    <variable advanced="true" description="If specified, it specifies the port number for the HTTP metrics." group="MLOps_Model_Server Service Configuration" hidden="false" name="METRICS_PORT" value="-1"/>
+    <variable advanced="true" description="If specified, it specifies the port number for the PROXY inference." group="MLOps_Model_Server Service Configuration" hidden="false" name="PROXY_INFERENCE_SERVICE_PORT" model="PA:INTEGER" value="-1"/>
+    <variable advanced="true" description="If specified, it specifies the port number for the HTTP inference." group="MLOps_Model_Server Service Configuration" hidden="false" name="HTTP_INFERENCE_SERVICE_PORT" model="PA:INTEGER" value="-1"/>
+    <variable advanced="true" description="If specified, it specifies the port number for the GRPC inference." group="MLOps_Model_Server Service Configuration" hidden="false" name="GRPC_INFERENCE_SERVICE_PORT" model="PA:INTEGER" value="-1"/>
+    <variable advanced="true" description="If specified, it specifies the port number for the HTTP metrics." group="MLOps_Model_Server Service Configuration" hidden="false" name="METRICS_PORT" model="PA:INTEGER" value="-1"/>
+    <variable advanced="true" description="If specified, it specifies the port number for the RESTAPI server." group="MLOps_Model_Server Service Configuration" hidden="false" name="API_SERVER_PORT" model="PA:INTEGER" value="-1"/>
+    <variable advanced="true" description="If specified, it specifies the port number for the REDIS server." group="MLOps_Model_Server Service Configuration" hidden="false" name="REDIS_SERVER_PORT" model="PA:INTEGER" value="-1"/>
     <variable advanced="true" description="Docker image used to start the NVIDIA Triton Inference Server." group="MLOps_Model_Server Service Configuration" hidden="false" name="DOCKER_IMAGE" value="activeeon/tritonserver:22.10-py3"/>
     <variable advanced="false" hidden="true" model="PA:SPEL(variables['GPU_ENABLED'].toLowerCase() == 'true' ? showVar('GPU_INDEX') : hideVar('GPU_INDEX'))" name="GPU_ENABLED_HANDLER" value=""/>
     <variable advanced="false" hidden="true" model="PA:SPEL(variables['EXTRA_MODULES_ENABLED'].toLowerCase() == 'true' ? showVar('EXTRA_MODULES') : hideVar('EXTRA_MODULES'))" name="EXTRA_MODULES_ENABLED_HANDLER" value=""/>
@@ -66,57 +69,128 @@ GPU_INDEX=$variables_GPU_INDEX
 EXTRA_MODULES_ENABLED=$variables_EXTRA_MODULES_ENABLED
 EXTRA_MODULES=$variables_EXTRA_MODULES
 
+PROXY_SERVER_INTERNAL_PORT=8080
 HTTP_SERVER_INTERNAL_PORT=8000
 GRPC_SERVER_INTERNAL_PORT=8001
 PROMETHEUS_SERVER_INTERNAL_PORT=8002
+API_SERVER_INTERNAL_PORT=9000
+REDIS_SERVER_INTERNAL_PORT=6379
 
 HTTPS_ENABLED=$variables_HTTPS_ENABLED
 INSTANCE_NAME=$variables_INSTANCE_NAME
 MODEL_REGISTRY_PATH=$variables_MODEL_REGISTRY_PATH
 MODEL_CONTROL_MODE=$variables_MODEL_CONTROL_MODE
+PROXY_SERVER_PORT=$variables_PROXY_INFERENCE_SERVICE_PORT
 HTTP_SERVER_PORT=$variables_HTTP_INFERENCE_SERVICE_PORT
 GRPC_SERVER_PORT=$variables_GRPC_INFERENCE_SERVICE_PORT
 PROMETHEUS_SERVER_PORT=$variables_METRICS_PORT
+API_SERVER_PORT=$variables_API_SERVER_PORT
+REDIS_SERVER_PORT=$variables_REDIS_SERVER_PORT
 ################################################################################
 
 PATH=$PATH:/usr/sbin
 
+ASSIGNED_PORTS=()
 GET_RANDOM_PORT(){
-    PCA_SERVICES_PORT_RANGE_FILE=$variables_PA_SCHEDULER_HOME/config/pca_services_port_range
+    PCA_SERVICES_PORT_RANGE_FILE="$variables_PA_SCHEDULER_HOME/config/pca_services_port_range"
     if [[ -f "$PCA_SERVICES_PORT_RANGE_FILE" ]]; then
-        read LOWERPORT UPPERPORT < $PCA_SERVICES_PORT_RANGE_FILE
+        # If the custom port range file exists, read LOWERPORT and UPPERPORT from it
+        read LOWERPORT UPPERPORT < "$PCA_SERVICES_PORT_RANGE_FILE"
     else
+        # Otherwise, read the system's default local port range
         read LOWERPORT UPPERPORT < /proc/sys/net/ipv4/ip_local_port_range
     fi
-    while :
-    do
-        RND_PORT="`shuf -i $LOWERPORT-$UPPERPORT -n 1`"
-        ss -lpn | grep -q ":$RND_PORT " || break
+    # Validate the port range values to ensure they are numbers within 1-65535 and LOWERPORT is less than UPPERPORT
+    if ! [[ $LOWERPORT =~ ^[0-9]+$ ]] || ! [[ $UPPERPORT =~ ^[0-9]+$ ]] || \
+      (( LOWERPORT < 1 || UPPERPORT > 65535 || LOWERPORT >= UPPERPORT )); then
+        echo "Invalid port range: $LOWERPORT-$UPPERPORT" >&2
+        return 1
+    fi
+    # Check if required commands 'shuf' and 'ss' are available on the system
+    if ! command -v shuf &> /dev/null || ! command -v ss &> /dev/null; then
+        echo "Required commands 'shuf' and 'ss' are not available." >&2
+        return 1
+    fi
+    MAX_ATTEMPTS=100   # Set the maximum number of attempts to find an available port
+    ATTEMPT=0          # Initialize the attempt counter
+    while (( ATTEMPT < MAX_ATTEMPTS )); do
+        # Generate a random port number within the specified range
+        RND_PORT="$(shuf -i $LOWERPORT-$UPPERPORT -n 1)"
+        # Check if the port is already in ASSIGNED_PORTS
+        if [[ " ${ASSIGNED_PORTS[@]} " =~ " $RND_PORT " ]]; then
+            ((ATTEMPT++))
+            continue
+        fi
+        # Check if the generated port is not already in use
+        if ! ss -lpn | grep -q ":$RND_PORT\\>"; then
+            # Try to connect to the port to ensure it's not bound (some services might not show up in ss)
+            if (echo "" >/dev/tcp/127.0.0.1/$RND_PORT) &>/dev/null; then
+                # If connection succeeds, the port is in use; increment attempt counter and continue
+                ((ATTEMPT++))
+                continue
+            else
+                # If connection fails, the port is available; exit the loop
+                break
+            fi
+        fi
+        # Increment attempt counter if the port is in use
+        ((ATTEMPT++))
     done
-    echo $RND_PORT
+    # If no available port was found after maximum attempts, output an error and return failure
+    if (( ATTEMPT == MAX_ATTEMPTS )); then
+        echo "No available ports found in the range $LOWERPORT-$UPPERPORT" >&2
+        return 1
+    fi
+    # Output the found available random port number
+    echo "$RND_PORT"
 }
+
+if [ "$PROXY_SERVER_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number for PROXY_SERVER_PORT"
+    PROXY_SERVER_PORT=$(GET_RANDOM_PORT)
+    ASSIGNED_PORTS+=("$PROXY_SERVER_PORT")
+    echo "[INFO] PROXY_SERVER_PORT is $PROXY_SERVER_PORT"
+fi
 
 if [ "$HTTP_SERVER_PORT" -eq "-1" ]; then
     echo "[INFO] Picking a random port number for HTTP_SERVER_PORT"
     HTTP_SERVER_PORT=$(GET_RANDOM_PORT)
+    ASSIGNED_PORTS+=("$HTTP_SERVER_PORT")
     echo "[INFO] HTTP_SERVER_PORT is $HTTP_SERVER_PORT"
 fi
 
 if [ "$GRPC_SERVER_PORT" -eq "-1" ]; then
     echo "[INFO] Picking a random port number for GRPC_SERVER_PORT"
     GRPC_SERVER_PORT=$(GET_RANDOM_PORT)
+    ASSIGNED_PORTS+=("$GRPC_SERVER_PORT")
     echo "[INFO] GRPC_SERVER_PORT is $GRPC_SERVER_PORT"
 fi
 
 if [ "$PROMETHEUS_SERVER_PORT" -eq "-1" ]; then
-    echo "[INFO] Picking a random port number for PROMETHEUS_PORT"
+    echo "[INFO] Picking a random port number for PROMETHEUS_SERVER_PORT"
     PROMETHEUS_SERVER_PORT=$(GET_RANDOM_PORT)
+    ASSIGNED_PORTS+=("$PROMETHEUS_SERVER_PORT")
     echo "[INFO] PROMETHEUS_SERVER_PORT is $PROMETHEUS_SERVER_PORT"
 fi
-echo "[INFO] The service will be initialized on port $PROMETHEUS_SERVER_PORT"
+
+if [ "$API_SERVER_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number for API_SERVER_PORT"
+    API_SERVER_PORT=$(GET_RANDOM_PORT)
+    ASSIGNED_PORTS+=("$API_SERVER_PORT")
+    echo "[INFO] API_SERVER_PORT is $API_SERVER_PORT"
+fi
+
+if [ "$REDIS_SERVER_PORT" -eq "-1" ]; then
+    echo "[INFO] Picking a random port number for REDIS_SERVER_PORT"
+    REDIS_SERVER_PORT=$(GET_RANDOM_PORT)
+    ASSIGNED_PORTS+=("$REDIS_SERVER_PORT")
+    echo "[INFO] REDIS_SERVER_PORT is $REDIS_SERVER_PORT"
+fi
+
+echo "[INFO] The service will be initialized on ports PROXY_SERVER_PORT=$PROXY_SERVER_PORT HTTP_SERVER_PORT=$HTTP_SERVER_PORT GRPC_SERVER_PORT=$GRPC_SERVER_PORT PROMETHEUS_SERVER_PORT=$PROMETHEUS_SERVER_PORT API_SERVER_PORT=$API_SERVER_PORT REDIS_SERVER_PORT=$REDIS_SERVER_PORT"
 
 if [ -z "$INSTANCE_NAME" ]; then
-    echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed".
+    echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed."
     exit 1
 fi
 
@@ -124,7 +198,7 @@ echo "Pulling $DOCKER_IMAGE"
 docker pull $DOCKER_IMAGE
 
 if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
-    echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
+    echo "[ERROR] \"$INSTANCE_NAME\" is already used by another service instance."
     exit 128
 else
     echo "Running $INSTANCE_NAME container"
@@ -165,20 +239,26 @@ else
 
     echo "GPU_PARAMS=$GPU_PARAMS"
     echo "INSTANCE_NAME=$INSTANCE_NAME"
+    echo "PROXY_SERVER_PORT=$PROXY_SERVER_PORT"
+    echo "PROXY_SERVER_INTERNAL_PORT=$PROXY_SERVER_INTERNAL_PORT"
     echo "HTTP_SERVER_PORT=$HTTP_SERVER_PORT"
     echo "HTTP_SERVER_INTERNAL_PORT=$HTTP_SERVER_INTERNAL_PORT"
     echo "GRPC_SERVER_PORT=$GRPC_SERVER_PORT"
     echo "GRPC_SERVER_INTERNAL_PORT=$GRPC_SERVER_INTERNAL_PORT"
     echo "PROMETHEUS_SERVER_PORT=$PROMETHEUS_SERVER_PORT"
     echo "PROMETHEUS_SERVER_INTERNAL_PORT=$PROMETHEUS_SERVER_INTERNAL_PORT"
+    echo "API_SERVER_PORT=$API_SERVER_PORT"
+    echo "API_SERVER_INTERNAL_PORT=$API_SERVER_INTERNAL_PORT"
+    echo "REDIS_SERVER_PORT=$REDIS_SERVER_PORT"
+    echo "REDIS_SERVER_INTERNAL_PORT=$REDIS_SERVER_INTERNAL_PORT"
     echo "MOUNT_PATH=$MOUNT_PATH"
     echo "DOCKER_IMAGE=$DOCKER_IMAGE"
     echo "INSTALL_EXTRA_MODULES=$INSTALL_EXTRA_MODULES"
     echo "MODEL_REPOSITORY=$MODEL_REPOSITORY"
     echo "MODEL_CONTROL_MODE_PARAM=$MODEL_CONTROL_MODE_PARAM"
     
-    echo "docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE bash -c $INSTALL_EXTRA_MODULES tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM"
-    docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE bash -c "$INSTALL_EXTRA_MODULES tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM --response-cache-byte-size=1024"
+    echo "docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $PROXY_SERVER_PORT:$PROXY_SERVER_INTERNAL_PORT -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT -p $API_SERVER_PORT:$API_SERVER_INTERNAL_PORT -p $REDIS_SERVER_PORT:$REDIS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE bash -c $INSTALL_EXTRA_MODULES tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM"
+    docker run -d --rm --shm-size 16384m $GPU_PARAMS --name $INSTANCE_NAME -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -p $PROXY_SERVER_PORT:$PROXY_SERVER_INTERNAL_PORT -p $HTTP_SERVER_PORT:$HTTP_SERVER_INTERNAL_PORT -p $GRPC_SERVER_PORT:$GRPC_SERVER_INTERNAL_PORT -p $PROMETHEUS_SERVER_PORT:$PROMETHEUS_SERVER_INTERNAL_PORT -p $API_SERVER_PORT:$API_SERVER_INTERNAL_PORT -p $REDIS_SERVER_PORT:$REDIS_SERVER_INTERNAL_PORT $MOUNT_PATH $DOCKER_IMAGE bash -c "$INSTALL_EXTRA_MODULES tritonserver $MODEL_REPOSITORY $MODEL_CONTROL_MODE_PARAM --response-cache-byte-size=1024"
 
     if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
         RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
@@ -190,10 +270,12 @@ else
     fi
 fi
 
-MODEL_SERVICE_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PROMETHEUS_SERVER_PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
-echo "$PROMETHEUS_SERVER_PORT" > $INSTANCE_NAME"_port_prometheus"
+echo "$PROXY_SERVER_PORT" > $INSTANCE_NAME"_port_proxy"
 echo "$HTTP_SERVER_PORT" > $INSTANCE_NAME"_port_http"
 echo "$GRPC_SERVER_PORT" > $INSTANCE_NAME"_port_grpc"
+echo "$PROMETHEUS_SERVER_PORT" > $INSTANCE_NAME"_port_prometheus"
+echo "$API_SERVER_PORT" > $INSTANCE_NAME"_port_api"
+echo "$REDIS_SERVER_PORT" > $INSTANCE_NAME"_port_redis"
 
 containerID=$(docker ps -aqf "name=^/$INSTANCE_NAME$")
 echo "$containerID" > $INSTANCE_NAME"_containerID"
@@ -226,14 +308,14 @@ import java.net.URLEncoder;
 
 // Acquire variables
 def instanceId = variables.get("PCA_INSTANCE_ID") as long
-def httpsEnabled = variables.get("HTTPS_ENABLED")
+// def httpsEnabled = variables.get("HTTPS_ENABLED")
 def instanceName = variables.get("INSTANCE_NAME")
 def proxyfied = variables.get("PROXYFIED")
 def endpointID = variables.get("ENDPOINT_ID")+"-"+instanceId
 def engine = variables.get("ENGINE")
 
 println("proxyfied:    " + proxyfied)
-println("httpsEnabled: " + httpsEnabled)
+// println("httpsEnabled: " + httpsEnabled)
 
 try {
     // Determine Cloud Automation URL
@@ -256,17 +338,26 @@ try {
     if (hostname.equals("127.0.0.1")) {
         hostname = variables.get("PA_NODE_HOST")
     }
-    println("hostname:    " + hostname)
+    println("hostname: " + hostname)
 
     def port_prometheus = new File(instanceName+"_port_prometheus").text.trim()
     def containerUrlPrometheus = hostname+":"+port_prometheus
     def prometheusMetricsEndpoint = "/metrics"
+
+    def port_proxy = new File(instanceName+"_port_proxy").text.trim()
+    def containerUrlProxy = hostname+":"+port_proxy
 
     def port_http = new File(instanceName+"_port_http").text.trim()
     def containerUrlHttp = hostname+":"+port_http
 
     def port_grpc = new File(instanceName+"_port_grpc").text.trim()
     def containerUrlGrpc = hostname+":"+port_grpc
+
+    def port_api = new File(instanceName+"_port_api").text.trim()
+    def containerUrlApi = hostname+":"+port_api
+
+    def port_redis = new File(instanceName+"_port_redis").text.trim()
+    def containerUrlRedis = hostname+":"+port_redis
 
     def containerID = ""
     if (engine != null && "singularity".equalsIgnoreCase(engine)) {
@@ -276,15 +367,19 @@ try {
     }
 
     // Https
-    if ("true".equalsIgnoreCase(httpsEnabled)){
-        containerUrlPrometheusMetrics = "https://"+containerUrlPrometheus+prometheusMetricsEndpoint
-    } else{
-        containerUrlPrometheusMetrics = "http://"+containerUrlPrometheus+prometheusMetricsEndpoint
-    }
+    // if ("true".equalsIgnoreCase(httpsEnabled)){
+    //     containerUrlPrometheusMetrics = "https://"+containerUrlPrometheus+prometheusMetricsEndpoint
+    // } else{
+    //     containerUrlPrometheusMetrics = "http://"+containerUrlPrometheus+prometheusMetricsEndpoint
+    // }
+    containerUrlPrometheusMetrics = "http://"+containerUrlPrometheus+prometheusMetricsEndpoint
     containerUrlPrometheusMetrics = URLDecoder.decode(containerUrlPrometheusMetrics, "UTF-8");
     containerUrlPrometheus = URLDecoder.decode(containerUrlPrometheus, "UTF-8");
+    containerUrlProxy = URLDecoder.decode(containerUrlProxy, "UTF-8");
     containerUrlHttp = URLDecoder.decode(containerUrlHttp, "UTF-8");
     containerUrlGrpc = URLDecoder.decode(containerUrlGrpc, "UTF-8");
+    containerUrlApi = URLDecoder.decode(containerUrlApi, "UTF-8");
+    containerUrlRedis = URLDecoder.decode(containerUrlRedis, "UTF-8");
 
     // Container
     def Container container = new Container()
@@ -323,6 +418,11 @@ try {
     endpointPrometheus.setId(endpointIDprom);
     endpointPrometheus.setUrl(containerUrlPrometheus);
 
+    def Endpoint endpointProxy = new Endpoint();
+    endpointIDproxy = endpointID + "-proxy"
+    endpointProxy.setId(endpointIDproxy);
+    endpointProxy.setUrl(containerUrlProxy);
+
     def Endpoint endpointHttp = new Endpoint();
     endpointIDhttp = endpointID + "-http"
     endpointHttp.setId(endpointIDhttp);
@@ -332,6 +432,16 @@ try {
     endpointIDgrpc = endpointID + "-grpc"
     endpointGrpc.setId(endpointIDgrpc);
     endpointGrpc.setUrl(containerUrlGrpc);
+
+    def Endpoint endpointApi = new Endpoint();
+    endpointIDapi = endpointID + "-api"
+    endpointApi.setId(endpointIDapi);
+    endpointApi.setUrl(containerUrlApi);
+
+    def Endpoint endpointRedis = new Endpoint();
+    endpointIDredis = endpointID + "-redis"
+    endpointRedis.setId(endpointIDredis);
+    endpointRedis.setUrl(containerUrlRedis);
 
     // Deployment (primary)
     def Deployment deployment = new Deployment()
@@ -351,6 +461,11 @@ try {
     // deploymentPrometheus.setContainer(container)
     deploymentPrometheus.setEndpoint(endpointPrometheus)
 
+    def Deployment deploymentProxy = new Deployment()
+    // deploymentProxy.setNode(node)
+    // deploymentProxy.setContainer(container)
+    deploymentProxy.setEndpoint(endpointProxy)
+
     def Deployment deploymentHttp = new Deployment()
     // deploymentHttp.setNode(node)
     // deploymentHttp.setContainer(container)
@@ -361,14 +476,27 @@ try {
     // deploymentGrpc.setContainer(container)
     deploymentGrpc.setEndpoint(endpointGrpc)
 
+    def Deployment deploymentApi = new Deployment()
+    // deploymentApi.setNode(node)
+    // deploymentApi.setContainer(container)
+    deploymentApi.setEndpoint(endpointApi)
+
+    def Deployment deploymentRedis = new Deployment()
+    // deploymentRedis.setNode(node)
+    // deploymentRedis.setContainer(container)
+    deploymentRedis.setEndpoint(endpointRedis)
+
     // Update service instance model (add Deployment, Groups)
     def serviceInstanceData = serviceInstanceRestApi.getServiceInstance(sessionId, instanceId)
     serviceInstanceData.setInstanceStatus("RUNNING")
     serviceInstanceData = serviceInstanceData.addDeploymentsItem(deployment)
     // serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentPrometheusMetrics)
     serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentPrometheus)
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentProxy)
     serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentHttp)
     serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentGrpc)
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentApi)
+    serviceInstanceData = serviceInstanceData.addDeploymentsItem(deploymentRedis)
     if ("true".equalsIgnoreCase(proxyfied)){
         serviceInstanceData = serviceInstanceData.addGroupsItem("scheduleradmins")
         serviceInstanceData = serviceInstanceData.addGroupsItem("rmcoreadmins")
