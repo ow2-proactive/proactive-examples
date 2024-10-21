@@ -158,12 +158,21 @@ GET_RANDOM_PORT(){
     echo $RND_PORT
 }
 
-if [ "$DASHBOARD_SERVICE_PORT" -eq "-1" ]; then
-    echo "[INFO] Picking a random port number for DASHBOARD_SERVICE_PORT"
-    DASHBOARD_SERVICE_PORT=$(GET_RANDOM_PORT)
-    echo "[INFO] DASHBOARD_SERVICE_PORT is $DASHBOARD_SERVICE_PORT"
-fi
-echo "[INFO] The service will be initialized on port $DASHBOARD_SERVICE_PORT"
+start_docker_container() {
+    local port=$1
+    PARAMS=''
+    if [ ! -z "$DASHBOARD_PASSWORD" ]; then
+        PARAMS="-e STREAMLIT_PASSWORD=$DASHBOARD_PASSWORD"
+    fi
+    echo "Attempting to start container on port $port"
+    if docker run -d --rm --name $INSTANCE_NAME $PARAMS -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -e BASE_PATH=$BASE_PATH -e BASE_URL=$BASE_URL -e PA_JOB_ID=$PA_JOB_ID -e PSA_TOKEN=$PSA_TOKEN -e USER_KEY=$USER_KEY -p $port:$DASHBOARD_INTERNAL_PORT $DOCKER_IMAGE; then
+        echo "Container started successfully on port $port"
+        return 0
+    else
+        echo "Failed to start container on port $port"
+        return 1
+    fi
+}
 
 if [ -z "$INSTANCE_NAME" ]; then
     echo "[ERROR] The INSTANCE_NAME is not provided by the user. Empty value is not allowed".
@@ -177,13 +186,36 @@ if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
     echo [ERROR] "$INSTANCE_NAME" is already used by another service instance.
     exit 128
 else
-    echo "Running $INSTANCE_NAME container"
-    PARAMS=''
-    if [ ! -z "$DASHBOARD_PASSWORD" ]; then
-        PARAMS="-e STREAMLIT_PASSWORD=$DASHBOARD_PASSWORD"
+    MAX_TRIALS=5
+    TRIAL_COUNT=0
+
+    if [ "$DASHBOARD_SERVICE_PORT" -eq "-1" ]; then
+        while [ $TRIAL_COUNT -lt $MAX_TRIALS ]; do
+            TRIAL_COUNT=$((TRIAL_COUNT + 1))
+            echo "[INFO] Trial $TRIAL_COUNT: Picking a random port number for DASHBOARD_SERVICE_PORT"
+            DASHBOARD_SERVICE_PORT=$(GET_RANDOM_PORT)
+            echo "[INFO] Attempting to use port $DASHBOARD_SERVICE_PORT"
+            
+            if start_docker_container $DASHBOARD_SERVICE_PORT; then
+                echo "[INFO] Successfully started container on port $DASHBOARD_SERVICE_PORT"
+                break
+            else
+                echo "[WARN] Failed to start container on port $DASHBOARD_SERVICE_PORT. Retrying..."
+                if [ $TRIAL_COUNT -eq $MAX_TRIALS ]; then
+                    echo "[ERROR] Max trials reached. Unable to start container."
+                    exit 1
+                fi
+            fi
+        done
+    else
+        if ! start_docker_container $DASHBOARD_SERVICE_PORT; then
+            echo "[ERROR] Failed to start container on specified port $DASHBOARD_SERVICE_PORT"
+            exit 1
+        fi
     fi
-    echo "docker run -d --rm --name $INSTANCE_NAME $PARAMS -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -e BASE_PATH=$BASE_PATH -e BASE_URL=$BASE_URL -e PA_JOB_ID=$PA_JOB_ID -e PSA_TOKEN=$PSA_TOKEN -e USER_KEY=$USER_KEY -p $DASHBOARD_SERVICE_PORT:$DASHBOARD_INTERNAL_PORT $DOCKER_IMAGE"
-    docker run -d --rm --name $INSTANCE_NAME $PARAMS -v /etc/timezone:/etc/timezone -v /etc/localtime:/etc/localtime -e BASE_PATH=$BASE_PATH -e BASE_URL=$BASE_URL -e PA_JOB_ID=$PA_JOB_ID -e PSA_TOKEN=$PSA_TOKEN -e USER_KEY=$USER_KEY -p $DASHBOARD_SERVICE_PORT:$DASHBOARD_INTERNAL_PORT $DOCKER_IMAGE
+
+    echo "[INFO] The service has been initialized on port $DASHBOARD_SERVICE_PORT"
+
     docker cp $USER_DATA_FILE $INSTANCE_NAME:/opt/user_data.enc
     if [ -f fullchain.pem ]; then
         docker cp fullchain.pem $INSTANCE_NAME:/usr/share/nginx/certificates/fullchain.pem
@@ -201,6 +233,7 @@ else
         echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
     fi
 fi
+
 echo "$DASHBOARD_SERVICE_PORT" > $INSTANCE_NAME"_port"
 
 containerID=$(docker ps -aqf "name=^/$INSTANCE_NAME$")
