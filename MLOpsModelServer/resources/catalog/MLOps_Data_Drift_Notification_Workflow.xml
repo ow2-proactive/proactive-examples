@@ -2,7 +2,7 @@
 <job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MLOps_Data_Drift_Notification_Workflow" onTaskError="continueJobExecution" priority="normal" projectName="3. MLOps Model Server Workflows" tags="MLOps,Drift Detection,Notifications,Monitoring" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
   <variables>
     <variable advanced="false" description="The MLOps Dashboard instance that need to be monitored." hidden="false" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/tokens?name=PSA_mlops-dashboard.*)" name="MLOPS_DASHBOARD_INSTANCE" value=""/>
-    <variable advanced="false" description="It includes the global metrics and other performance indicators of the MLOps Dashboard, as it pertains to the ML models themselves, encompassing aspects such as model performance, accuracy, and fairness, which are continually assessed for any deviations from desired behavior." hidden="false" model="PA:LIST(Per Model Server, Per Deployed Model)" name="MONITORING_SCOPE" value="Per Deployed Model"/>
+    <variable advanced="false" description="It includes the global metrics and other performance indicators of the MLOps Dashboard, as it pertains to the ML models themselves, encompassing aspects such as model performance, accuracy, and fairness, which are continually assessed for any deviations from desired behavior." hidden="false" model="PA:LIST(Global, Per Model Server, Per Deployed Model)" name="MONITORING_SCOPE" value="Per Deployed Model"/>
     <variable advanced="false" description="ID of the model server that need to be monitored. A valid ID should be higher than 0." hidden="false" model="PA:INTEGER" name="MODEL_SERVER_ID" value="-1"/>
     <variable advanced="false" description="Name of the model that need to be monitored." hidden="false" model="PA:NOT_EMPTY_STRING" name="MODEL_NAME" value="iris-classification-model"/>
     <variable advanced="false" description="The temporal scope for the chosen drift detection algorithm, intended to encompass a particular historical period for analysis." hidden="false" model="PA:LIST(Last 5 minutes, Last 15 minutes, Last 30 minutes, Last 1 hour, Last 3 hours, Last 6 hours, Last 12 hours, Last 24 hours, Last 2 days, Last 7 days, Last 15 days, Last 30 days)" name="TIME_FRAME" value="Last 5 minutes"/>
@@ -179,7 +179,7 @@ def getMLOpsModelServerEndpointsFromInstanceId(String sessionid, String proactiv
         return [:]
     }
     // Extract endpoints
-    def endpoints = [:]
+    def endpoints = [model_server_id:instanceId]
     instance.deployments.each { deployment ->
         if (deployment.endpoint) {
             def endpointId = deployment.endpoint.id
@@ -202,26 +202,73 @@ def getMLOpsModelServerEndpointsFromInstanceId(String sessionid, String proactiv
     return endpoints
 }
 
+def getMLOpsModelServersEndpoints(String sessionid, String proactiveUrl) {
+ // Define headers
+    def headers = ['sessionid': sessionid]
+    // Define base URL
+    def baseUrl = "$proactiveUrl/cloud-automation-service/serviceInstances/active"
+    // Create URL object
+    def url = new URL(baseUrl)
+    // Open connection
+    def connection = url.openConnection()
+    // Set headers
+    headers.each { key, value ->
+        connection.setRequestProperty(key, value)
+    }
+    // Get response
+    def response
+    try {
+        response = connection.getInputStream()
+    } catch (Exception e) {
+        println "Error: Unable to connect to $baseUrl"
+        return [:]
+    }
+    // Parse JSON response
+    def json = new JsonSlurper().parseText(response.text)
+    // Get a list of instance_ids where service_id is "MLOps_Model_Server"
+    def instanceIds = json.findAll { it.service_id == "MLOps_Model_Server" }.collect { it.instance_id }
+    def endpoints = []
+    // Loop through model servers  list and add endpoints 
+    for (instance_id in instanceIds){
+        endpoints << getMLOpsModelServerEndpointsFromInstanceId(sessionid, proactiveUrl, "${instance_id}")
+    }
+  return endpoints
+}
+
 MLOPS_DASHBOARD_ENDPOINT_URL = getMLOpsDashboardEndpointUrlFromToken(sessionId, proactiveUrl, MLOPS_DASHBOARD_TOKEN)
 println "MLOPS_DASHBOARD_ENDPOINT_URL: $MLOPS_DASHBOARD_ENDPOINT_URL"
 
-MODEL_SERVER_INSTANCE_NAME = getMLOpsModelServerInstanceNameFromInstanceId(sessionId, proactiveUrl, MODEL_SERVER_ID)
-println "MODEL_SERVER_INSTANCE_NAME:  $MODEL_SERVER_INSTANCE_NAME"
+MODEL_SERVERS_ENDPOINTS = getMLOpsModelServersEndpoints(sessionId, proactiveUrl)
+println "MLOPS_DASHBOARD_MODELS_SERVERS_LIST: $MODEL_SERVERS_ENDPOINTS"
 
-def endpoints = getMLOpsModelServerEndpointsFromInstanceId(sessionId, proactiveUrl, MODEL_SERVER_ID)
-PROMETHEUS_ENDPOINT_URL = endpoints.prometheus_endpoint_url
-PROXY_ENDPOINT_URL = endpoints.proxy_endpoint_url
-HTTP_ENDPOINT_URL = endpoints.http_endpoint_url
-GRPC_ENDPOINT_URL = endpoints.grpc_endpoint_url
-API_SERVER_ENDPOINT_URL = endpoints.api_endpoint_url
-REDIS_SERVER_ENDPOINT_URL = endpoints.redis_endpoint_url
+if (MODEL_SERVER_ID != "-1") {
+    MODEL_SERVER_INSTANCE_NAME = getMLOpsModelServerInstanceNameFromInstanceId(sessionId, proactiveUrl, MODEL_SERVER_ID)
+    println "MODEL_SERVER_INSTANCE_NAME:  $MODEL_SERVER_INSTANCE_NAME"
 
-println "Prometheus Endpoint: $PROMETHEUS_ENDPOINT_URL"
-println "Proxy Endpoint: $PROXY_ENDPOINT_URL"
-println "HTTP Endpoint: $HTTP_ENDPOINT_URL"
-println "GRPC Endpoint: $GRPC_ENDPOINT_URL"
-println "API SERVER Endpoint: $API_SERVER_ENDPOINT_URL"
-println "REDIS SERVER Endpoint: $REDIS_SERVER_ENDPOINT_URL"
+    def endpoints = getMLOpsModelServerEndpointsFromInstanceId(sessionId, proactiveUrl, MODEL_SERVER_ID)
+    PROMETHEUS_ENDPOINT_URL = endpoints.prometheus_endpoint_url
+    PROXY_ENDPOINT_URL = endpoints.proxy_endpoint_url
+    HTTP_ENDPOINT_URL = endpoints.http_endpoint_url
+    GRPC_ENDPOINT_URL = endpoints.grpc_endpoint_url
+    API_SERVER_ENDPOINT_URL = endpoints.api_endpoint_url
+    REDIS_SERVER_ENDPOINT_URL = endpoints.redis_endpoint_url
+
+    println "Prometheus Endpoint: $PROMETHEUS_ENDPOINT_URL"
+    println "Proxy Endpoint: $PROXY_ENDPOINT_URL"
+    println "HTTP Endpoint: $HTTP_ENDPOINT_URL"
+    println "GRPC Endpoint: $GRPC_ENDPOINT_URL"
+    println "API SERVER Endpoint: $API_SERVER_ENDPOINT_URL"
+    println "REDIS SERVER Endpoint: $REDIS_SERVER_ENDPOINT_URL"
+}
+else {
+    PROMETHEUS_ENDPOINT_URL = null
+    PROXY_ENDPOINT_URL = null
+    HTTP_ENDPOINT_URL = null
+    GRPC_ENDPOINT_URL = null
+    API_SERVER_ENDPOINT_URL = null
+    REDIS_SERVER_ENDPOINT_URL = null
+    MODEL_SERVER_INSTANCE_NAME = null
+}
 
 variables.put("PROMETHEUS_ENDPOINT_URL", PROMETHEUS_ENDPOINT_URL)
 variables.put("PROXY_ENDPOINT_URL", PROXY_ENDPOINT_URL)
@@ -233,6 +280,7 @@ variables.put("REDIS_SERVER_ENDPOINT_URL", REDIS_SERVER_ENDPOINT_URL)
 variables.put("INSTANCE_NAME", MODEL_SERVER_INSTANCE_NAME)
 variables.put("MODEL_SERVER_INSTANCE_NAME", MODEL_SERVER_INSTANCE_NAME)
 variables.put("MLOPS_DASHBOARD_ENDPOINT_URL", MLOPS_DASHBOARD_ENDPOINT_URL)
+variables.put("MLOPS_DASHBOARD_MODEL_SERVERS_ENDPOINTS", MODEL_SERVERS_ENDPOINTS)
 ]]>
           </code>
         </script>
@@ -259,17 +307,19 @@ TIME_FRAME = variables.get('TIME_FRAME')
 SEVERITY = variables.get('SEVERITY')
 CHANNELS = variables.get('CHANNELS')
 TIMEZONE = variables.get('TIMEZONE')
+MODEL_SERVERS_ENDPOINTS = variables.get('MLOPS_DASHBOARD_MODEL_SERVERS_ENDPOINTS')
 CURRENT_JOB_ID = variables.get('PA_JOB_ID')
 DRIFT_MONITORING_INSTANCE_ID = variables.get('DRIFT_MONITORING_INSTANCE_ID')
 DRIFT_MONITORING_TASK_ID = variables.get('TASK_ID')
 DRIFT_COUNTER_THRESHOLD = int(variables.get('DRIFT_COUNTER_THRESHOLD'))
 
-PROMETHEUS_ENDPOINT_URL = variables.get("PROMETHEUS_ENDPOINT_URL")
-PROXY_ENDPOINT_URL = variables.get("PROXY_ENDPOINT_URL")
-HTTP_ENDPOINT_URL = variables.get("HTTP_ENDPOINT_URL")
-GRPC_ENDPOINT_URL = variables.get("GRPC_ENDPOINT_URL")
-API_SERVER_ENDPOINT_URL = variables.get("API_SERVER_ENDPOINT_URL")
-REDIS_SERVER_ENDPOINT_URL = variables.get("REDIS_SERVER_ENDPOINT_URL")
+if MONITORING_SCOPE.lower() != 'global':
+  PROMETHEUS_ENDPOINT_URL = variables.get("PROMETHEUS_ENDPOINT_URL")
+  PROXY_ENDPOINT_URL = variables.get("PROXY_ENDPOINT_URL")
+  HTTP_ENDPOINT_URL = variables.get("HTTP_ENDPOINT_URL")
+  GRPC_ENDPOINT_URL = variables.get("GRPC_ENDPOINT_URL")
+  API_SERVER_ENDPOINT_URL = variables.get("API_SERVER_ENDPOINT_URL")
+  REDIS_SERVER_ENDPOINT_URL = variables.get("REDIS_SERVER_ENDPOINT_URL")
 
 print(f'{MLOPS_DASHBOARD_TOKEN=}')
 print(f'{MLOPS_DASHBOARD_ENDPOINT_URL=}')
@@ -286,47 +336,27 @@ print(f'{DRIFT_MONITORING_INSTANCE_ID=}')
 print(f'{DRIFT_MONITORING_TASK_ID=}')
 print(f'{DRIFT_COUNTER_THRESHOLD=}')
 
-print(f'MODEL SERVER: {PROMETHEUS_ENDPOINT_URL=}')
-print(f'MODEL SERVER: {PROXY_ENDPOINT_URL=}')
-print(f'MODEL SERVER: {HTTP_ENDPOINT_URL=}')
-print(f'MODEL SERVER: {GRPC_ENDPOINT_URL=}')
-print(f'MODEL SERVER: {API_SERVER_ENDPOINT_URL=}')
-print(f'MODEL SERVER: {REDIS_SERVER_ENDPOINT_URL=}')
-
-# Debug:
-# MLOPS_DASHBOARD_TOKEN='PSA_mlops-dashboard-1'
-# MLOPS_DASHBOARD_ENDPOINT_URL='http://78.199.116.24:48080/dashboard/'
-# MONITORING_SCOPE='Per Deployed Model'
-# MODEL_SERVER_ID='2'
-# MODEL_SERVER_INSTANCE_NAME='model-server-2'
-# MODEL_NAME='iris-classification-model'
-# TIME_FRAME='Last 5 minutes'
-# SEVERITY='WARNING'
-# CHANNELS='mlops_dashboard'
-# TIMEZONE='Europe/Paris'
-# CURRENT_JOB_ID='245'
-# DRIFT_MONITORING_INSTANCE_ID=None
-# DRIFT_MONITORING_TASK_ID=None
-# MODEL SERVER: PROMETHEUS_ENDPOINT_URL='http://192.168.2.183:33624/metrics'
-# MODEL SERVER: PROXY_ENDPOINT_URL='192.168.2.183:38440'
-# MODEL SERVER: HTTP_ENDPOINT_URL='192.168.2.183:39398'
-# MODEL SERVER: GRPC_ENDPOINT_URL='192.168.2.183:44477'
-# MODEL SERVER: API_SERVER_ENDPOINT_URL='192.168.2.183:40511'
-# MODEL SERVER: REDIS_SERVER_ENDPOINT_URL='192.168.2.183:50369'
+if MONITORING_SCOPE.lower() != 'global':
+  print(f'MODEL SERVER: {PROMETHEUS_ENDPOINT_URL=}')
+  print(f'MODEL SERVER: {PROXY_ENDPOINT_URL=}')
+  print(f'MODEL SERVER: {HTTP_ENDPOINT_URL=}')
+  print(f'MODEL SERVER: {GRPC_ENDPOINT_URL=}')
+  print(f'MODEL SERVER: {API_SERVER_ENDPOINT_URL=}')
+  print(f'MODEL SERVER: {REDIS_SERVER_ENDPOINT_URL=}')
 
 timeframe = {
-    'Last 5 minutes':  ['5',  'minutes'],
-    'Last 15 minutes': ['15', 'minutes'],
-    'Last 30 minutes': ['30', 'minutes'],
-    'Last 1 hour':   ['1', 'hours'],
-    'Last 3 hours':  ['3', 'hours'],
-    'Last 6 hours':  ['6', 'hours'],
-    'Last 12 hours': ['12', 'hours'],
-    'Last 24 hours': ['1', 'days'],
-    'Last 2 days':  ['2',  'days'],
-    'Last 7 days':  ['7',  'days'],
-    'Last 5 days':  ['5',  'days'],
-    'Last 30 days': ['30', 'days'],
+  'Last 5 minutes':  ['5',  'minutes'],
+  'Last 15 minutes': ['15', 'minutes'],
+  'Last 30 minutes': ['30', 'minutes'],
+  'Last 1 hour':     ['1',  'hours'],
+  'Last 3 hours':    ['3',  'hours'],
+  'Last 6 hours':    ['6',  'hours'],
+  'Last 12 hours':   ['12', 'hours'],
+  'Last 24 hours':   ['1',  'days'],
+  'Last 2 days':     ['2',  'days'],
+  'Last 7 days':     ['7',  'days'],
+  'Last 5 days':     ['5',  'days'],
+  'Last 30 days':    ['30', 'days'],
 }
 
 # Parse the TIME_FRAME
@@ -337,141 +367,209 @@ time_frame_value = int(time_frame_value)
 tz = pytz.timezone(TIMEZONE)
 end_time = datetime.now(tz)
 if time_frame_unit == 'minutes':
-    start_time = end_time - timedelta(minutes=time_frame_value)
+  start_time = end_time - timedelta(minutes=time_frame_value)
 elif time_frame_unit == 'hours':
-    start_time = end_time - timedelta(hours=time_frame_value)
+  start_time = end_time - timedelta(hours=time_frame_value)
 elif time_frame_unit == 'days':
-    start_time = end_time - timedelta(days=time_frame_value)
+  start_time = end_time - timedelta(days=time_frame_value)
 
 # Convert datetime to Unix timestamp
 start_timestamp = int(start_time.timestamp())
 end_timestamp = int(end_time.timestamp())
 
-drift_occurrences = []
-if MONITORING_SCOPE.lower() != 'global':
+drift_occurrences = {}
+if MONITORING_SCOPE.lower() == 'global':
+  # Parse MODEL SERVERS ENDPOINTS LIST
+  for instance in MODEL_SERVERS_ENDPOINTS:
+    # Get Redis Endpoint
+    REDIS_SERVER_ENDPOINT_URL = instance['redis_endpoint_url']
+    # Connect to Redis
+    try:
+      redis_client = redis.Redis(host=REDIS_SERVER_ENDPOINT_URL.split(':')[0], port=int(REDIS_SERVER_ENDPOINT_URL.split(':')[1]))
+      drift_key = f"drifts:occurrences"
+      occurences = redis_client.zrangebyscore(drift_key, start_timestamp, end_timestamp, withscores=True)
+      if occurences:
+        drift_occurrences[instance['model_server_id']] = redis_client.zrangebyscore(drift_key, start_timestamp, end_timestamp, withscores=True)
+    except redis.RedisError as e:
+      print(f"Error connecting to Redis or fetching data: {e}")
+else:
   # Connect to Redis
   try:
-      redis_client = redis.Redis(host=REDIS_SERVER_ENDPOINT_URL.split(':')[0], 
-                                port=int(REDIS_SERVER_ENDPOINT_URL.split(':')[1]))
-      # Fetch drift occurrences from Redis
-      drift_key = None
-      if MONITORING_SCOPE.lower() == 'per model server':
-          drift_key = f"drifts:occurrences"
-      if MONITORING_SCOPE.lower() == 'per deployed model':
-          drift_key = f"drifts:{MODEL_NAME}:occurrences"
-      if drift_key:
-          drift_occurrences = redis_client.zrangebyscore(drift_key, start_timestamp, end_timestamp, withscores=True)
+    redis_client = redis.Redis(host=REDIS_SERVER_ENDPOINT_URL.split(':')[0], port=int(REDIS_SERVER_ENDPOINT_URL.split(':')[1]))
+    # Fetch drift occurrences from Redis
+    drift_key = None
+    if MONITORING_SCOPE.lower() == 'per model server':
+      drift_key = f"drifts:occurrences"
+    if MONITORING_SCOPE.lower() == 'per deployed model':
+      drift_key = f"drifts:{MODEL_NAME}:occurrences"
+    if drift_key:
+      drift_occurrences[MODEL_SERVER_ID] = redis_client.zrangebyscore(drift_key, start_timestamp, end_timestamp, withscores=True)
   except redis.RedisError as e:
     print(f"Error connecting to Redis or fetching data: {e}")
 
-# Process the results
-outliers = []
-for inference_id, timestamp in drift_occurrences:
-    outliers.append({
-        'inference_id': inference_id.decode('utf-8'),
-        'timestamp': timestamp,
-        'datetime': datetime.fromtimestamp(timestamp, tz).strftime('%Y-%m-%d %H:%M:%S'),
-        'iso': datetime.fromtimestamp(timestamp, tz).isoformat()
-    })
+# Process the result for drift_occurrences
+outliers = {}
+
+# Loop through the drift_occurrences for model_server_id 
+for model_server_id, occurrences in drift_occurrences.items():
+  outliers[model_server_id] = []
+  for inference_id, timestamp in occurrences:
+    outlier_data = {
+      'inference_id': inference_id.decode('utf-8'),
+      'timestamp': timestamp,
+      'datetime': datetime.fromtimestamp(timestamp, tz).strftime('%Y-%m-%d %H:%M:%S'),
+      'iso': datetime.fromtimestamp(timestamp, tz).isoformat()
+    }
+    outliers[model_server_id].append(outlier_data)
 
 # Print results for debugging
-print(f"Detected {len(outliers)} drift occurrences in the specified timeframe.")
-for outlier in outliers:
-    print(f"Timestamp: {outlier['timestamp']}, Datetime: {outlier['datetime']}, Inference ID: {outlier['inference_id']}")
-if len(outliers) > DRIFT_COUNTER_THRESHOLD:
-    print("The number of drifts exceed the drift counter threshold, generating an alert message for that.")
+total_occurrences = sum(len(occurrences) for occurrences in outliers.values())
+print(f"Detected {total_occurrences} drift occurrences in the specified timeframe.")
+#for id, outlier in outliers:
+#	print(f"Timestamp: {outlier['timestamp']}, Datetime: {outlier['datetime']}, Inference ID: {outlier['inference_id']}")
+if total_occurrences > DRIFT_COUNTER_THRESHOLD:
+  print("The number of drifts exceed the drift counter threshold, generating an alert message for that.")
 
 # Store the outliers in the workflow variables
 variables.put("outliers", str(outliers))
 
 # Determine the icon based on severity level
 if SEVERITY == 'WARNING':
-    icon = '⚠️'
+  icon = '⚠️'
 elif SEVERITY == 'INFO':
-    icon = 'ℹ️'
+  icon = 'ℹ️'
 elif SEVERITY == 'ERROR':
-    icon = '❌'  
+  icon = '❌'  
 elif SEVERITY == 'CRITICAL':
-    icon = '🚨'
+  icon = '🚨'
 
 alert_message = ''
 result = ''
+drift_detected = False
+if outliers and MONITORING_SCOPE == 'Global':
+  drift_detected = True 
+  PA_CATALOG_REST_PUBLIC_URL = variables.get("PA_CATALOG_REST_PUBLIC_URL")
+  PA_AUTOMATION_DASHBOARD_PUBLIC_URL = PA_CATALOG_REST_PUBLIC_URL.replace("catalog", "automation-dashboard")
+  mlops_dashboard_drift_monitoring_url = f"{MLOPS_DASHBOARD_ENDPOINT_URL}Drift_Notification"
+  print(f'{mlops_dashboard_drift_monitoring_url=}')
+  job_url = f"{PA_AUTOMATION_DASHBOARD_PUBLIC_URL}/#/job-info?jobid={CURRENT_JOB_ID}"
+  # Common information outside the loop
+  common_info = [f'<strong>{icon}</strong>']
+  total_occurrences = sum(len(occurrences) for occurrences in outliers.values())
 
-if outliers:
+  if total_occurrences >= 16:
+    # Flatten outliers with model_server_id preserved
+    flattened_outliers = [(model_server_id, outlier) for model_server_id, server_outliers in outliers.items() for outlier in server_outliers]
+
+    # Get the first 8 outliers
+    top_outliers = flattened_outliers[:8]
+    bottom_outliers = flattened_outliers[-8:]
+
+    # Group the outliers by model server ID
+    from itertools import groupby
+    from operator import itemgetter
+
+    grouped_top_outliers = groupby(top_outliers, key=itemgetter(0))
+    grouped_bottom_outliers = groupby(bottom_outliers, key=itemgetter(0))
+
+    # Add the top 8 outliers
+    for model_server_id, server_outliers in grouped_top_outliers:
+      alert_message += f'<strong>{icon}</strong>Model Server ID: <u>{model_server_id}</u> <br>'
+      for outlier in server_outliers:
+        alert_message += f'Date and time: <u>{outlier[1]["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier[1]["inference_id"]}</code><br>'
+
+    # Add the "..." line in the middle
+    alert_message += '...<br>'
+    
+    # Add the last 8 outliers
+    for model_server_id, server_outliers in grouped_bottom_outliers:
+      alert_message += f'<strong>{icon}</strong>Model Server ID: <u>{model_server_id}</u> <br>'
+      for outlier in server_outliers:
+        alert_message += f'Date and time: <u>{outlier[1]["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier[1]["inference_id"]}</code><br>'
+
+  else:
+    # If there are fewer than 16, just add all of them
+    for model_server_id, outliers_list in outliers.items():
+      alert_message += f'<strong>{icon}</strong>Model Server ID: <u>{model_server_id}</u> <br>'
+      for outlier in outliers_list:
+        alert_message += f'Date and time: <u>{outlier["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier["inference_id"]}</code><br>'
+
+elif outliers and MONITORING_SCOPE != 'Global':
+  outliers_list = outliers[MODEL_SERVER_ID]
+  if outliers_list:
+    drift_detected = True 
+    total_occurrences = len(outliers_list)
     PA_CATALOG_REST_PUBLIC_URL = variables.get("PA_CATALOG_REST_PUBLIC_URL")
     PA_AUTOMATION_DASHBOARD_PUBLIC_URL = PA_CATALOG_REST_PUBLIC_URL.replace("catalog", "automation-dashboard")
     mlops_dashboard_drift_monitoring_url = f"{MLOPS_DASHBOARD_ENDPOINT_URL}Drift_Notification"
     print(f'{mlops_dashboard_drift_monitoring_url=}')
     job_url = f"{PA_AUTOMATION_DASHBOARD_PUBLIC_URL}/#/job-info?jobid={CURRENT_JOB_ID}"
     # Common information outside the loop
-    common_info = [
-        f'<strong>{icon}</strong>'
-    ]
-    if MONITORING_SCOPE == 'Per Model Server' or MONITORING_SCOPE == 'Per Deployed Model':
-        common_info.append(f'Model Server ID: <u>{MODEL_SERVER_ID}</u>,')
+    common_info = [f'<strong>{icon}</strong>']
+    common_info.append(f'Model Server ID: <u>{MODEL_SERVER_ID}</u>,')
     if MONITORING_SCOPE == 'Per Deployed Model':
-        common_info.append(f'Model Name: <u>{MODEL_NAME}</u>,')
+      common_info.append(f'Model Name: <u>{MODEL_NAME}</u>,')
     alert_message += ' '.join(common_info) + '<br>'
     # Timestamps and inference IDs inside the loop
-    if len(outliers) >= 16:
-        top_outliers = outliers[:8]  # Get the first 8 outliers
-        bottom_outliers = outliers[-8:]  # Get the last 8 outliers
-        # Add the top 8 outliers
-        for outlier in top_outliers:
-            alert_message += f'Date and time: <u>{outlier["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier["inference_id"]}</code><br>'
-        # Add the "..." line in the middle
-        alert_message += '...<br>'
-        # Add the last 8 outliers
-        for outlier in bottom_outliers:
-            alert_message += f'Date and time: <u>{outlier["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier["inference_id"]}</code><br>'
+    if len(outliers_list) >= 16:
+      top_outliers = outliers_list[:8]  # Get the first 8 outliers
+      bottom_outliers = outliers_list[-8:]  # Get the last 8 outliers
+      # Add the top 8 outliers
+      for outlier in top_outliers:
+        alert_message += f'Date and time: <u>{outlier["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier["inference_id"]}</code><br>'
+      # Add the "..." line in the middle
+      alert_message += '...<br>'
+      # Add the last 8 outliers
+      for outlier in bottom_outliers:
+        alert_message += f'Date and time: <u>{outlier["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier["inference_id"]}</code><br>'
     else:
-        # If there are fewer than 16, just add all of them
-        for outlier in outliers:
-            alert_message += f'Date and time: <u>{outlier["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier["inference_id"]}</code><br>'
-    drift_count = len(outliers)
-    earliest_drift = min(o['datetime'] for o in outliers)
-    latest_drift = max(o['datetime'] for o in outliers)
-    alert_message += f"Summary: {drift_count} drift occurrences detected between <u>{earliest_drift}</u> and <u>{latest_drift}</u>.<br>"
-    alert_message += f"Threshold: {DRIFT_COUNTER_THRESHOLD}<br><br>"
-    if DRIFT_MONITORING_INSTANCE_ID:
-        alert_message += f'<a href="{mlops_dashboard_drift_monitoring_url}" target="_blank">Drift Monitoring Instance ID: {DRIFT_MONITORING_INSTANCE_ID}</a><br>'
-    alert_message += f'<a href="{job_url}" target="_blank">Job Details</a>'
-    print(f'{alert_message=}')
-    # Update the latest alert job ID
-    if DRIFT_MONITORING_TASK_ID:
-        MLOPS_DASHBOARD_API_ENDPOINT_URL = MLOPS_DASHBOARD_ENDPOINT_URL.replace('/dashboard/', '/api/')
-        update_url = f"{MLOPS_DASHBOARD_API_ENDPOINT_URL}redis/task/update/latest_alert_job_id"
-        params = {
-            "task_id": DRIFT_MONITORING_TASK_ID,
-            "latest_alert_job_id": CURRENT_JOB_ID
-        }
-        try:
-            response = requests.get(update_url, params=params)
-            response.raise_for_status()
-            print(f"Successfully updated latest alert job ID. Response: {response.json()}")
-        except requests.RequestException as e:
-            print(f"Error updating latest alert job ID: {e}")
-    # Update task result
-    result = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <meta charset="UTF-8">
-        <title>Drift Notification Preview</title>
-        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" 
-        integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
-        </head>
-        <body>
-        <h1 class="text-center my-4" style="color:#003050;">Drift Notification Preview</h1>
-        <p align="center">{0}</p>
-        </body></html>
-        """.format(alert_message)
-    result = result.encode('utf-8')
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "output.html")
-    resultMetadata.put("content.type", "text/html")
+      # If there are fewer than 16, just add all of them
+      for outlier in outliers_list:
+        alert_message += f'Date and time: <u>{outlier["datetime"]}</u> ({TIMEZONE}), Inference ID: <code>{outlier["inference_id"]}</code><br>'
+if drift_detected:
+  earliest_drift = min(o['datetime'] for outlier_list in outliers.values() for o in outlier_list)
+  latest_drift = max(o['datetime'] for outlier_list in outliers.values() for o in outlier_list)
+  alert_message += f"Summary: {total_occurrences} drift occurrences detected between <u>{earliest_drift}</u> and <u>{latest_drift}</u>.<br>"
+  alert_message += f"Threshold: {DRIFT_COUNTER_THRESHOLD}<br><br>"
+  if DRIFT_MONITORING_INSTANCE_ID:
+    alert_message += f'<a href="{mlops_dashboard_drift_monitoring_url}" target="_blank">Drift Monitoring Instance ID: {DRIFT_MONITORING_INSTANCE_ID}</a><br>'
+  alert_message += f'<a href="{job_url}" target="_blank">Job Details</a>'
+  print(f'{alert_message=}')
+  # Update the latest alert job ID
+  if DRIFT_MONITORING_TASK_ID:
+    MLOPS_DASHBOARD_API_ENDPOINT_URL = MLOPS_DASHBOARD_ENDPOINT_URL.replace('/dashboard/', '/api/')
+    update_url = f"{MLOPS_DASHBOARD_API_ENDPOINT_URL}redis/task/update/latest_alert_job_id"
+    params = {
+      "task_id": DRIFT_MONITORING_TASK_ID,
+      "latest_alert_job_id": CURRENT_JOB_ID
+    }
+    try:
+      response = requests.get(update_url, params=params)
+      response.raise_for_status()
+      print(f"Successfully updated latest alert job ID. Response: {response.json()}")
+    except requests.RequestException as e:
+      print(f"Error updating latest alert job ID: {e}")
+  # Update task result
+  result = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="UTF-8">
+    <title>Drift Notification Preview</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" 
+    integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+    </head>
+    <body>
+    <h1 class="text-center my-4" style="color:#003050;">Drift Notification Preview</h1>
+    <p align="center">{0}</p>
+    </body></html>
+    """.format(alert_message)
+  result = result.encode('utf-8')
+  resultMetadata.put("file.extension", ".html")
+  resultMetadata.put("file.name", "output.html")
+  resultMetadata.put("content.type", "text/html")
 else:
-    print(f"No alert generated. Drift occurrences ({len(outliers)}) did not exceed threshold ({DRIFT_COUNTER_THRESHOLD}).")
+  print(f"No alert generated. Drift occurrences ({total_occurrences}) did not exceed threshold ({DRIFT_COUNTER_THRESHOLD}).")
 
 variables.put("MESSAGE", alert_message)
 print("END " + __file__)
@@ -493,10 +591,10 @@ branch = outliers ? 'if' : 'else'
       </controlFlow>
       <metadata>
         <positionTop>
-            73.66476440429688
+            277.5
         </positionTop>
         <positionLeft>
-            477.4005432128906
+            664
         </positionLeft>
       </metadata>
     </task>
@@ -516,10 +614,10 @@ variables.put("MESSAGE", variables.get("MESSAGE"))
       <controlFlow block="start"/>
       <metadata>
         <positionTop>
-            201.6619110107422
+            405.5
         </positionTop>
         <positionLeft>
-            349.3891906738281
+            518.5
         </positionLeft>
       </metadata>
     </task>
@@ -538,10 +636,10 @@ println("Else")
       </scriptExecutable>
       <metadata>
         <positionTop>
-            201.6619110107422
+            405.5
         </positionTop>
         <positionLeft>
-            477.4005432128906
+            664
         </positionLeft>
       </metadata>
     </task>
@@ -560,10 +658,10 @@ println("Continuation")
       </scriptExecutable>
       <metadata>
         <positionTop>
-            201.6619110107422
+            405.5
         </positionTop>
         <positionLeft>
-            605.3976745605469
+            802
         </positionLeft>
       </metadata>
     </task>
@@ -586,10 +684,10 @@ println("End")
       <controlFlow block="end"/>
       <metadata>
         <positionTop>
-            457.6562042236328
+            659.5
         </positionTop>
         <positionLeft>
-            349.3891906738281
+            518.5
         </positionLeft>
       </metadata>
     </task>
@@ -792,10 +890,10 @@ try {
       </scriptExecutable>
       <metadata>
         <positionTop>
-            329.65907287597656
+            533.5
         </positionTop>
         <positionLeft>
-            349.3891906738281
+            518.5
         </positionLeft>
       </metadata>
     </task>
@@ -809,13 +907,13 @@ try {
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2479px;
-            height:3142px;
+            width:3007px;
+            height:3964px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-68.66476440429688px;left:-344.3891906738281px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_229" style="top: 73.6787px; left: 477.401px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Perform_Drift_Detection</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_232" style="top: 201.676px; left: 349.389px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">If_Drift_Detected</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_235" style="top: 201.676px; left: 477.401px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_238" style="top: 201.676px; left: 605.398px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_241" style="top: 457.67px; left: 349.389px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">End</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_244" style="top: 329.673px; left: 349.389px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that sends a notification with a custom message and severity to one or more notification channels"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_notification.png" width="20px">&nbsp;<span class="name">Channel_Notification</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:338.5px;top:113.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 138 50 128 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M15.734015999999999,60.999424000000005 L36.77298385959016,58.47715688426225 L28.30356794508451,54.834493838204 L30.608053697794155,45.90760493917774 L15.734015999999999,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_252" style="position: absolute; transform: translate(-50%, -50%); left: 412.5px; top: 157.5px;">if</div><svg style="position:absolute;left:461.98171321138256px;top:113.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_256" style="position: absolute; transform: translate(-50%, -50%); left: 469px; top: 157.5px;">else</div><svg style="position:absolute;left:466.5px;top:113.5px" width="149" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 128 88 C 138 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M112.265984,60.999424000000005 L97.39194630220584,45.90760493917774 L99.69643205491549,54.834493838204 L91.22701614040983,58.47715688426225 L112.265984,60.999424000000005" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_260" style="position: absolute; transform: translate(-50%, -50%); left: 540.5px; top: 157.5px;">continuation</div><svg style="position:absolute;left:388.5px;top:369.5px" width="37" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 26 50 16 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,66.303232 L10.047269700939381,48.51391706735172 L1.8312684117227083,52.69689720304326 L-3.559065096017358,45.217304655629015 L-1.4653440000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4653440000000006,66.303232 L10.047269700939381,48.51391706735172 L1.8312684117227083,52.69689720304326 L-3.559065096017358,45.217304655629015 L-1.4653440000000006,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:396px;top:241.5px" width="29.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 8.5 88 C 18.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.606864,66.303232 L14.693748863203671,45.511469878551104 L8.617409821369794,52.44530747750635 L0.8358243407100243,47.500924057181315 L10.606864,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M10.606864,66.303232 L14.693748863203671,45.511469878551104 L8.617409821369794,52.44530747750635 L0.8358243407100243,47.500924057181315 L10.606864,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 540.5px; top: 104px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 467px; top: 104px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 396.5px; top: 232px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 339px; top: 192px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 517px; top: 232px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 467px; top: 192px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 645px; top: 232px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 595px; top: 192px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 389px; top: 488px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 389px; top: 448px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 405px; top: 360px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 405px; top: 320px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-272.5px;left:-513.5px"><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_191" style="top: 277.5px; left: 664px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Perform_Drift_Detection</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task block-start ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_194" style="top: 405.5px; left: 518.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">If_Drift_Detected</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_197" style="top: 405.5px; left: 664px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Else</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_200" style="top: 405.5px; left: 802px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="This task has no description"><img src="/automation-dashboard/styles/patterns/img/wf-icons/controls_if.png" width="20px">&nbsp;<span class="name">Continuation</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task block-end ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_203" style="top: 659.5px; left: 518.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a Python engine."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">End</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_206" style="top: 533.5px; left: 518.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that sends a notification with a custom message and severity to one or more notification channels"><img src="/automation-dashboard/styles/patterns/img/wf-icons/web_notification.png" width="20px">&nbsp;<span class="name">Channel_Notification</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:508.5px;top:317.5px" width="166" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 155 50 145 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style="--darkreader-inline-stroke: #337dff;" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.01598125,60.59109050000001 L40.15557354763794,59.135880037679655 L31.881182181027235,55.069622850516225 L34.63410589815416,46.27067910665242 L19.01598125,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: #337dff;"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M19.01598125,60.59109050000001 L40.15557354763794,59.135880037679655 L31.881182181027235,55.069622850516225 L34.63410589815416,46.27067910665242 L19.01598125,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: #337dff;"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_214" style="position: absolute; transform: translate(-50%, -50%); left: 591px; top: 361.5px;">if</div><svg style="position:absolute;left:648.9817132113825px;top:317.5px" width="15.518286788617468" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 -10 50 0 0 " transform="translate(15.018286788617468,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style="--darkreader-inline-stroke: #337dff;" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: #337dff;"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-4.427999999999998,66.303232 L-1.2615185838583702,45.35154005301801 L-7.026331880366543,52.546463795240896 L-15.018286788617468,47.94987193338456 L-4.427999999999998,66.303232" class="" stroke="#00f" fill="#00f" transform="translate(15.018286788617468,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: #337dff;"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_218" style="position: absolute; transform: translate(-50%, -50%); left: 656px; top: 361.5px;">else</div><svg style="position:absolute;left:653.5px;top:317.5px" width="159" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 138 88 C 148 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#00f" style="--darkreader-inline-stroke: #337dff;" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: #337dff;"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M120.038658,60.59109050000001 L104.67550542211094,45.997477415211826 L107.2728299284673,54.843601165684724 L98.92801608779567,58.76330548674452 L120.038658,60.59109050000001" class="" stroke="#00f" fill="#00f" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: #337dff;"></path></svg><div class="_jsPlumb_overlay l1 component label" id="jsPlumb_1_222" style="position: absolute; transform: translate(-50%, -50%); left: 732.5px; top: 361.5px;">continuation</div><svg style="position:absolute;left:558.5px;top:573.5px" width="37.5" height="87" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 86 C -10 36 26.5 50 16.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: #a8a095;" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4762343750000004,64.94400000000002 L10.149387068786645,47.22833105847348 L1.9069247519279713,51.358926046506646 L-3.435686884706726,43.8451719315455 L-1.4762343750000004,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: #a8a095;"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.4762343750000004,64.94400000000002 L10.149387068786645,47.22833105847348 L1.9069247519279713,51.358926046506646 L-3.435686884706726,43.8451719315455 L-1.4762343750000004,64.94400000000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: #a8a095;"></path></svg><svg style="position:absolute;left:566px;top:445.5px" width="30" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 9 88 C 19 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: #a8a095;" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: #a8a095;"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.064096,66.303232 L15.016942635045325,45.485571144855605 L8.985401777301874,52.45841237934327 L1.1721230143885997,47.56426536755374 L11.064096,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: #a8a095;"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 728px; top: 308px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint if-source-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 654px; top: 308px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 566.5px; top: 436px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 396px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 704px; top: 436px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 654px; top: 396px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 842px; top: 436px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint if-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected _jsPlumb_endpoint_full" style="position: absolute; height: 20px; width: 20px; left: 792px; top: 396px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#00f" stroke="none" style="--darkreader-inline-fill: #337dff; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 559px; top: 690px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 559px; top: 650px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 575.5px; top: 564px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 575.5px; top: 524px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
