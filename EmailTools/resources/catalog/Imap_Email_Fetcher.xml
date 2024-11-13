@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Imap_Email_Fetcher" onTaskError="continueJobExecution" priority="normal" projectName="Emails Tools" tags="Email,Fetcher,Imap,Messaging" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable description="Hostname of the SMTP server" group="SMTP Server Connection" model="PA:NOT_EMPTY_STRING" name="HOST" value="imap.gmail.com"/>
+    <variable description="The SMTP port. Default value is 993" group="SMTP Server Connection" model="PA:INTEGER" name="PORT" value="993"/>
+    <variable description="If true, enable the encryption of email communications using the TLS protocol" group="SMTP Server Connection" model="PA:BOOLEAN" name="STARTTLS_ENABLE" value="true"/>
+    <variable description="Email user name" group="SMTP Server Connection" model="PA:NOT_EMPTY_STRING" name="USERNAME" value="louati.amiine@gmail.com"/>
+    <variable description="Email app password" group="SMTP Server Connection" model="PA:CREDENTIAL" name="PASSWORD" value="imap://${USERNAME}@${HOST}"/>
+    <variable description="Specify the folder you want to access in the mailbox. For example, &quot;INBOX&quot; or &quot;[Gmail]/Sent Mail&quot; or any other label." group="Email Fetcher Parameters" model="PA:NOT_EMPTY_STRING" name="EMAIL_FOLDER_NAME" value="EDF"/>
+    <variable description="If true, fetch the email content and save it in a html file." group="Email Fetcher Parameters" model="PA:BOOLEAN" name="FETCH_EMAIL_CONTENT" value="true"/>
+    <variable description="A comma-separated string specifying the indices of emails to fetch. Leave empty to fetch all emails." group="Email Fetcher Parameters" name="EMAIL_INDEXES" value=""/>
+    <variable description="Relative path of a folder inside the USER Data Space in which the attachment files will be saved. The provided path can be either a path to a folder terminated by / or an empty value for the root (e.g. attachments/." group="Email Fetcher Parameters" model="PA:REGEXP(^$|^.+/$)" name="DROP_FOLDER_PATH" value="/tmp/attachments/"/>
+    <variable description="If true, the fetched emails will be deleted." group="Email Fetcher Parameters" model="PA:BOOLEAN" name="ENABLE_EMAIL_DELETION" value="false"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that accesses a specified mailbox folder, retrieves the email content and attachments for the given indexes, and saves them to a designated drop folder. This workflow can also be configured to automatically delete the processed emails. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="it-ci-cd"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/email_fetcher.png"/>
+<info name="submission.mode" value="studio"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Imap_Email_Fetcher" preciousResult="true">
+      <description>
+        <![CDATA[ A task that accesses a specified mailbox folder, retrieves the email content and attachments for the given indexes, and saves them to a designated drop folder. This workflow can also be configured to automatically delete the processed emails.]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/email_fetcher.png"/>
+        <info name="task.documentation" value="user/ProActiveUserGuide.html#_email_notification"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="mail-1.4.7.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="mail-1.4.7.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import javax.mail.*;
+import javax.mail.internet.MimeBodyPart;
+import javax.mail.internet.MimeMultipart;
+import java.io.*;
+import java.nio.file.*;
+import java.util.Properties;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+import java.io.ByteArrayOutputStream;
+import com.google.common.net.MediaType;
+
+// Environment setup and email configurations
+String host = variables.get("HOST");
+String port = variables.get("PORT");
+String startTlsEnable = variables.get("STARTTLS_ENABLE");
+String username = variables.get("USERNAME");
+String password = credentials.get("imap://" + username + "@" + host);
+String emailFolderName = variables.get("EMAIL_FOLDER_NAME");
+boolean fetchEmailContent = Boolean.parseBoolean(variables.get("FETCH_EMAIL_CONTENT"));
+String[] emailIndexesArray = variables.get("EMAIL_INDEXES").split(",");
+String dropFolderPath = variables.get("DROP_FOLDER_PATH");
+boolean enableEmailDeletion = Boolean.parseBoolean(variables.get("ENABLE_EMAIL_DELETION"));
+
+// Configuring IMAP properties
+Properties mailProperties = new Properties();
+mailProperties.put("mail.imap.host", host);
+mailProperties.put("mail.imap.port", port);
+mailProperties.put("mail.imap.starttls.enable", startTlsEnable);
+
+Path dropFolder = Paths.get(dropFolderPath);
+Files.createDirectories(dropFolder);  // Ensure the output folder exists
+
+// Parse email indexes
+Set<Integer> emailIndexes = parseEmailIndexes(emailIndexesArray);
+
+// Initialize mail session and connect to the IMAP store
+Session emailSession = Session.getDefaultInstance(mailProperties);
+try {
+    Store store = emailSession.getStore("imaps")
+    store.connect(host, username, password);
+    Folder emailFolder = openEmailFolder(store, emailFolderName, enableEmailDeletion);
+
+    Message[] messages = emailFolder.getMessages();
+    println("Total messages in folder '" + emailFolderName + "': " + messages.length);
+
+    // Process each email based on specified indexes
+    for (int i = messages.length - 1; i >= 0; i--) {
+        if (!emailIndexes.isEmpty() && !emailIndexes.contains(i)) continue;
+        println("Processing email at index " + (i + 1));
+
+        processEmail(messages[i], i, dropFolder, fetchEmailContent);
+
+        // Mark for deletion if enabled
+        if (enableEmailDeletion) {
+            messages[i].setFlag(Flags.Flag.DELETED, true);
+            println("Email marked for deletion.");
+        }
+    }
+
+    // Close the email folder
+    emailFolder.close(false);
+
+} catch (Exception e) {
+    throw new RuntimeException("Error processing emails", e);
+}
+
+/**
+ * Parse email indexes from the provided array of index strings.
+ */
+Set<Integer> parseEmailIndexes(String[] emailIndexesArray) {
+    Set<Integer> emailIndexes = new HashSet<>();
+    for (String indexStr : emailIndexesArray) {
+        if (!indexStr.trim().isEmpty()) {
+            emailIndexes.add(Integer.parseInt(indexStr.trim()) - 1);
+        }
+    }
+    return emailIndexes;
+}
+
+/**
+ * Open the specified folder in the desired mode.
+ */
+Folder openEmailFolder(Store store, String folderName, boolean enableDeletion) throws MessagingException {
+    Folder folder = store.getFolder(folderName);
+    int openMode = enableDeletion ? Folder.READ_WRITE : Folder.READ_ONLY;
+    folder.open(openMode);
+    return folder;
+}
+
+/**
+ * Process a single email message, saving its content and attachments, and compressing output files.
+ */
+void processEmail(Message message, int index, Path outputFolder, boolean fetchContent) {
+    try {
+        if (fetchContent) {
+            saveEmailContentAsHtml(message, index, outputFolder);
+        }
+        if (message.getContent() instanceof MimeMultipart) {
+            processAttachments((MimeMultipart) message.getContent(), outputFolder);
+        }
+        byte[] zipBytes = createZipArchive(outputFolder);
+        configureResultMetadata(zipBytes);
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        throw new Exception("Failed to process email at index " + (index + 1) + ": " + e.getMessage());
+    }
+}
+
+/**
+ * Saves email content as an HTML file in the specified folder.
+ */
+void saveEmailContentAsHtml(Message message, int index, Path folderPath) {
+    try {
+        String subject = message.getSubject();
+        String from = message.getFrom()[0].toString();
+        String content = getEmailContent(message);
+
+        String htmlContent = String.format(
+            "<html><body><h2>Subject: %s</h2><p><strong>From:</strong> %s</p><div><strong>Content:</strong><br>%s</div></body></html>",
+            subject, from, content);
+
+        Path htmlFile = folderPath.resolve("email_" + (index + 1) + ".html");
+        Files.write(htmlFile, htmlContent.bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        println("Email content saved to: " + htmlFile);
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        throw new Exception("Failed to save email content as HTML: " + e.getMessage());
+    }
+}
+
+/**
+ * Processes email attachments, saving each to the specified folder.
+ */
+void processAttachments(MimeMultipart multipart, Path folderPath) throws MessagingException, IOException {
+    for (int i = 0; i < multipart.getCount(); i++) {
+        BodyPart bodyPart = multipart.getBodyPart(i);
+        if (Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition())) {
+            saveAttachment(bodyPart, folderPath);
+        }
+    }
+}
+
+/**
+ * Saves a single attachment to the specified folder.
+ */
+void saveAttachment(BodyPart bodyPart, Path folderPath) throws IOException, MessagingException {
+    String fileName = bodyPart.getFileName();
+    Path attachmentPath = folderPath.resolve(fileName);
+    try {
+        InputStream inputStream = bodyPart.getInputStream();
+        OutputStream outputStream = Files.newOutputStream(attachmentPath)
+        byte[] buffer = new byte[4096];
+        int bytesRead;
+        while ((bytesRead = inputStream.read(buffer)) != -1) {
+            outputStream.write(buffer, 0, bytesRead);
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+        throw new Exception("Failed to save email attachmment: " + e.getMessage());
+    }
+    println("Attachment saved: " + attachmentPath.toAbsolutePath());
+}
+
+/**
+ * Creates a ZIP archive from the files (attachments and HTML files) in the specified folder.
+ */
+byte[] createZipArchive(Path folderPath) throws IOException {
+    ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+    ZipOutputStream zipOut = null;
+        try {
+            zipOut = new ZipOutputStream(byteArrayOutputStream);
+            folderPath.toFile().eachFile { file ->
+                if (file.isFile()) {
+                    try {
+                        zipOut.putNextEntry(new ZipEntry(folderPath.relativize(file.toPath()).toString()));
+                        Files.copy(file.toPath(), zipOut);
+                        zipOut.closeEntry();
+                    } catch (IOException e) {
+                        println("Error adding file to ZIP: " + file);
+                        e.printStackTrace();
+                        throw new Exception(e);
+                    }
+                }
+            }
+
+            // Finalize the ZIP stream
+            zipOut.close();
+
+            // Convert ByteArrayOutputStream to byte array
+            return byteArrayOutputStream.toByteArray();
+
+        } catch (Exception e) {
+            throw new Exception("Error creating ZIP archive", e);
+        } finally {
+            // Close the streams if they are open
+            if (zipOut != null) zipOut.close();
+            byteArrayOutputStream.close();
+        }
+}
+
+/**
+ * Configures the result metadata after ZIP archive creation.
+ */
+void configureResultMetadata(byte[] zipBytes) {
+    result = zipBytes;
+    resultMetadata.put("file.extension", ".zip");
+    resultMetadata.put("file.name", "emails_archive.zip");
+    resultMetadata.put("content.type", MediaType.ZIP.toString());
+}
+
+/**
+ * Helper method to retrieve email content as plain text.
+ */
+String getEmailContent(Message message) throws MessagingException, IOException {
+    if (message.isMimeType("text/plain")) {
+        return message.getContent().toString();
+    } else if (message.isMimeType("text/html")) {
+        return message.getContent().toString();
+    } else if (message.isMimeType("multipart/*")) {
+        Multipart multipart = (Multipart) message.getContent();
+        StringBuilder contentBuilder = new StringBuilder();
+
+        for (int i = 0; i < multipart.getCount(); i++) {
+            BodyPart bodyPart = multipart.getBodyPart(i);
+
+            // Check if the body part is plain text
+            if (bodyPart.isMimeType("text/plain")) {
+                contentBuilder.append("\nPlain Text Part:\n").append(bodyPart.getContent().toString()).append("\n");
+            }
+            // Check if the body part is HTML
+            else if (bodyPart.isMimeType("text/html")) {
+                contentBuilder.append("\nHTML Part:\n").append(bodyPart.getContent().toString()).append("\n");
+            }
+            // Recursively process if the body part is multipart
+            else if (bodyPart.isMimeType("multipart/*")) {
+                contentBuilder.append(processNestedMultipart((Multipart) bodyPart.getContent()));
+            }
+            // Handle attachments or other types
+            else if (Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition())) {
+                contentBuilder.append("\nAttachment: ").append(bodyPart.getFileName()).append("\n");
+            }
+            else {
+                contentBuilder.append("\n");
+            }
+        }
+        return contentBuilder.toString();
+    }
+    return "[Unsupported content type]";
+}
+
+/**
+ * Helper method to process nested multipart content.
+ */
+private String processNestedMultipart(Multipart multipart) throws MessagingException, IOException {
+    StringBuilder nestedContentBuilder = new StringBuilder();
+
+    for (int i = 0; i < multipart.getCount(); i++) {
+        BodyPart bodyPart = multipart.getBodyPart(i);
+
+        if (bodyPart.isMimeType("text/plain")) {
+            nestedContentBuilder.append("\nPlain Text Part:\n").append(bodyPart.getContent().toString()).append("\n");
+        }
+        else if (bodyPart.isMimeType("text/html")) {
+            nestedContentBuilder.append("\nHTML Part:\n").append(bodyPart.getContent().toString()).append("\n");
+        }
+        else if (bodyPart.isMimeType("multipart/*")) {
+            nestedContentBuilder.append(processNestedMultipart((Multipart) bodyPart.getContent()));
+        }
+        else if (Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition())) {
+            nestedContentBuilder.append("\nAttachment: ").append(bodyPart.getFileName()).append("\n");
+        }
+        else {
+            nestedContentBuilder.append("\n");
+        }
+    }
+    return nestedContentBuilder.toString();
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <outputFiles>
+        <files accessMode="transferToUserSpace" includes="${DROP_FOLDER_PATH}**"/>
+      </outputFiles>
+      <metadata>
+        <positionTop>
+            85.283203125
+        </positionTop>
+        <positionLeft>
+            647.822265625
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2688px;
+            height:3695px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-80.283203125px;left:-642.822265625px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_79" style="top: 85.2832px; left: 647.822px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="" data-original-title="A task that accesses the specified mailbox folder, retrieves each message's email content and any attachments, and saves them to the drop folder in the User Data Space."><img src="/automation-dashboard/styles/patterns/img/wf-icons/email_fetcher.png" width="20px">&nbsp;<span class="name">Imap_Email_Fetcher</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 704px; top: 115px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

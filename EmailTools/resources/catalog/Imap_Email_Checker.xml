@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Imap_Email_Checker" onTaskError="continueJobExecution" priority="normal" projectName="Emails Tools" tags="Checker,Email,Imap,Messaging" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" description="Hostname of the SMTP server" group="SMTP Server Connection" hidden="false" model="PA:NOT_EMPTY_STRING" name="HOST" value="imap.gmail.com"/>
+    <variable advanced="false" description="The SMTP port. Default value is 993" group="SMTP Server Connection" hidden="false" model="PA:INTEGER" name="PORT" value="993"/>
+    <variable advanced="false" description="If true, enable the encryption of email communications using the TLS protocol" group="SMTP Server Connection" hidden="false" model="PA:BOOLEAN" name="STARTTLS_ENABLE" value="true"/>
+    <variable advanced="false" description="Email user name" group="SMTP Server Connection" hidden="false" model="PA:NOT_EMPTY_STRING" name="USERNAME" value="louati.amiine@gmail.com"/>
+    <variable advanced="false" description="Email app password" group="SMTP Server Connection" hidden="false" model="PA:CREDENTIAL" name="PASSWORD" value="imap://${USERNAME}@${HOST}"/>
+    <variable advanced="false" description="Specify the folder you want to access. For example, &quot;INBOX&quot; or &quot;[Gmail]/Sent Mail&quot; or any other label." group="Email Checker Parameters" hidden="false" model="PA:NOT_EMPTY_STRING" name="EMAIL_FOLDER_NAME" value="Free"/>
+    <variable advanced="false" description="Specify the number of last emails to be checked. Set -1 to check all emails." group="Email Checker Parameters" hidden="false" model="PA:INTEGER" name="CHECK_LAST_N_EMAILS" value="1"/>
+  </variables>
+  <description>
+    <![CDATA[ A workflow that accesses the specified folder in the mailbox to review each email, saving in a list of HashMap only the header details—such as the "From", "To", "Date", "Has_Attachment", and "Subject" fields—without reading the message content. ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="it-ci-cd"/>
+<info name="workflow.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/email_checker.png"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Imap_Email_Checker" preciousResult="true">
+      <description>
+        <![CDATA[ A workflow that accesses the specified folder in the mailbox to review each email, saving in a list of HashMap only the header details—such as the "From", "To", "Date", "Has_Attachment", and "Subject" fields—without reading the message content. ]]>
+      </description>
+      <genericInformation>
+        <info name="task.icon" value="/automation-dashboard/styles/patterns/img/wf-icons/email_checker.png"/>
+      </genericInformation>
+      <inputFiles>
+        <files accessMode="transferFromGlobalSpace" includes="mail-1.4.7.jar"/>
+      </inputFiles>
+      <forkEnvironment>
+        <additionalClasspath>
+          <pathElement path="mail-1.4.7.jar"/>
+        </additionalClasspath>
+      </forkEnvironment>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import javax.mail.*;
+import javax.mail.internet.MimeBodyPart;
+import java.io.*;
+import java.nio.file.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+String host = variables.get("HOST");
+String port = variables.get("PORT");
+String startTlsEnable = variables.get("STARTTLS_ENABLE");
+String username = variables.get("USERNAME");
+String password = credentials.get("imap://" + username + "@" + host);
+String emailFolderName = variables.get("EMAIL_FOLDER_NAME");
+int checkLastNEmails = Integer.valueOf(variables.get("CHECK_LAST_N_EMAILS"));
+
+// Create properties field
+Properties properties = new Properties();
+properties.put("mail.imap.host", host);
+properties.put("mail.imap.port", port);
+properties.put("mail.imap.starttls.enable", startTlsEnable);
+
+// Initialize a list to store email metadata in HashMaps
+List<HashMap<String, String>> emailMetadataList = new ArrayList<>();
+
+// Get the session and store for IMAP
+Session emailSession = Session.getDefaultInstance(properties);
+try {
+    Store store = emailSession.getStore("imaps");  // Use "imaps" for secure IMAP access
+    store.connect(host, username, password);
+
+    // Open the specified folder
+    Folder emailFolder = store.getFolder(emailFolderName);
+    emailFolder.open(Folder.READ_ONLY);
+
+    // Retrieve and process messages
+    Message[] messages = emailFolder.getMessages();
+    println("Total messages in folder '" + emailFolderName + "': " + messages.length);
+
+    // Determine the starting index based on the value of checkLastNEmails
+    int startIdx;
+    if (checkLastNEmails == -1) {
+        // If -1, start from the beginning to check all emails
+        startIdx = 0;
+    } else {
+        // Otherwise, calculate the starting index to process only the last N emails
+        startIdx = Math.max(0, messages.length - checkLastNEmails);
+    }
+
+    for (int i = messages.length - 1; i >= startIdx; i--) {
+        Message message = messages[i];
+        HashMap<String, String> emailDetails = new HashMap<>();
+
+        // Retrieve email metadata
+        emailDetails.put("MsgNum", String.valueOf(message.getMessageNumber()));
+        emailDetails.put("From", message.getFrom()[0].toString());
+        emailDetails.put("To", Arrays.toString(message.getRecipients(Message.RecipientType.TO)));
+        emailDetails.put("CC", message.getRecipients(Message.RecipientType.CC) != null ?
+                         Arrays.toString(message.getRecipients(Message.RecipientType.CC)) : "");
+        emailDetails.put("Date", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(message.getReceivedDate()));
+        emailDetails.put("Subject", message.getSubject());
+        emailDetails.put("MimeType", message.getContentType());
+
+        // Check if email has attachments
+        boolean hasAttachment = false;
+        if (message.isMimeType("multipart/*")) {
+            Multipart multipart = (Multipart) message.getContent();
+            for (int j = 0; j < multipart.getCount(); j++) {
+                BodyPart bodyPart = multipart.getBodyPart(j);
+                if (Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition())) {
+                    hasAttachment = true;
+                    break;
+                }
+            }
+        }
+        emailDetails.put("Has_Attachment", String.valueOf(hasAttachment));
+
+        // Retrieve and store flags information
+        Flags flags = message.getFlags();
+        emailDetails.put("Is_Seen", String.valueOf(flags.contains(Flags.Flag.SEEN)));
+        emailDetails.put("Is_Answered", String.valueOf(flags.contains(Flags.Flag.ANSWERED)));
+        emailDetails.put("Is_Draft", String.valueOf(flags.contains(Flags.Flag.DRAFT)));
+        emailDetails.put("Is_Flagged", String.valueOf(flags.contains(Flags.Flag.FLAGGED)));
+        emailDetails.put("Is_Recent", String.valueOf(flags.contains(Flags.Flag.RECENT)));
+
+        // Add email details to the list
+        emailMetadataList.add(emailDetails);
+    }
+
+    // Close the folder and store
+    emailFolder.close(false);
+    store.close();
+
+    // Print or log the metadata list
+    for (HashMap<String, String> metadata : emailMetadataList) {
+        println(metadata);
+    }
+    result = emailMetadataList;
+
+} catch (Exception e) {
+    e.printStackTrace();
+    throw new Exception("Error processing emails", e);
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            130.849609375
+        </positionTop>
+        <positionLeft>
+            674.82421875
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2688px;
+            height:3695px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-125.849609375px;left:-669.82421875px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_82" style="top: 130.85px; left: 674.824px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A workflow that accesses the specified folder in the mailbox to review each email, saving in a list of HashMap only the header details—such as the &quot;From&quot;, &quot;To&quot;, &quot;Date&quot;, &quot;Has_Attachment&quot;, and &quot;Subject&quot; fields—without reading the message content." data-original-title="A task that accesses the specified folder in the mailbox to review each email, retrieving only the header details—such as the &quot;From&quot;, &quot;To&quot;, &quot;Date&quot;, &quot;Has_Attachment&quot;, and &quot;Subject&quot; fields—without reading the message content."><img src="/automation-dashboard/styles/patterns/img/wf-icons/email_checker.png" width="20px">&nbsp;<span class="name">Imap_Email_Checker</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 732.5px; top: 161px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
