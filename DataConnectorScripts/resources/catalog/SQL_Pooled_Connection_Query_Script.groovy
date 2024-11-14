@@ -51,6 +51,8 @@ if (!database) {
     throw new IllegalArgumentException("ERROR: DATABASE variable is not provided by the user. Empty value is not allowed.")
 }
 
+SecureJDBCParameters = variables.get("SECURE_JDBC_PARAMETERS")
+
 // This key is used for getting the password from 3rd party credentials.
 CREDENTIALS_KEY = RDBMS_NAME + "://" + username + "@" + host + ":" + port
 password = credentials.get(CREDENTIALS_KEY).trim()
@@ -60,11 +62,15 @@ jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + "/"+ database
 //Oracle & SQL Server are particular cases
 if(RDBMS_PROTOCOL.equals("oracle")){
     jdbcUrl = "jdbc:oracle:thin:@//" + host + ":" + port + "/" + database
-} else if(RDBMS_PROTOCOL.equals("sqlserver")){
-    jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + ";database=" + database
+} else if(RDBMS_PROTOCOL.equals("sqlserver")) {
+    jdbcUrl = "jdbc:" + RDBMS_PROTOCOL + "://" + host + ":" + port + ";database=" + database + ";encrypt=true;trustServerCertificate=true"
+    if (SecureJDBCParameters) {
+        jdbcUrl = jdbcUrl + ";" + SecureJDBCParameters
+    }
 }
 
-interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
+
+    interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
 interceptor.start()
 
 if(password){
