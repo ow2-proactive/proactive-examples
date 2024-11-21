@@ -1,14 +1,14 @@
-import java.sql.ResultSet
 import org.ow2.proactive.scheduler.examples.connectionpooling.*
 import groovy.ui.SystemOutputInterceptor
-import java.sql.ResultSetMetaData
-import java.sql.SQLException
-import org.apache.commons.dbutils.handlers.MapListHandler
 
-// Retrieve the RDBMS name
+import java.sql.ResultSet
+import java.sql.SQLException
+
+
+// Retrieve RDBMS_NAME variable
 RDBMS_NAME = variables.get("RDBMS_NAME")
 
-println("BEGIN Pooled Connection and execute stored procedure on " + RDBMS_NAME + " database")
+println("BEGIN Pooled Connection and execute Procedure Update on " + RDBMS_NAME + " database")
 
 RDBMS_PROTOCOL = ""
 RDBMS_DEFAULT_PORT = ""
@@ -69,7 +69,6 @@ if(RDBMS_PROTOCOL.equals("oracle")){
     }
 }
 
-
 interceptor = new SystemOutputInterceptor({ id, str -> print(str); false})
 interceptor.start()
 
@@ -85,56 +84,25 @@ variables.entrySet().each { var ->
         dbConnectionDetailsBuilder.addDataSourceProperty(var.getKey().replace("POOL_", ""), var.getValue())
     }}
 
-
 //Open the pooled connection to the database
 dbConnectionDetails = dbConnectionDetailsBuilder.build()
 storedProcedure = variables.get("STORED_PROCEDURE")
+if (!storedProcedure){
+    throw new IllegalArgumentException("ERROR: STORED_PROCEDURE variable is not provided by the user. Empty value is not allowed.")
+}
 
-
-ResultSet rs = null
 try {
     dBConnectionPoolsHolder = DBConnectionPoolsHolder.getInstance()
     Object[] parsedParams = parseStoredProcedure(storedProcedure);
     String procedureName = storedProcedure.contains("(")
             ? storedProcedure.substring(0, storedProcedure.indexOf('('))
             : storedProcedure;
-    rs = dBConnectionPoolsHolder.executeStoredProcedure(dbConnectionDetails, procedureName, parsedParams)
+    result = dBConnectionPoolsHolder.executeStoredProcedureUpdate(dbConnectionDetails, procedureName, parsedParams)
 } catch (Exception e) {
     println org.objectweb.proactive.utils.StackTraceUtil.getStackTrace(e)
     throw e
 }
 interceptor.stop()
-
-outputType = variables.get("OUTPUT_TYPE")
-outputFile = variables.get("OUTPUT_FILE")
-if(!outputFile){
-    outputFile = "procedure-execution-result.csv"
-}
-if (outputType == "HTML"){
-    result = getHtmlPreview(rs).toString().getBytes()
-    resultMetadata.put("file.extension", ".html")
-    resultMetadata.put("file.name", "output.html")
-    resultMetadata.put("content.type", "text/html")
-} else {
-    csvFile = new File(outputFile) << getCsvPreview(rs).toString()
-    result = csvFile.getBytes()
-    resultMetadata.put("file.extension", ".csv")
-    resultMetadata.put("file.name", outputFile)
-    resultMetadata.put("content.type", "text/csv")
-}
-
-storeResultVariable = variables.get("STORE_RESULT_VARIABLE")
-if(storeResultVariable){
-    try {
-        handler = new MapListHandler()
-        variables.put(storeResultVariable, handler.handle(rs))
-    } catch (Exception e) {
-        println org.objectweb.proactive.utils.StackTraceUtil.getStackTrace(e)
-        throw e
-    }
-}
-
-
 
 
 /**
@@ -166,6 +134,8 @@ def parseStoredProcedure(String storedProcedure) {
         param = param.trim()
         if (param ==~ /^\d+$/) { // Integer
             return Integer.parseInt(param)
+        } else if (param.equalsIgnoreCase("null")) { // Null
+            return null
         } else if (param ==~ /^\d+\.\d+$/) { // Double/Float
             return Double.parseDouble(param)
         } else if (param ==~ /^(?i:true|false)$/) { // Boolean
@@ -186,70 +156,12 @@ def parseStoredProcedure(String storedProcedure) {
 }
 
 /**
- * This method initializes the default data base properties (port, connection protocol and drivers, etc)
- */
+* This method initializes the default data base properties (port, connection protocol and drivers, etc)
+*/
 def init(String protocol, String port, String dataSourceClassName){
     RDBMS_PROTOCOL = protocol
     RDBMS_DEFAULT_PORT = port
     RDBMS_DATA_SOURCE_CLASS_NAME = dataSourceClassName
 }
 
-/**
- * This methods allows to download the results from the Scheduler Portal in a CSV format.
- */
-def getCsvPreview(ResultSet rs) throws IOException, SQLException {
-
-    ResultSetMetaData rsmd = rs.getMetaData()
-    StringBuilder csvTable  = new StringBuilder()
-    int columnCount = rsmd.getColumnCount()
-    for (int i=1; i <= columnCount; i++) {
-        csvTable.append(rsmd.getColumnName(i))
-        if (i != columnCount) {
-            csvTable.append(',')
-        }
-    }
-    csvTable.append('\n')
-    while (rs.next()) {
-        for (int i = 1; i <= columnCount; i++) {
-            value = rs.getString(i)
-            csvTable.append(value == null ? "" : value.toString())
-            if (i != columnCount) {
-                csvTable.append(',')
-            }
-        }
-        csvTable.append('\n')
-    }
-    rs.beforeFirst()
-    return csvTable
-}
-
-/**
- * This methods allows to preview the results in the Scheduler Portal in a HTML format.
- */
-def getHtmlPreview(ResultSet rs) throws IOException, SQLException {
-
-    ResultSetMetaData md = rs.getMetaData()
-    StringBuilder htmlTable  = new StringBuilder("<style  type=\"text/css\" >th { font-weight: bold; text-align: center; background: #0B6FA4; color: white;} td {text-align: right;padding: 3px 5px;border-bottom: 1px solid #999999;} table {border: 1px solid #999999;text-align: center;width: 100%;border: 1px solid #999999;}</style>");
-    int count = md.getColumnCount()
-    htmlTable.append("<table border=1>")
-    htmlTable.append("<tr>")
-    for (int i=1; i<=count; i++) {
-        htmlTable.append("<th>")
-        htmlTable.append(md.getColumnLabel(i))
-    }
-    htmlTable.append("</tr>")
-    while (rs.next()) {
-        htmlTable.append("<tr>")
-        for (int i=1; i<=count; i++) {
-            htmlTable.append("<td>")
-            htmlTable.append(rs.getString(i))
-        }
-        htmlTable.append("</tr>")
-    }
-    htmlTable.append("</table>")
-    rs.beforeFirst()
-    return htmlTable
-}
-
-
-println("END execute stored procedure in " + RDBMS_NAME + " database")
+println("END Pooled Connection and execute Procedure Update on " + RDBMS_NAME + " database")
