@@ -1,9 +1,6 @@
 import org.ow2.proactive.scheduler.examples.connectionpooling.*
 import groovy.ui.SystemOutputInterceptor
 
-import java.sql.ResultSet
-import java.sql.SQLException
-
 
 // Retrieve RDBMS_NAME variable
 RDBMS_NAME = variables.get("RDBMS_NAME")
@@ -13,22 +10,6 @@ println("BEGIN Pooled Connection and execute Procedure Update on " + RDBMS_NAME 
 RDBMS_PROTOCOL = ""
 RDBMS_DEFAULT_PORT = ""
 RDBMS_DATA_SOURCE_CLASS_NAME = ""
-
-if (RDBMS_NAME.equals("postgresql")){
-    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
-} else if (RDBMS_NAME.equals("mysql")){
-    init("mysql", "3306", "com.mysql.cj.jdbc.Driver")
-} else if (RDBMS_NAME.equals("greenplum")){
-    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
-} else if (RDBMS_NAME.equals("sqlserver")){
-    init("sqlserver", "1433", "com.microsoft.sqlserver.jdbc.SQLServerDataSource")
-} else if (RDBMS_NAME.equals("oracle")){
-    init("oracle" ,"1521", "oracle.jdbc.pool.OracleDataSource")
-} else if (RDBMS_NAME.equals("hsqldb")){
-    init("hsqldb:hsql" ,"9001", "org.hsqldb.jdbc.JDBCDataSource")
-} else {
-    throw new IllegalArgumentException("You must specify a valid RDBMS name in the script arguments amongst postgresql, mysql, greenplum, sqlserver, hsqldb or oracle")
-}
 
 host = variables.get("HOST")
 if (!host) {
@@ -49,6 +30,27 @@ if (!port) {
 database = variables.get("DATABASE")
 if (!database) {
     throw new IllegalArgumentException("ERROR: DATABASE variable is not provided by the user. Empty value is not allowed.")
+}
+
+storedProcedure = variables.get("STORED_PROCEDURE")
+if (!storedProcedure){
+    throw new IllegalArgumentException("ERROR: STORED_PROCEDURE variable is not provided by the user. Empty value is not allowed.")
+}
+
+if (RDBMS_NAME.equals("postgresql")){
+    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
+} else if (RDBMS_NAME.equals("mysql")){
+    init("mysql", "3306", "com.mysql.cj.jdbc.Driver")
+} else if (RDBMS_NAME.equals("greenplum")){
+    init("postgresql", "5432", "org.postgresql.ds.PGSimpleDataSource")
+} else if (RDBMS_NAME.equals("sqlserver")){
+    init("sqlserver", "1433", "com.microsoft.sqlserver.jdbc.SQLServerDataSource")
+} else if (RDBMS_NAME.equals("oracle")){
+    init("oracle" ,"1521", "oracle.jdbc.pool.OracleDataSource")
+} else if (RDBMS_NAME.equals("hsqldb")){
+    init("hsqldb:hsql" ,"9001", "org.hsqldb.jdbc.JDBCDataSource")
+} else {
+    throw new IllegalArgumentException("You must specify a valid RDBMS name in the script arguments amongst postgresql, mysql, greenplum, sqlserver, hsqldb or oracle")
 }
 
 SecureJDBCParameters = variables.get("SECURE_JDBC_PARAMETERS")
@@ -86,10 +88,6 @@ variables.entrySet().each { var ->
 
 //Open the pooled connection to the database
 dbConnectionDetails = dbConnectionDetailsBuilder.build()
-storedProcedure = variables.get("STORED_PROCEDURE")
-if (!storedProcedure){
-    throw new IllegalArgumentException("ERROR: STORED_PROCEDURE variable is not provided by the user. Empty value is not allowed.")
-}
 
 try {
     dBConnectionPoolsHolder = DBConnectionPoolsHolder.getInstance()
@@ -103,7 +101,6 @@ try {
     throw e
 }
 interceptor.stop()
-
 
 /**
  * Parses a stored procedure string to extract the parameters and convert them to appropriate types.
@@ -132,24 +129,34 @@ def parseStoredProcedure(String storedProcedure) {
 
     return paramArray.collect { param ->
         param = param.trim()
-        if (param ==~ /^\d+$/) { // Integer
-            return Integer.parseInt(param)
-        } else if (param.equalsIgnoreCase("null")) { // Null
-            return null
-        } else if (param ==~ /^\d+\.\d+$/) { // Double/Float
-            return Double.parseDouble(param)
-        } else if (param ==~ /^(?i:true|false)$/) { // Boolean
-            return Boolean.parseBoolean(param.toLowerCase())
-        } else if (param.startsWith("'")) { // String
-            return param.substring(1, param.length() - 1)
-        } else if (param ==~ /^\d{4}-\d{2}-\d{2}$/) { // Date in 'YYYY-MM-DD'
-            return java.sql.Date.valueOf(param)
-        } else if (param ==~ /^\d{2}:\d{2}:\d{2}$/) { // Time in 'HH:MM:SS'
-            return java.sql.Time.valueOf(param)
-        } else if (param ==~ /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/) { // Timestamp in 'YYYY-MM-DDTHH:MM:SS'
-            return java.sql.Timestamp.valueOf(param.replace('T', ' '))
-        } else {
-            throw new IllegalArgumentException("Unsupported parameter format: " + param)
+
+        switch (param) {
+            case { it ==~ /^\d+$/ }: // Integer
+                return Integer.parseInt(param)
+
+            case { it.equalsIgnoreCase("null") }: // Null
+                return null
+
+            case { it ==~ /^\d+\.\d+$/ }: // Double/Float
+                return Double.parseDouble(param)
+
+            case { it ==~ /^(?i:true|false)$/ }: // Boolean
+                return Boolean.parseBoolean(param.toLowerCase())
+
+            case { it.startsWith("'") }: // String
+                return param.substring(1, param.length() - 1)
+
+            case { it ==~ /^\d{4}-\d{2}-\d{2}$/ }: // Date in 'YYYY-MM-DD'
+                return java.sql.Date.valueOf(param)
+
+            case { it ==~ /^\d{2}:\d{2}:\d{2}$/ }: // Time in 'HH:MM:SS'
+                return java.sql.Time.valueOf(param)
+
+            case { it ==~ /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/ }: // Timestamp in 'YYYY-MM-DDTHH:MM:SS'
+                return java.sql.Timestamp.valueOf(param.replace('T', ' '))
+
+            default:
+                throw new IllegalArgumentException("Unsupported parameter format: " + param)
         }
     } as Object[]
 
