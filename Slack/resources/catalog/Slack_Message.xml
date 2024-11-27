@@ -15,7 +15,7 @@
         <![CDATA[ Executes a HTTP Post request to a slack webhook. ]]>
       </description>
       <variables>
-        <variable advanced="false" description="The slack webhook queried to post the message." group="" hidden="false" inherited="false" name="WEBHOOK" value="https://hooks.slack.com"/>
+        <variable advanced="false" description="A comma separated list of slack webhooks to which the message will be sent." group="" hidden="false" inherited="false" name="WEBHOOKS" value="https://hooks.slack.com" model="PA:NOT_EMPTY_STRING"/>
         <variable advanced="false" description="The header of the message posted on slack." group="" hidden="false" inherited="false" name="MESSAGE_HEADER" value=""/>
         <variable advanced="false" description="The content of the message posted on slack." group="" hidden="false" inherited="false" name="MESSAGE_CONTENT" value=""/>
         <variable advanced="true" description="Prints the logs of the HTTP POST query sent to the webhook" group="" hidden="false" inherited="true" name="DEBUG" value="false"/>
@@ -49,13 +49,23 @@ import io.restassured.http.ContentType;
 import org.apache.commons.lang3.StringUtils;
 
 def webHookPrefix = "https://hooks.slack.com/services";
-def webHook = variables.get('WEBHOOK');
+def webHooks = variables.get('WEBHOOKS');
 def debug = Boolean.parseBoolean(variables.get("DEBUG"));
 def isSkippedFailure = variables.get('SKIP_FAILURE')?Boolean.parseBoolean(variables.get('SKIP_FAILURE')):false;
 
-if (StringUtils.isBlank(webHook) || !webHook.contains(webHookPrefix)) {
-    throw new IllegalArgumentException("Slack webhook has bad format: "+ webHook);
+if (StringUtils.isBlank(webHooks) || webHooks.split(',').length < 1) {
+    throw new IllegalArgumentException("Slack webhook has bad format: "+ webHooks);
 }
+
+Set<String> validWebhooks = Arrays.stream(webHooks.split(','))
+  .filter({ webHook ->
+      if (!webHook.contains(webHookPrefix)) {
+          println("webhook $webHook has bad format. Removing it.")
+          return false
+      }
+      return true
+  })
+  .collect(Collectors.toSet())
 
 def messageHeader = StringUtils.isBlank(variables.get("MESSAGE_HEADER"))?"Message from ProActive job "+variables.get("PA_JOB_ID"):variables.get("MESSAGE_HEADER");
 def messageContent = StringUtils.isBlank(variables.get("MESSAGE_CONTENT"))?"Content was empty ...":variables.get("MESSAGE_CONTENT");
@@ -65,33 +75,35 @@ postData.append('{"blocks":[{');
 postData.append('"type": "header","text":{"type": "plain_text","text": "').append(messageHeader).append('"}},{');
 postData.append('"type": "section","text":{"type": "mrkdwn", "text":"').append(messageContent).append('"}}]}');
 
-restCall = given().contentType("application/json")	
-restCall = restCall.relaxedHTTPSValidation()	
-restCall = restCall.body(postData.toString())
+validWebhooks.each { webHook ->
+    def restCall = given()
+        .contentType("application/json")
+        .relaxedHTTPSValidation()
+        .body(postData.toString());
 
-if (debug) {
-    println "-------------- REQUEST -----------------"
-	restCall = restCall.log().all()
-}
-
-response = restCall.post(webHook)
-def isRequestFailed = response.statusCode() != 200;
-
-if (debug || isRequestFailed) {
-    println "-------------- RESPONSE -----------------"
-    println response.statusLine()
-    println response.prettyPrint()
-}
-
-if (isRequestFailed) {
-    if (!isSkippedFailure) {
-        throw new IllegalStateException("Request to post slack message failed with error code: " + response.statusCode());
+    if (debug) {
+        println "-------------- REQUEST -----------------"
+        restCall = restCall.log().all();
     }
-    println "The request failed but the task is configured to ignore the failure."
-} else {
-    println "Slack message successfully posted."
-}
 
+    def response = restCall.post(webHook);
+    def isRequestFailed = response.statusCode() != 200;
+
+    if (debug || isRequestFailed) {
+        println "-------------- RESPONSE -----------------"
+        println "Status Line: ${response.statusLine()}"
+        println "Response Body: ${response.prettyPrint()}"
+    }
+
+    if (isRequestFailed) {
+        if (!isSkippedFailure) {
+            throw new IllegalStateException("Request to post slack message failed with error code: " + response.statusCode());
+        }
+        println "The request failed but the task is configured to ignore the failure."
+    } else {
+        println "Slack message successfully posted."
+    }
+}
 
 ]]>
           </code>
