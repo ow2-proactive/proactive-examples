@@ -86,8 +86,8 @@ initializeAuthentication()
 remoteDir = variables.get("REMOTE_BASE")
 filePattern = variables.get("FILE_PATTERN")
 localBase = variables.get("LOCAL_BASE")
-cut = Boolean.parseBoolean(variables.get("MOVE_FILE"))
-syncFiles = Boolean.parseBoolean(variables.get("SYNC_FILES"))
+moveFile = Boolean.valueOf(variables.get("MOVE_FILE"))
+syncFiles = Boolean.valueOf(variables.get("SYNC_FILES"))
 
 // used for cleanup in release()
 src = null
@@ -212,23 +212,27 @@ void importFiles() {
 void createParentFolderAndTransferFile(FileObject sourceFile, FileObject destFile) throws IOException {
     // Ensure the parent folder of the destination file exists
     if (!destFile.getParent().exists()) {
-        if (!destFile.getParent().isWriteable()) {
-            throw new RuntimeException("The folder " + destFile.getParent() + " is read-only");
-        }
         destFile.getParent().createFolder();
         println("Created the parent folder " + destFile.getParent().toString() + " on the SFTP server");
+    } else if (!destFile.getParent().isWriteable()) {
+        throw new RuntimeException("The folder " + destFile.getParent() + " is read-only");
     }
 
     // Ensure the destination file is writable
-    if (!destFile.isWriteable()) {
+    if (destFile.exists() && !destFile.isWriteable()) {
         throw new RuntimeException("The file " + destFile + " is read-only");
     }
 
     try {
         if (moveFile) {
-            // Move the file (removes the source file after moving)
-            sourceFile.moveTo(destFile);
-            println("File moved successfully from ${sourceFile.getName()} to ${destFile.getName()}");
+            try {
+                // Attempt to move the file (removes the source file after moving)
+                sourceFile.moveTo(destFile);
+                println("File moved successfully from ${sourceFile.getName()} to ${destFile.getName()}");
+            } catch (Exception e) {
+                println("Failed to move file, attempting stream copy...");
+                copyThroughStream(sourceFile, destFile);
+            }
         } else {
             // Attempt to copy the file
             try {
