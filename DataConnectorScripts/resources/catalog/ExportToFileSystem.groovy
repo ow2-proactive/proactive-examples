@@ -86,6 +86,8 @@ initializeAuthentication()
 remoteDir = variables.get("REMOTE_BASE")
 filePattern = variables.get("FILE_PATTERN")
 localBase = variables.get("LOCAL_BASE")
+moveFile = Boolean.valueOf(variables.get("MOVE_FILE"))
+
 
 // used for cleanup in release()
 src = null
@@ -188,10 +190,10 @@ void exportFiles() {
             if (localFile.getType() == FileType.FILE) {
                 println("Examining local file " + localFile.getName());
                 String remoteUrl = startRemoteUrl + "/" + relativePath;
-                println("  Remote url is " + remoteUrl);
+                println("Remote url is " + remoteUrl);
                 FileObject remoteFile = fsManager.resolveFile(remoteUrl, optsRemote);
                 println("Resolved remote file name: " + remoteFile.getName());
-                createParentFolderAndCopyFile(remoteFile, localFile)
+                createParentFolderAndTransferFile(localFile, remoteFile)
             } else {
                 println("Ignoring non-file " + localFile.getName());
             }
@@ -202,48 +204,99 @@ void exportFiles() {
 }
 
 /**
- * Create the parent folder if it does not exist and copy the file to the remote server
+ * Ensure the parent folder exists, then transfer the file to the destination using the appropriate method.
  */
-void createParentFolderAndCopyFile(FileObject remoteFile, FileObject localFile) {
-    if (!remoteFile.getParent().exists()) {
-        if (!remoteFile.getParent().isWriteable()) {
-            throw new RuntimeException("This folder " + remoteFile.getParent() + " is read-only")
+void createParentFolderAndTransferFile(FileObject sourceFile, FileObject destFile) throws IOException {
+    // Ensure the parent folder of the destination file exists
+    if (!destFile.getParent().exists()) {
+        destFile.getParent().createFolder();
+        println("Created the parent folder " + destFile.getParent().toString() + " on the SFTP server");
+    } else if (!destFile.getParent().isWriteable()) {
+        throw new RuntimeException("The folder " + destFile.getParent() + " is read-only");
+    }
+
+    // Ensure the destination file is writable
+    if (destFile.exists() && !destFile.isWriteable()) {
+        throw new RuntimeException("The file " + destFile + " is read-only");
+    }
+
+    try {
+        if (moveFile) {
+            try {
+                // Attempt to move the file (removes the source file after moving)
+                sourceFile.moveTo(destFile);
+                println("File moved successfully from ${sourceFile.getName()} to ${destFile.getName()}");
+            } catch (Exception e) {
+                println("Failed to move file, attempting stream copy...");
+                copyThroughStream(sourceFile, destFile);
+            }
+        } else {
+            // Attempt to copy the file
+            try {
+                destFile.copyFrom(sourceFile.getParent(), new FileSelector() {
+                    @Override
+                    boolean includeFile(FileSelectInfo fileInfo) {
+                        return fileInfo.getFile().equals(sourceFile);
+                    }
+
+                    @Override
+                    boolean traverseDescendents(FileSelectInfo fileInfo) {
+                        return false;
+                    }
+                });
+                println("File copied successfully from ${sourceFile.getName()} to ${destFile.getName()}");
+            } catch (Exception e) {
+                println("Failed to copy via FileSelector, attempting stream copy...");
+                copyThroughStream(sourceFile, destFile);
+            }
         }
-        remoteFile.getParent().createFolder();
-        println("Create the remote folder " + remoteFile.getParent().toString())
+    } catch (Exception e) {
+        throw new RuntimeException("Error during file transfer: " + e.getMessage(), e);
     }
-    println("  ### Uploading file ###");
-    if (!remoteFile.isWriteable()) {
-        throw new RuntimeException("This file " + remoteFile + " is read-only")
-    }
-    copyThroughStream(localFile, remoteFile)
 }
 
-
-void copyThroughStream(FileObject sourceFile, FileObject destinationFile) throws IOException {
+/**
+ * Copy a file using a stream, with support for progress listeners.
+ */
+void copyThroughStream(FileObject sourceFile, FileObject destFile) throws IOException {
     CopyStreamListener listener = new CopyStreamListener() {
         ProgressPrinter printer = new ProgressPrinter();
 
         @Override
         public void bytesTransferred(CopyStreamEvent event) {
-            /* do nothing */
+            // Do nothing
         }
 
         @Override
         public void bytesTransferred(long totalBytesTransferred, int bytesTransferred, long streamSize) {
             printer.handleProgress(totalBytesTransferred, streamSize);
         }
-    }
+    };
+
     InputStream sourceFileIn = sourceFile.getContent().getInputStream();
     try {
-        OutputStream destinationFileOut = destinationFile.getContent().getOutputStream();
+        OutputStream destFileOut = destFile.getContent().getOutputStream();
         try {
-            Util.copyStream(sourceFileIn, destinationFileOut, Util.DEFAULT_COPY_BUFFER_SIZE, sourceFile.getContent().getSize(), listener);
+            Util.copyStream(
+                    sourceFileIn,
+                    destFileOut,
+                    Util.DEFAULT_COPY_BUFFER_SIZE,
+                    sourceFile.getContent().getSize(),
+                    listener
+            );
+            println("Stream copy completed successfully for ${sourceFile.getName()} to ${destFile.getName()}");
         } finally {
-            destinationFileOut.close();
+            destFileOut.close();
         }
     } finally {
         sourceFileIn.close();
+    }
+
+    // If the move flag is true, delete the source file after copying
+    if (moveFile) {
+        if (!sourceFile.delete()) {
+            throw new IOException("Failed to delete the source file after moving: " + sourceFile.getName());
+        }
     }
 }
 
@@ -287,12 +340,9 @@ void initializeAuthentication() {
             } else {
                 bytesIdentityInfo = new BytesIdentityInfo(sshKey.getBytes())
             }
-            //ssh key
-            SftpFileSystemConfigBuilder.getInstance().setStrictHostKeyChecking(optsRemote, "no");
             //set root directory to user home
             SftpFileSystemConfigBuilder.getInstance().setUserDirIsRoot(optsRemote, true);
-            //timeout
-            SftpFileSystemConfigBuilder.getInstance().setTimeout(optsRemote, 10000);
+
             SftpFileSystemConfigBuilder.getInstance().setIdentityProvider(optsRemote, bytesIdentityInfo)
         } catch (FileSystemException ex) {
             throw new RuntimeException("Failed to set user authenticator", ex);
@@ -312,8 +362,26 @@ void initializeAuthentication() {
             throw new RuntimeException("Failed to set user authenticator", ex);
         }
     }
+    // SSH Key
+    SftpFileSystemConfigBuilder.getInstance().setStrictHostKeyChecking(optsRemote, "no");
+
+    // Timeouts
+    int connectionTimeout = 60000; // Set connection timeout to 60 seconds
+    int sessionTimeoutMillis = 60000; // Set session timeout to 60 seconds (in milliseconds)
+
+
+    // Set connection timeout
+    SftpFileSystemConfigBuilder.getInstance().setTimeout(optsRemote, connectionTimeout);
+
+    // Set session-specific timeout
+    SftpFileSystemConfigBuilder.getInstance().setSessionTimeoutMillis(optsRemote, sessionTimeoutMillis);
+
+    // FTP Passive Mode
     FtpFileSystemConfigBuilder.getInstance().setPassiveMode(optsRemote, true);
-    SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true)
+
+    // Disable Detect Exec Channel
+    SftpFileSystemConfigBuilder.getInstance().setDisableDetectExecChannel(optsRemote, true);
+
 }
 
 class ProgressPrinter {
