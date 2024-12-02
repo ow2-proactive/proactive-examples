@@ -4,13 +4,13 @@
         xmlns="urn:proactive:jobdescriptor:3.14" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd"  name="SQLServer" projectName="1. Database" tags="SQLServer,Service Automation,Data Base,SQL" priority="normal" onTaskError="continueJobExecution"  maxNumberOfExecution="2"  >
     <variables>
         <variable name="INSTANCE_NAME" value="sqlserver-server-${PA_JOB_ID}"  description="The name of the service to be deployed."  advanced="false" hidden="false"/>
-        <variable name="SA_PASSWORD" value="" model="PA:HIDDEN" description="Password for the System Administrator (SA) account. The password must be at least 8 characters."  advanced="false" hidden="false"/>
+        <variable name="SA_PASSWORD" value="MyStrongPassword1!" model="PA:REGEXP(^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&amp;])[A-Za-z\d@$!%*?&amp;]{8,}$)" description="Password for the System Administrator (SA) account. The password must be at least 8 characters long and contain characters from three of the following four sets: Uppercase letters, Lowercase letters, Base 10 digits, and Symbols."  advanced="false" hidden="false"/>
         <variable name="ENDPOINT_ID" value="sqlserver-endpoint-${PA_JOB_ID}"  description="The endpoint identifier that will be used."  advanced="false" hidden="true"/>
         <variable name="INIT_DATABASE" value="false" model="PA:BOOLEAN" description="If true, enable to create a new database and user"  advanced="false" hidden="false"/>
         <variable name="USER" value=""  description="Name of the SQL Server user to be created" group="Init Database" advanced="false" hidden="true"/>
-        <variable name="PASSWORD" value="" model="PA:HIDDEN" description="Password for the newly created SQL Server user" group="Init Database" advanced="false" hidden="true"/>
+        <variable name="PASSWORD" value="" model="PA:HIDDEN" description="Password for the newly created SQL Server user. The password must be at least 8 characters long and contain characters from three of the following four sets: Uppercase letters, Lowercase letters, Base 10 digits, and Symbols" group="Init Database" advanced="false" hidden="true"/>
         <variable name="DATABASE" value=""  description="Name of the new database to be created on start." group="Init Database" advanced="false" hidden="true"/>
-        <variable name="INIT_DATABASE_HANDLER" value="" model="PA:SPEL(variables[&#x27;INIT_DATABASE&#x27;].toLowerCase() == &#x27;true&#x27; ? showGroup(&#x27;Init Database&#x27;) &amp;&amp; t(models[&#x27;USER&#x27;] = &#x27;PA:NOT_EMPTY_STRING&#x27;) &amp;&amp; t(models[&#x27;DATABASE&#x27;] = &#x27;PA:NOT_EMPTY_STRING&#x27;): hideGroup(&#x27;Init Database&#x27;))"   advanced="false" hidden="true"/>
+        <variable name="INIT_DATABASE_HANDLER" value="" model="PA:SPEL(variables[&#x27;INIT_DATABASE&#x27;].toLowerCase() == &#x27;true&#x27; ? showGroup(&#x27;Init Database&#x27;) &amp;&amp; t(models[&#x27;USER&#x27;] = &#x27;PA:NOT_EMPTY_STRING&#x27;) &amp;&amp; t(models[&#x27;PASSWORD&#x27;] = &#x27;PA:REGEX(^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&amp;])[A-Za-z\d@$!%*?&amp;]{8,}$)&#x27;)&amp;&amp; t(models[&#x27;DATABASE&#x27;] = &#x27;PA:NOT_EMPTY_STRING&#x27;): hideGroup(&#x27;Init Database&#x27;))"   advanced="false" hidden="true"/>
     </variables>
     <description>
         <![CDATA[ Deploy a SQLServer Database server. ]]>
@@ -127,7 +127,7 @@ echo BEGIN "$variables_PA_TASK_NAME"
 
 ################################################################################
 ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
-DOCKER_IMAGE=mcr.microsoft.com/mssql/server:2022-latest
+DOCKER_IMAGE=mcr.microsoft.com/mssql/server:2022-preview-ubuntu-22.04
 PORT=1433
 
 SA_PASSWORD="$variables_SA_PASSWORD"
@@ -168,17 +168,17 @@ else
     ### THIS PART IS IMAGE SPECIFIC. IF YOU NEED TO MODIFY SOMETHING, DO IT HERE ###
     echo "Running docker container: $INSTANCE_NAME"
     F_PORT=$(GET_RANDOM_PORT)
-    INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -e ACCEPT_EULA=Y -e SA_PASSWORD=$SA_PASSWORD -d $DOCKER_IMAGE"  2>&1)
-    echo "docker run --name $INSTANCE_NAME -p $F_PORT:$PORT -e ACCEPT_EULA=Y -e SA_PASSWORD=$SA_PASSWORD -d $DOCKER_IMAGE"
+    INSTANCE_STATUS=$( eval "docker run --name $INSTANCE_NAME --hostname sqlpreview -p $F_PORT:$PORT -e ACCEPT_EULA=Y -e SA_PASSWORD=$SA_PASSWORD -e MSSQL_PID=Evaluation -d $DOCKER_IMAGE"  2>&1)
+    echo "docker run --name $INSTANCE_NAME --hostname sqlpreview -p $F_PORT:$PORT -e ACCEPT_EULA=Y -e SA_PASSWORD=$SA_PASSWORD -e MSSQL_PID=Evaluation -d $DOCKER_IMAGE"
     ################################################################################
     if [ "$(docker ps -a --format '{{.Names}}' | grep "^$INSTANCE_NAME$")" ]; then
-    	RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
-    	if [ "$RUNNING" == "true" ]; then
-        	echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
-    	fi
-	else
-    	echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
-	fi
+      RUNNING=$(docker inspect --format="{{ .State.Running }}" $INSTANCE_NAME 2> /dev/null)
+      if [ "$RUNNING" == "true" ]; then
+          echo $INSTANCE_NAME > $INSTANCE_NAME"_status"
+      fi
+  else
+      echo $INSTANCE_STATUS > $INSTANCE_NAME"_status"
+  fi
 fi
 
 port=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "'$PORT'/tcp") 0).HostPort}}' $INSTANCE_NAME)
@@ -189,11 +189,23 @@ echo "$containerID" > $INSTANCE_NAME"_containerID"
 
 # Endpoint added to the job variables using a groovy post-script
 
-if [ "$INIT_DATABASE" == "true" ]; then
-	# Define the variables
-	my_database="$variables_DATABASE"
-	my_user="$variables_USER"
-	my_password="$variables_PASSWORD"
+wait_for_sql() {
+    for i in {1..60}; do
+        # Try to connect using sqlcmd
+        if docker exec $1 /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $2 -Q "SELECT 1" &>/dev/null; then
+            return 0
+        fi
+        echo "Waiting for SQL Server to be ready... ($i/60)"
+        sleep 2
+    done
+    return 1
+}
+
+if [ "$variables_INIT_DATABASE" == "true" ]; then
+  # Define the variables
+  my_database="$variables_DATABASE"
+  my_user="$variables_USER"
+  my_password="$variables_PASSWORD"
     # Create the SQL script with variables
     sql_script=$(cat <<EOF
 CREATE DATABASE [$my_database];
@@ -218,8 +230,15 @@ EOF
     # Copy the script to the running Docker container
     docker cp init.sql $INSTANCE_NAME:/init.sql
 
-    # Execute the script inside the container using sqlcmd
-    docker exec -it $INSTANCE_NAME /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -d master -i /init.sql -C
+    if wait_for_sql $INSTANCE_NAME "$SA_PASSWORD"; then
+    	# Execute the script inside the container using sqlcmd
+    	echo 'docker exec $INSTANCE_NAME /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -d master -i /init.sql -C'
+        docker exec $INSTANCE_NAME /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -d master -i /init.sql -C
+        echo "Database initialization completed"
+    else
+        echo "Failed to connect to SQL Server after 120 seconds"
+        exit 1
+    fi
 fi
 ]]>
                     </code>
