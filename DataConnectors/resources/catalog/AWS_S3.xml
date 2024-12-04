@@ -366,7 +366,7 @@ The task requires the following third-party credential: {key: ACCESS_KEY, value:
       </description>
       <variables>
         <variable name="LOCAL_RELATIVE_PATH" value="" inherited="false" group="S3 Storage Parameters" description="Local relative path to which we download file(s) from S3. LOCAL_RELATIVE_PATH can contain either a path to a file, a directory terminated by / or an empty value if you want to download file(s) to the root of the localspace (user or global)."/>
-        <variable name="URL" value="https://my_bucket.s3.amazonaws.com/file.png" inherited="false" model="PA:NOT_EMPTY_STRING" description="URL of a file stored in S3 which will be used as input file" group="S3 Storage Parameters"/>
+        <variable name="S3_URL" value="https://s3.<region>.amazonaws.com/<bucket>/<key>" inherited="false" model="PA:NOT_EMPTY_STRING" description="Specifies an S3 resource URL where the bucket name identifies the storage container and the key specifies a specific folder or file to download." group="S3 Storage Parameters"/>
         <variable name="ACCESS_KEY" value="my_access_key" model="PA:NOT_EMPTY_STRING" inherited="true" description="S3 user Access Key" group="S3 Storage Connection"/>
         <variable name="SECRET_KEY" value="$ACCESS_KEY" inherited="true"  model="PA:CREDENTIAL" description="Third-party credential storing the Secret Key associated with the given Access Key" group="S3 Storage Connection"/>
         <variable name="TRANSFER_DIRECTIVE" value="" inherited="false" model="PA:SPEL(! ( variables[&#39;LOCAL_RELATIVE_PATH&#39;].endsWith(&#39;/&#39;) || variables[&#39;LOCAL_RELATIVE_PATH&#39;].isEmpty() ? variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;LOCAL_RELATIVE_PATH&#39;] + &#39;**&#39; : variables[&#39;TRANSFER_DIRECTIVE&#39;] = variables[&#39;LOCAL_RELATIVE_PATH&#39;]).isEmpty())" hidden="true"/>
@@ -430,7 +430,7 @@ import com.amazonaws.AmazonServiceException
 import com.amazonaws.regions.RegionUtils
 
 //Set S3 connection parameters and retrieve the S3 secret key
-url = variables.get("URL")
+s3Url = variables.get("S3_URL")
 localRelativePath = variables.get("LOCAL_RELATIVE_PATH")
 accessKey = variables.get("ACCESS_KEY")
 scheme = ""
@@ -443,14 +443,44 @@ File file = new File(localRelativePath)
 createDirIfNotExists(file)
 AmazonS3 amazonS3 = getS3Client(accessKey, secretKey, scheme, host)
 
-// Check that the key name (remoteRelativePath) is either a path to a directory terminated by / or a path for a file
-if (isDirectoryPath(remoteRelativePath)) {
+/**
+ * Check that the key name (remoteRelativePath) is either empty or a path to a directory terminated by /or a path for a file
+ */
+if (remoteRelativePath == null || remoteRelativePath.isEmpty()) {
+    // Download the entire bucket if no specific key or prefix is provided
+    downloadEntireBucket(bucket, localRelativePath, amazonS3)
+} else if (isDirectoryPath(remoteRelativePath)) {
+    // Download specific directory (key prefix)
     downloadDir(bucket, remoteRelativePath, localRelativePath, false, amazonS3)
     println(listDirectoryContents(file, new ArrayList<>()))
 } else {
-    localRelativePath = Paths.get(localRelativePath, Paths.get(url).getFileName().toString()).toString()
+    // Download a single file
+    localRelativePath = Paths.get(localRelativePath, Paths.get(s3Url).getFileName().toString()).toString()
     downloadFile(bucket, remoteRelativePath, localRelativePath, false, amazonS3)
     println(localRelativePath)
+}
+
+
+/**
+ * Download the entire content of a bucket if no key name or prefix is provided.
+ * @param bucketName The name of the bucket.
+ * @param localPath The local path where the bucket content should be downloaded.
+ * @param s3Client The AmazonS3 client instance.
+ */
+def downloadEntireBucket(String bucketName, String localPath, AmazonS3 s3Client) {
+    println "Downloading entire bucket '$bucketName' to local path: $localPath"
+    def transferManager = TransferManagerBuilder.standard().withS3Client(s3Client).build()
+
+    try {
+        // Initiate the download of the entire bucket
+        MultipleFileDownload xfer = transferManager.downloadDirectory(bucketName, null, new File(localPath))
+        showTransferProgress(xfer)
+        waitForCompletion(xfer)
+    } catch (AmazonServiceException e) {
+        throw new Exception("Error while downloading bucket content: ${e.message}")
+    } finally {
+        transferManager.shutdownNow()
+    }
 }
 
 /**
@@ -669,30 +699,37 @@ def isDirectoryPath(String filePath) {
 * @param s3Uri
 */
 def parseAmazonS3URI(String s3Uri) {
-    AmazonS3URI amazonS3URI = new AmazonS3URI(s3Uri);
-    if ((scheme = amazonS3URI.getURI().getScheme()) == null) {
-        throw new IllegalArgumentException("You have to specify a valid scheme in the provided s3 uri. Empty value is not allowed.");
+    AmazonS3URI amazonS3URI = new AmazonS3URI(s3Uri)
+
+    scheme = amazonS3URI.getURI().getScheme()
+    if (scheme == null) {
+        throw new IllegalArgumentException("You must specify a valid scheme in the provided S3 URI. Empty value is not allowed.")
     }
-    if ((host = amazonS3URI.getURI().getHost()) == null) {
-        throw new IllegalArgumentException("You have to specify a valid host in the provided s3 uri. Empty value is not allowed.");
+
+    host = amazonS3URI.getURI().getHost()
+    if (host == null) {
+        throw new IllegalArgumentException("You must specify a valid host in the provided S3 URI. Empty value is not allowed.")
     }
-    if ((bucket = amazonS3URI.getBucket()) == null) {
-        throw new IllegalArgumentException("You have to specify a valid bucket name in the provided s3 uri. Empty value is not allowed.");
+
+    bucket = amazonS3URI.getBucket()
+    if (bucket == null) {
+        throw new IllegalArgumentException("You must specify a valid bucket name in the provided S3 URI. Empty value is not allowed.")
     }
-    if ((remoteRelativePath = amazonS3URI.getKey()) == null) {
-        throw new IllegalArgumentException("You have to specify a valid key name in the provided s3 uri. Empty value is not allowed.");
-    }
+
+    remoteRelativePath = amazonS3URI.getKey() ?: "" // Default to an empty string if no key name is provided.
+
 }
+
 
 /**
 * Checks and initialize parameters
 * returns the S3 secret key using the third party credentials mechanism
 */
 def checkParametersAndReturnSecretKey() {
-    if (url.isEmpty()) {
-        throw new IllegalArgumentException("URL variable is not provided by the user. Empty value is not allowed.")
+    if (s3Url.isEmpty()) {
+        throw new IllegalArgumentException("S3 URL variable is not provided by the user. Empty value is not allowed.")
     } else {
-        parseAmazonS3URI(url)
+        parseAmazonS3URI(s3Url)
     }
     if (localRelativePath.isEmpty()) {
         //Default value is getLocalSpace() because it will always be writable and moreover can be used to transfer files to another data space (global, user)
