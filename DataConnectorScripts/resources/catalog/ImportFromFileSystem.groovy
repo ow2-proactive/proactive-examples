@@ -195,7 +195,7 @@ void importFiles() {
                     println("Standard local path is " + standardPath);
                     LocalFile localFile = (LocalFile) fsManager.resolveFile(localUrl.toString());
                     println("Resolved local file name: " + localFile.getName());
-                    createParentFolderAndTransferFile(localFile, remoteFile)
+                    createParentFolderAndTransferFile(remoteFile, localFile)
                 }
             } else {
                 println("Ignoring non-file " + remoteFile.getName());
