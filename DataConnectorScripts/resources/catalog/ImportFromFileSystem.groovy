@@ -212,10 +212,10 @@ void importFiles() {
 void createParentFolderAndTransferFile(FileObject sourceFile, FileObject destFile) throws IOException {
     // Ensure the parent folder of the destination file exists
     if (!destFile.getParent().exists()) {
-        destFile.getParent().createFolder();
-        println("Created the parent folder " + destFile.getParent().toString() + " on the SFTP server");
+        destFile.getParent().createFolder()
+        println("Created the parent folder " + destFile.getParent().toString() + " on the local server")
     } else if (!destFile.getParent().isWriteable()) {
-        throw new RuntimeException("The folder " + destFile.getParent() + " is read-only");
+        throw new RuntimeException("The folder " + destFile.getParent() + " is read-only")
     }
 
     // Ensure the destination file is writable
@@ -236,7 +236,7 @@ void createParentFolderAndTransferFile(FileObject sourceFile, FileObject destFil
         } else {
             // Attempt to copy the file
             try {
-                destFile.copyFrom(sourceFile.getParent(), new FileSelector() {
+                destFile.copyFrom(sourceFile, new FileSelector() {
                     @Override
                     boolean includeFile(FileSelectInfo fileInfo) {
                         return fileInfo.getFile().equals(sourceFile);
