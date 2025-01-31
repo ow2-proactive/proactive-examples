@@ -87,6 +87,7 @@ remoteDir = variables.get("REMOTE_BASE")
 filePattern = variables.get("FILE_PATTERN")
 localBase = variables.get("LOCAL_BASE")
 moveFile = Boolean.valueOf(variables.get("MOVE_FILE"))
+showProgressBar = Boolean.valueOf(variables.get("SHOW_PROGRESS_BAR"))
 
 
 // used for cleanup in release()
@@ -221,33 +222,37 @@ void createParentFolderAndTransferFile(FileObject sourceFile, FileObject destFil
     }
 
     try {
-        if (moveFile) {
-            try {
-                // Attempt to move the file (removes the source file after moving)
-                sourceFile.moveTo(destFile);
-                println("File moved successfully from ${sourceFile.getName()} to ${destFile.getName()}");
-            } catch (Exception e) {
-                println("Failed to move file, attempting stream copy...");
-                copyThroughStream(sourceFile, destFile);
-            }
-        } else {
-            // Attempt to copy the file
-            try {
-                destFile.copyFrom(sourceFile, new FileSelector() {
-                    @Override
-                    boolean includeFile(FileSelectInfo fileInfo) {
-                        return fileInfo.getFile().equals(sourceFile);
-                    }
+        if(showProgressBar) {
+            copyThroughStream(sourceFile, destFile);
+        }
+        else {
+            if (moveFile) {
+                try {
+                    // Attempt to move the file (removes the source file after moving)
+                    sourceFile.moveTo(destFile);
+                    println("File moved successfully from ${sourceFile.getName()} to ${destFile.getName()}");
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to move file." + e.getMessage(), e);
+                }
+            } else {
+                // Attempt to copy the file
+                try {
+                    destFile.copyFrom(sourceFile, new FileSelector() {
+                        @Override
+                        boolean includeFile(FileSelectInfo fileInfo) {
+                            return fileInfo.getFile().equals(sourceFile);
+                        }
 
-                    @Override
-                    boolean traverseDescendents(FileSelectInfo fileInfo) {
-                        return false;
-                    }
-                });
-                println("File copied successfully from ${sourceFile.getName()} to ${destFile.getName()}");
-            } catch (Exception e) {
-                println("Failed to copy via FileSelector, attempting stream copy...");
-                copyThroughStream(sourceFile, destFile);
+                        @Override
+                        boolean traverseDescendents(FileSelectInfo fileInfo) {
+                            return false;
+                        }
+                    });
+                    println("File copied successfully from ${sourceFile.getName()} to ${destFile.getName()}");
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to copy file." + e.getMessage(), e);
+                }
+
             }
         }
     } catch (Exception e) {
