@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="MLflow_Tracking_Server" onTaskError="continueJobExecution" priority="normal" projectName="7. Templates LXP MeluXina" tags="mlflow" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <description>
+    <![CDATA[ A workflow that deploys and manages an MLflow tracking server in a Docker container. It starts the MLflow server with configurable parameters (docker image and port) and exposes it as an external endpoint. The workflow runs in a reactive mode, waiting for a stop signal specified in the "SIGNALS" variable. When the signal is received, it performs cleanup by removing the endpoint and stopping the Docker container. The workflow uses a blocking wait mechanism while the MLflow server is running. Key features include:
+- Configurable MLflow Docker image
+- Dynamic port allocation (defaults to 5000 if not specified)
+- Automatic endpoint registration with the server URL
+- Clean shutdown and resource cleanup on stop signal
+- Container naming based on job ID for isolation ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="ai-deep-learning-workflows"/>
+<info name="workflow.icon" value="https://www.luxprovide.lu/wp-content/themes/luxprovide2023/public/images/logo/logo_notagline_color_blue.4b07cb.svg"/>
+<info name="documentation" value="PAIO/PAIOUserGuide.html"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="MLflow_Tracking_Server">
+      <description>
+        <![CDATA[ A task that deploys and manages an MLflow tracking server in a Docker container. It starts the MLflow server with configurable parameters (docker image and port) and exposes it as an external endpoint. The workflow runs in a reactive mode, waiting for a stop signal specified in the "SIGNALS" variable. When the signal is received, it performs cleanup by removing the endpoint and stopping the Docker container. The task uses a blocking wait mechanism while the MLflow server is running. Key features include:
+- Configurable MLflow Docker image
+- Dynamic port allocation (defaults to 5000 if not specified)
+- Automatic endpoint registration with the server URL
+- Clean shutdown and resource cleanup on stop signal
+- Container naming based on job ID for isolation ]]>
+      </description>
+      <variables>
+        <variable advanced="false" description="It specifies the docker image to be used for the MLFlow Server." hidden="false" inherited="false" name="MLFLOW_DOCKER_IMAGE" value="activeeon/mlflow:latest"/>
+        <variable advanced="false" description="If specified, it specifies the port number for the MLFlow Server (default port is 5000)." hidden="false" inherited="false" model="PA:INTEGER" name="MLFLOW_SERVER_PORT" value="-1"/>
+        <variable advanced="false" description="Name of the Docker container running the MLflow server." hidden="false" inherited="false" name="MLFLOW_CONTAINER_NAME" value="mlflow-tracking-server-${PA_JOB_ID}"/>
+        <variable advanced="true" description="List of comma-separated signals expected by this task." hidden="false" inherited="false" model="PA:REGEXP(((\w|-|_)+,?\s?)+)" name="SIGNALS" value="Stop_MLflow_Tracking_Server"/>
+      </variables>
+      <genericInformation>
+        <info name="task.icon" value="https://www.luxprovide.lu/wp-content/themes/luxprovide2023/public/images/logo/logo_notagline_color_blue.4b07cb.svg"/>
+        <info name="TASK.DOCUMENTATION" value="PAIO/PAIOUserGuide.html"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import com.google.common.base.Splitter;
+
+schedulerapi.connect()
+
+jobId = variables.get("PA_JOB_ID") as String
+println("jobId: " + jobId)
+
+hostname = variables.get("PA_NODE_HOST") as String
+println("hostname: " + hostname)
+
+port = variables.get("MLFLOW_SERVER_PORT") as String
+println("port: " + port)
+
+// If port is -1, use a default port (e.g., 5000)
+if (port == "-1") {
+    port = "5000"
+    println("Using default port: " + port)
+}
+
+docker_image = variables.get("MLFLOW_DOCKER_IMAGE") as String
+println("docker_image: " + docker_image)
+
+// Get container name from variables
+containerName = variables.get("MLFLOW_CONTAINER_NAME") as String
+println("containerName: " + containerName)
+
+endpointName = "MLflow Tracking Server"
+println("endpointName: " + endpointName)
+
+externalEndpointUrl = "http://" + hostname + ":" + port + "/"
+println("externalEndpointUrl: " + externalEndpointUrl)
+
+endpointIconUri = "https://www.luxprovide.lu/wp-content/themes/luxprovide2023/public/images/logo/logo_notagline_color_blue.4b07cb.svg"
+println("endpointIconUri: " + endpointIconUri)
+
+// Start MLflow container
+def startMLflow = ["docker", "run", "-d", "--rm", "-p", port+":5000", "--name", containerName, 
+                   docker_image, "/bin/bash", "-c", 
+                   "mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mydb.sqlite --default-artifact-root /app/mlartifacts"]
+def process = startMLflow.execute()
+def exitCode = process.waitFor()
+
+if (exitCode != 0) {
+    println "Error starting MLflow container: ${process.err.text}"
+    System.exit(1)
+}
+
+println "MLflow container started successfully"
+
+// Add an external endpoint URL to the job
+try {
+    println("Adding external endpoint URL...")
+    schedulerapi.addExternalEndpointUrl(jobId, endpointName, externalEndpointUrl, endpointIconUri)
+    println("External endpoint URL added successfully")
+} catch (Exception e) {
+    println("Error adding external endpoint URL: " + e.message)
+    e.printStackTrace()
+}
+
+// Read the variable SIGNALS
+signals = variables.get("SIGNALS")
+
+// Split the value of the variable SIGNALS and transform it into a list
+Set signalsSet = new HashSet<>(Splitter.on(',').trimResults().omitEmptyStrings().splitToList(signals))
+
+// Send a ready notification for each signal in the set
+println("Ready for signals "+ signalsSet)
+signalsSet.each { signal ->
+    signalapi.readyForSignal(signal)
+}
+
+// Wait until one signal among those specified is received
+println("Waiting for any signal among "+ signalsSet)
+receivedSignal = signalapi.waitForAny(signalsSet)
+
+// Remove ready signals
+signalapi.removeManySignals(new HashSet<>(signalsSet.collect { signal -> "ready_"+signal }))
+
+// Display the received signal and add it to the job result
+println("Received signal: "+ receivedSignal)
+result = receivedSignal
+
+// Remove the external endpoint URL
+try {
+    println("Removing external endpoint URL...")
+    schedulerapi.removeExternalEndpointUrl(jobId, endpointName)
+    println("Removed external endpoint URL")
+} catch (Exception e) {
+    println("Error removing external endpoint URL: " + e.message)
+    // Continue with container cleanup
+}
+
+try {
+    // Stop MLflow container
+    def stopMLflow = ["docker", "stop", containerName]
+    process = stopMLflow.execute()
+    exitCode = process.waitFor()
+
+    if (exitCode != 0) {
+        println "Error stopping MLflow container: ${process.err.text}"
+        System.exit(1)
+    }
+
+    println "MLflow container stopped successfully"
+} catch (Exception e) {
+    println "Error during cleanup: ${e.message}"
+    System.exit(1)
+}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            157.1328125
+        </positionTop>
+        <positionLeft>
+            292.609375
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2464px;
+            height:3428px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-152.1328125px;left:-287.609375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_905" style="top: 157.133px; left: 292.609px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="A task that deploys and manages an MLflow tracking server in a Docker container. It starts the MLflow server with configurable parameters (docker image and port) and exposes it as an external endpoint. The workflow runs in a reactive mode, waiting for a stop signal specified in the &quot;SIGNALS&quot; variable. When the signal is received, it performs cleanup by removing the endpoint and stopping the Docker container. The task uses a blocking wait mechanism while the MLflow server is running. Key features include:
+- Configurable MLflow Docker image
+- Dynamic port allocation (defaults to 5000 if not specified)
+- Automatic endpoint registration with the server URL
+- Clean shutdown and resource cleanup on stop signal
+- Container naming based on job ID for isolation"><img src="https://www.luxprovide.lu/wp-content/themes/luxprovide2023/public/images/logo/logo_notagline_color_blue.4b07cb.svg" width="20px">&nbsp;<span class="name">MLflow_Tracking_Server</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 358.5px; top: 187px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>

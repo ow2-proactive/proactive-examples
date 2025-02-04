@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<job xmlns="urn:proactive:jobdescriptor:3.14" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" maxNumberOfExecution="2" name="Llama3-vLLM-MultiNode-Inference" onTaskError="continueJobExecution" priority="normal" projectName="7. Templates LXP MeluXina" xsi:schemaLocation="urn:proactive:jobdescriptor:3.14 http://www.activeeon.com/public_content/schemas/proactive/jobdescriptor/3.14/schedulerjob.xsd">
+  <variables>
+    <variable advanced="false" description="Project billing account" group="SLURM PARAMS" hidden="false" name="PROJECT_ACCOUNT" value="[p200xxx-replace-with-your-project-number]"/>
+    <variable description="Number of GPU nodes" group="SLURM RESOURCE ALLOCATION" model="PA:LIST(3,4,5,6)" name="NODE_COUNT" value="5"/>
+    <variable description="GPU partition" group="SLURM SCHEDULING" name="PARTITION_NAME" value="gpu"/>
+    <variable advanced="true" description="Job time limit" group="SLURM SCHEDULING" name="WALL_TIME" value="02:00:00"/>
+    <variable advanced="false" description="HuggingFace auth token" group="MODEL CONFIG" hidden="false" model="PA:HIDDEN" name="HF_TOKEN" value="ENC(dAnU487RRRwQIV61Z1KqRHcQA+E3vMPX)"/>
+    <variable description="HuggingFace model ID" group="MODEL CONFIG" name="HF_MODEL" value="meta-llama/Llama-3.1-405B-FP8"/>
+    <variable description="Path to Apptainer image" group="CONTAINER CONFIG" name="SIF_IMAGE_PATH" value="./vllm-openai_latest.sif"/>
+    <variable description="GPUs per node for tensor parallelism (must ≤ GPU_COUNT)" group="PARALLELISM" model="PA:LIST(1,2,4)" name="TENSOR_PARALLEL_SIZE" value="4"/>
+    <variable description="GPUs per node (max 4 on Meluxina)" group="GPU CONFIG" model="PA:LIST(1,2,4)" name="GPU_COUNT" value="4"/>
+    <variable description="CPUs per task" group="RESOURCE ALLOCATION" model="PA:LIST(32,64,96,128)" name="CPU_PER_TASK" value="128"/>
+    <variable advanced="false" description="Name of the native scheduler (if any) that will execute the current experiment" group="RUNTIME PARAMS" hidden="false" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/nodesources?infrastructure=%5E(%3F!(Default)).*$)" name="TARGET_INFRASTRUCTURE" value=""/>
+    <variable advanced="true" description="SLURM sbatch parameters" group="RUNTIME PARAMS" hidden="false" name="SLURM_SBATCH_PARAMS" value="--nodes=${NODE_COUNT} --ntasks-per-node=1 --cpus-per-task=${CPU_PER_TASK} --gpus-per-task=${GPU_COUNT} -p ${PARTITION_NAME} -A ${PROJECT_ACCOUNT} --time=${WALL_TIME}"/>
+  </variables>
+  <description>
+    <![CDATA[ #### Multi-Node & Multi-GPU Inference with vLLM
+    
+This workflow demonstrates distributed inference using vLLM for large language models across multiple nodes and GPUs on LXP Meluxina.
+
+Features:
+- Automatic Ray cluster setup
+- Tensor and pipeline parallelism
+- OpenAI-compatible API endpoint
+- Support for FP8 quantization ]]>
+  </description>
+  <genericInformation>
+<info name="bucketName" value="ai-deep-learning-workflows"/>
+<info name="workflow.icon" value="https://www.luxprovide.lu/wp-content/themes/luxprovide2023/public/images/logo/logo_notagline_color_blue.4b07cb.svg"/>
+<info name="group" value="public-objects"/>
+</genericInformation>
+  <taskFlow>
+    <task fork="true" name="Llama3-vLLM-Inference" preciousResult="true">
+      <description>
+        <![CDATA[ #### Multi-Node & Multi-GPU Inference with vLLM
+    
+This workflow demonstrates distributed inference using vLLM for large language models across multiple nodes and GPUs on LXP Meluxina.
+
+Features:
+- Automatic Ray cluster setup
+- Tensor and pipeline parallelism
+- OpenAI-compatible API endpoint
+- Support for FP8 quantization ]]>
+      </description>
+      <genericInformation>
+        <info name="NODE_SOURCE" value="${TARGET_INFRASTRUCTURE}"/>
+        <info name="NS_BATCH" value="${SLURM_SBATCH_PARAMS}"/>
+        <info name="DISABLE_PTK" value="true"/>
+        <info name="task.icon" value="https://www.luxprovide.lu/wp-content/themes/luxprovide2023/public/images/logo/logo_notagline_color_blue.4b07cb.svg"/>
+      </genericInformation>
+      <scriptExecutable>
+        <script>
+          <code language="bash">
+            <![CDATA[
+echo "Executing vLLM inference server script"
+
+echo "=== SLURM ENVIRONMENT ==="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node List: $SLURM_JOB_NODELIST"
+
+module --force purge
+module load env/release/2023.1
+module load Apptainer/1.3.1-GCCcore-12.3.0
+
+# Set critical environment variables
+export PMIX_MCA_psec=native
+export LOCAL_HF_CACHE="${HOME}/HF_cache"
+export APPTAINER_ARGS="--nvccli -B ${LOCAL_HF_CACHE}:/root/.cache/huggingface --env HF_HOME=/root/.cache/huggingface --env HUGGING_FACE_HUB_TOKEN=${variables_HF_TOKEN}"
+
+# Validate SIF image exists
+if [ ! -f "${variables_SIF_IMAGE_PATH}" ]; then
+    echo "Error: SIF image not found at ${variables_SIF_IMAGE_PATH}"
+    exit 1
+fi
+
+# Get head node information
+nodes=($(scontrol show hostnames $SLURM_JOB_NODELIST))
+head_node=${nodes[0]}
+head_ip=$(srun -w $head_node hostname --ip-address)
+
+# Port configuration
+export RANDOM_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
+
+echo "=== CLUSTER SETUP ==="
+echo "Head Node: $head_node"
+echo "SSH Tunnel Command: ssh -p 8822 ${USER}@login.lxp.lu -NL 8000:${head_ip}:8000"
+
+# Launch Ray cluster
+echo "Starting Ray head node on ${head_node}"
+srun -J "head-node" -N 1 -w $head_node \
+  apptainer exec ${APPTAINER_ARGS} ${variables_SIF_IMAGE_PATH} \
+  ray start --head --port=$RANDOM_PORT &
+
+sleep 30  # Wait for head initialization
+
+echo "Starting Ray worker nodes"
+srun -J "worker-nodes" -N $((variables_NODE_COUNT-1)) \
+  apptainer exec ${APPTAINER_ARGS} ${variables_SIF_IMAGE_PATH} \
+  ray start --address=${head_ip}:${RANDOM_PORT} &
+
+sleep 45  # Wait for worker registration
+
+# Launch inference server
+apptainer exec ${APPTAINER_ARGS} ${variables_SIF_IMAGE_PATH} \
+vllm serve ${variables_HF_MODEL} \
+--tensor-parallel-size ${variables_TENSOR_PARALLEL_SIZE} \
+--pipeline-parallel-size ${variables_NODE_COUNT}
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <post>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+// Capture SSH tunnel command for user
+resultMap.put("ssh_tunnel_command", "ssh -p 8822 ${user}@login.lxp.lu -NL 8000:${head_ip}:8000")
+]]>
+          </code>
+        </script>
+      </post>
+      <metadata>
+        <positionTop>
+            136.5234375
+        </positionTop>
+        <positionLeft>
+            198.1640625
+        </positionLeft>
+      </metadata>
+    </task>
+  </taskFlow>
+  <metadata>
+    <visualization>
+      <![CDATA[ <html>
+    <head>
+    <link rel="stylesheet" href="/studio/styles/studio-standalone.css">
+        <style>
+        #workflow-designer {
+            left:0 !important;
+            top:0 !important;
+            width:2464px;
+            height:3428px;
+            }
+        </style>
+    </head>
+    <body>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-131.5234375px;left:-193.1640625px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_902" style="top: 136.524px; left: 198.164px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="#### Multi-Node &amp; Multi-GPU Inference with vLLM
+    
+This workflow demonstrates distributed inference using vLLM for large language models across multiple nodes and GPUs on LXP Meluxina.
+
+Features:
+- Automatic Ray cluster setup
+- Tensor and pipeline parallelism
+- OpenAI-compatible API endpoint
+- Support for FP8 quantization"><img src="https://www.luxprovide.lu/wp-content/themes/luxprovide2023/public/images/logo/logo_notagline_color_blue.4b07cb.svg" width="20px">&nbsp;<span class="name">Llama3-vLLM-Inference</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 261px; top: 167px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: #a8a095; --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
+    </body>
+</html>
+ ]]>
+    </visualization>
+  </metadata>
+</job>
