@@ -3,12 +3,13 @@
   <variables>
     <variable advanced="true" description="Working directory for the data space used to transfer files automatically between the workflow tasks." hidden="false" model="PA:LIST(.,$HOME/,$WORK/,$SCRATCH/)" name="WORK_DIR" value="."/>
     <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
-    <variable advanced="true" description="If True, it will activate the use of GPU for the workflow tasks on the selected container platform." group="Container Parameters" hidden="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="False"/>
+    <variable advanced="true" description="If True, it will activate the use of GPU for the workflow tasks on the selected container platform." group="Container Parameters" hidden="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="false"/>
     <variable advanced="true" description="Name of the container image being used." group="Container Parameters" hidden="false" model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda,docker://activeeon/cuda2,docker://activeeon/rapidsai,docker://activeeon/nvidia:rapidsai)" name="CONTAINER_IMAGE" value=""/>
     <variable advanced="false" description="Name of the model to be deployed" group="Model Deployment" hidden="false" name="MODEL_NAME" value="gpt2-model-${PA_JOB_ID}"/>
     <variable advanced="false" description="Version of the model to be deployed." group="Model Deployment" hidden="false" model="PA:Integer" name="MODEL_VERSION" value="1"/>
     <variable advanced="false" description="ID of the model server used to deploy the trained model" group="Model Deployment" hidden="false" model="PA:Integer?" name="MODEL_SERVER_ID" value=""/>
     <variable advanced="false" hidden="false" name="HUGGING_FACE_MODEL_NAME" value="distilgpt2"/>
+    <variable advanced="false" description="The MLOps Dashboard instance where the model will be deployed." hidden="false" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/tokens?name=PSA_mlops-dashboard.*)" name="MLOPS_DASHBOARD_INSTANCE" value="PSA_mlops-dashboard-1"/>
   </variables>
   <description>
     <![CDATA[ Download, Package and Deploy a GPT2 model from the HuggingFace repository to a MLOps Model Server. ]]>
@@ -252,7 +253,7 @@ print("END " + __file__)
       </outputFiles>
       <metadata>
         <positionTop>
-            302.484375
+            302.4765625
         </positionTop>
         <positionLeft>
             344.28125
@@ -307,7 +308,199 @@ fi
       </scriptExecutable>
       <metadata>
         <positionTop>
-            437.484375
+            437.4765625
+        </positionTop>
+        <positionLeft>
+            467.28125
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Update_Deployment_Time">
+      <description>
+        <![CDATA[ Update the deployment time in the dashboard for the model that was just deployed. ]]>
+      </description>
+      <depends>
+        <task ref="Deploy_Model"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.io.FileType
+import com.google.common.base.Splitter
+import org.ow2.proactive.scheduler.common.job.JobVariable
+import groovy.json.JsonSlurper
+import java.net.URL
+
+def getMLOpsDashboardEndpointUrl(String sessionid, String proactiveUrl, String mlopsDashboardToken, String instanceId) {
+    // Define headers
+    def headers = ['sessionid': sessionid]
+
+    // Define base URL
+    def baseUrl = "$proactiveUrl/cloud-automation-service/serviceInstances/active"
+
+    // Create URL object
+    def url = new URL(baseUrl)
+
+    // Open connection
+    def connection = url.openConnection()
+
+    // Set headers
+    headers.each { key, value ->
+        connection.setRequestProperty(key, value)
+    }
+
+    // Get response
+    def response
+    try {
+        response = connection.getInputStream()
+    } catch (Exception e) {
+        println "Error: Unable to connect to $baseUrl"
+        return [null, null]
+    }
+
+    // Parse JSON response
+    def json = new JsonSlurper().parseText(response.text)
+    // println "json: $json"
+    
+    // Get instance name given its id
+    def instance_name = ""
+    if (instanceId != "-1") {
+        instance_name = json.find{it.instance_id == instanceId.toInteger()}?.variables.INSTANCE_NAME
+    }
+
+    // Fetch MLOPS_ENDPOINT_ID
+    def mlopsDashboardEndpointID = json.variables.find{ it.PSA_TOKEN == mlopsDashboardToken }?.ENDPOINT_ID
+    // println "mlops endpoint id: $mlopsDashboardEndpointID"
+    
+    // Fetch MLOPS_DASHBOARD_URL
+    def mlopsEndpointUrl = json.deployments.endpoint.flatten().find{ it.id.contains(mlopsDashboardEndpointID) }?.url
+    println "mlopsEndpointUrl: $mlopsEndpointUrl"
+    
+    // Remove "dashboard" from the URL if it exists
+    if (mlopsEndpointUrl) {
+        mlopsEndpointUrl = mlopsEndpointUrl.replace("/dashboard/", "")
+    }
+    
+    return mlopsEndpointUrl
+}
+
+// Usage example
+schedulerapi.connect()
+connectionInfo = schedulerapi.getConnectionInfo()
+ciLogin = connectionInfo.getLogin()
+ciPasswd = connectionInfo.getPassword()
+String ciUrl = connectionInfo.getUrl()
+def sessionId = schedulerapi.getSession()
+
+user_credentials = [
+    sessionId: sessionId,
+    ciLogin: ciLogin,
+    ciPasswd: ciPasswd,
+    ciUrl: ciUrl
+]
+
+def url = new URL(ciUrl)
+def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
+def mlopsDashboardToken = variables.get("MLOPS_DASHBOARD_INSTANCE")
+
+println "mlopsDashboardToken: $mlopsDashboardToken"
+
+def instanceId = variables.get("MODEL_SERVER_ID")
+println "MODEL_SERVER_ID: $instanceId"
+
+results = getMLOpsDashboardEndpointUrl(sessionId, proactiveUrl, mlopsDashboardToken, instanceId)
+println "results: $results"
+
+mlopsEndpointUrl = results
+println "mlopsEndpointUrl: $mlopsEndpointUrl"
+variables.put("MLOPS_DASHBOARD_ENDPOINT_URL", mlopsEndpointUrl)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonSlurper
+import java.net.URL
+import java.net.URLEncoder
+import java.net.HttpURLConnection
+
+// Print task beginning
+def taskName = variables.get("PA_TASK_NAME")
+println("BEGIN " + taskName)
+
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionid = schedulerapi.getSession()
+def connectionInfo = schedulerapi.getConnectionInfo()
+def ciUrl = connectionInfo.getUrl()
+def url = new URL(ciUrl)
+def proactiveUrl = url.protocol + "://" + url.host + ":" + url.port
+println("proactive_url: " + proactiveUrl)
+
+// Get variables from workflow
+def MODEL_NAME = variables.get("MODEL_NAME")
+def MODEL_VERSION = variables.get("MODEL_VERSION")
+def MODEL_SERVER_ID = variables.get("MODEL_SERVER_ID")
+def MODEL_SERVER_TOKEN = variables.get("MODEL_SERVER_TOKEN")
+
+def MLOPS_DASHBOARD_ENDPOINT_URL = variables.get('MLOPS_DASHBOARD_ENDPOINT_URL')
+println("MLOPS_DASHBOARD_ENDPOINT_URL: " + MLOPS_DASHBOARD_ENDPOINT_URL)
+
+// Extract model server name from token
+def MODEL_SERVER_NAME = MODEL_SERVER_TOKEN.replace("PSA_", "")
+println("MODEL_SERVER_NAME: " + MODEL_SERVER_NAME)
+
+// Determine dashboard API URL
+def dashboard_url = variables.get('MLOPS_DASHBOARD_ENDPOINT_URL')
+
+// Call the API to update the deployment time
+def api_url = "${dashboard_url}/api/update_model_deployment_time"
+def params = [
+    model_server_name: MODEL_SERVER_NAME,
+    model_name: MODEL_NAME,
+    model_version: MODEL_VERSION
+]
+
+// Build query string
+def queryString = params.collect { k, v -> 
+    URLEncoder.encode(k, "UTF-8") + "=" + URLEncoder.encode(v.toString(), "UTF-8")
+}.join("&")
+
+def fullUrl = "${api_url}?${queryString}"
+println("Making API call to: " + fullUrl)
+
+try {
+    // Create connection
+    def apiConnection = new URL(fullUrl).openConnection() as HttpURLConnection
+    apiConnection.requestMethod = "GET"
+    
+    // Get response
+    def responseCode = apiConnection.responseCode
+    def responseText = apiConnection.inputStream.text
+    println("Response status code: " + responseCode)
+    println("Response body: " + responseText)
+    
+    if (responseCode == 200) {
+        println("Successfully updated deployment time")
+    } else {
+        println("Failed to update deployment time")
+    }
+} catch (Exception e) {
+    println("Error making API call: " + e.toString())
+}
+
+println("END " + taskName)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            567.4765625
         </positionTop>
         <positionLeft>
             467.28125
@@ -324,13 +517,13 @@ fi
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:1956px;
-            height:4892px;
+            width:2464px;
+            height:3428px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-297.484375px;left:-339.28125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_1" style="top: 302.484px; left: 344.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Download and Package a GPT2 model from the HuggingFace repository."><img src="/automation-dashboard/styles/patterns/img/wf-icons/huggingface_logo.svg" width="20px">&nbsp;<span class="name">Download_and_Package_HuggingFace_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_4" style="top: 437.484px; left: 467.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Deploy a packaged GPT2 model to a MLOps Model Server."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">Deploy_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:458px;top:341.5px" width="71.5" height="96" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 50.5 95 C 60.5 45 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.887997625000004,70.23646125 L42.274430412126065,49.80394150459056 L39.92767300438792,58.719811045427626 L30.75778020755369,57.764266125202646 L47.887997625000004,70.23646125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.887997625000004,70.23646125 L42.274430412126065,49.80394150459056 L39.92767300438792,58.719811045427626 L30.75778020755369,57.764266125202646 L47.887997625000004,70.23646125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 458.5px; top: 332px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 467px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 427px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-297.4765625px;left:-339.28125px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_16" style="top: 302.477px; left: 344.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="" data-original-title="Download and Package a GPT2 model from the HuggingFace repository."><img src="/automation-dashboard/styles/patterns/img/wf-icons/huggingface_logo.svg" width="20px">&nbsp;<span class="name">Download_and_Package_HuggingFace_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_19" style="top: 437.477px; left: 467.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Deploy a packaged GPT2 model to a MLOps Model Server."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">Deploy_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_22" style="top: 567.477px; left: 467.281px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="" data-original-title="Update the deployment time in the dashboard for the model that was just deployed."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Update_Deployment_Time</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:458px;top:341.5px" width="71.5" height="96" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 50.5 95 C 60.5 45 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.887997625000004,70.23646125 L42.274430412126065,49.80394150459056 L39.92767300438792,58.719811045427626 L30.75778020755369,57.764266125202646 L47.887997625000004,70.23646125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M47.887997625000004,70.23646125 L42.274430412126065,49.80394150459056 L39.92767300438792,58.719811045427626 L30.75778020755369,57.764266125202646 L47.887997625000004,70.23646125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><svg style="position:absolute;left:508.5px;top:476.5px" width="48.5" height="91" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector"><path d="M 27.5 90 C 37.5 40 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,67.650705 L27.100660986038683,46.47521338916412 L22.77003946014235,54.61436059261506 L14.064316578653743,51.57949830402176 L27.874324375,67.650705" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,67.650705 L27.100660986038683,46.47521338916412 L22.77003946014235,54.61436059261506 L14.064316578653743,51.57949830402176 L27.874324375,67.650705" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 458.5px; top: 332px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 467px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 509px; top: 427px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 536.5px; top: 597px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 536.5px; top: 557px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>

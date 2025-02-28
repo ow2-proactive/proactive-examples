@@ -3,11 +3,12 @@
   <variables>
     <variable advanced="true" description="Working directory for the data space used to transfer files automatically between the workflow tasks." hidden="false" model="PA:LIST(.,$HOME/,$WORK/,$SCRATCH/)" name="WORK_DIR" value="."/>
     <variable advanced="true" description="Container platform used for executing the workflow tasks." group="Container Parameters" hidden="false" model="PA:LIST(no-container,docker,podman,singularity)" name="CONTAINER_PLATFORM" value="docker"/>
-    <variable advanced="true" description="If True, it will activate the use of GPU for the workflow tasks on the selected container platform." group="Container Parameters" hidden="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="False"/>
+    <variable advanced="true" description="If True, it will activate the use of GPU for the workflow tasks on the selected container platform." group="Container Parameters" hidden="false" model="PA:Boolean" name="CONTAINER_GPU_ENABLED" value="false"/>
     <variable advanced="true" description="Name of the container image being used." group="Container Parameters" hidden="false" model="PA:LIST(,docker://activeeon/dlm3,docker://activeeon/cuda,docker://activeeon/cuda2,docker://activeeon/rapidsai,docker://activeeon/nvidia:rapidsai)" name="CONTAINER_IMAGE" value=""/>
     <variable advanced="false" description="Name of the model to be deployed" hidden="false" name="MODEL_NAME" value="iris-classification-model-${PA_JOB_ID}"/>
     <variable advanced="false" description="Version of the model to be deployed." hidden="false" model="PA:Integer" name="MODEL_VERSION" value="1"/>
     <variable advanced="false" description="ID of the model server used to deploy the trained model" hidden="false" model="PA:Integer?" name="MODEL_SERVER_ID" value=""/>
+    <variable advanced="false" description="The MLOps Dashboard instance where the model will be deployed" hidden="false" model="PA:MODEL_FROM_URL(${PA_SCHEDULER_REST_PUBLIC_URL}/rm/model/tokens?name=PSA_mlops-dashboard.*)" name="MLOPS_DASHBOARD_INSTANCE" value="PSA_mlops-dashboard-1"/>
   </variables>
   <description>
     <![CDATA[ Train a Iris flowers classification model using the logistic regression and deploy it to the MLOps Model Server. ]]>
@@ -49,10 +50,10 @@
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            272
+            25
         </positionTop>
         <positionLeft>
-            344.484375
+            426.5
         </positionLeft>
       </metadata>
     </task>
@@ -86,10 +87,10 @@
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            528
+            281
         </positionTop>
         <positionLeft>
-            344.484375
+            426.5
         </positionLeft>
       </metadata>
     </task>
@@ -454,10 +455,10 @@ print("END " + __file__)
       </outputFiles>
       <metadata>
         <positionTop>
-            784
+            537
         </positionTop>
         <positionLeft>
-            420.984375
+            503
         </positionLeft>
       </metadata>
     </task>
@@ -494,10 +495,10 @@ print("END " + __file__)
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            528
+            281
         </positionTop>
         <positionLeft>
-            497.484375
+            579.5
         </positionLeft>
       </metadata>
     </task>
@@ -538,10 +539,10 @@ print("END " + __file__)
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            656
+            409
         </positionTop>
         <positionLeft>
-            420.984375
+            503
         </positionLeft>
       </metadata>
     </task>
@@ -593,10 +594,10 @@ fi
       </scriptExecutable>
       <metadata>
         <positionTop>
-            912
+            665
         </positionTop>
         <positionLeft>
-            420.984375
+            503
         </positionLeft>
       </metadata>
     </task>
@@ -631,10 +632,202 @@ fi
       <controlFlow block="none"/>
       <metadata>
         <positionTop>
-            400
+            153
         </positionTop>
         <positionLeft>
-            344.484375
+            426.5
+        </positionLeft>
+      </metadata>
+    </task>
+    <task fork="true" name="Update_Deployment_Time">
+      <description>
+        <![CDATA[ Update the deployment time in the dashboard for the model that was just deployed. ]]>
+      </description>
+      <depends>
+        <task ref="Deploy_Model"/>
+      </depends>
+      <pre>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.io.FileType
+import com.google.common.base.Splitter
+import org.ow2.proactive.scheduler.common.job.JobVariable
+import groovy.json.JsonSlurper
+import java.net.URL
+
+def getMLOpsDashboardEndpointUrl(String sessionid, String proactiveUrl, String mlopsDashboardToken, String instanceId) {
+    // Define headers
+    def headers = ['sessionid': sessionid]
+
+    // Define base URL
+    def baseUrl = "$proactiveUrl/cloud-automation-service/serviceInstances/active"
+
+    // Create URL object
+    def url = new URL(baseUrl)
+
+    // Open connection
+    def connection = url.openConnection()
+
+    // Set headers
+    headers.each { key, value ->
+        connection.setRequestProperty(key, value)
+    }
+
+    // Get response
+    def response
+    try {
+        response = connection.getInputStream()
+    } catch (Exception e) {
+        println "Error: Unable to connect to $baseUrl"
+        return [null, null]
+    }
+
+    // Parse JSON response
+    def json = new JsonSlurper().parseText(response.text)
+    // println "json: $json"
+    
+    // Get instance name given its id
+    def instance_name = ""
+    if (instanceId != "-1") {
+        instance_name = json.find{it.instance_id == instanceId.toInteger()}?.variables.INSTANCE_NAME
+    }
+
+    // Fetch MLOPS_ENDPOINT_ID
+    def mlopsDashboardEndpointID = json.variables.find{ it.PSA_TOKEN == mlopsDashboardToken }?.ENDPOINT_ID
+    // println "mlops endpoint id: $mlopsDashboardEndpointID"
+    
+    // Fetch MLOPS_DASHBOARD_URL
+    def mlopsEndpointUrl = json.deployments.endpoint.flatten().find{ it.id.contains(mlopsDashboardEndpointID) }?.url
+    println "mlopsEndpointUrl: $mlopsEndpointUrl"
+    
+    // Remove "dashboard" from the URL if it exists
+    if (mlopsEndpointUrl) {
+        mlopsEndpointUrl = mlopsEndpointUrl.replace("/dashboard/", "")
+    }
+    
+    return mlopsEndpointUrl
+}
+
+// Usage example
+schedulerapi.connect()
+connectionInfo = schedulerapi.getConnectionInfo()
+ciLogin = connectionInfo.getLogin()
+ciPasswd = connectionInfo.getPassword()
+String ciUrl = connectionInfo.getUrl()
+def sessionId = schedulerapi.getSession()
+
+user_credentials = [
+    sessionId: sessionId,
+    ciLogin: ciLogin,
+    ciPasswd: ciPasswd,
+    ciUrl: ciUrl
+]
+
+def url = new URL(ciUrl)
+def proactiveUrl = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
+def mlopsDashboardToken = variables.get("MLOPS_DASHBOARD_INSTANCE")
+
+println "mlopsDashboardToken: $mlopsDashboardToken"
+
+def instanceId = variables.get("MODEL_SERVER_ID")
+println "MODEL_SERVER_ID: $instanceId"
+
+results = getMLOpsDashboardEndpointUrl(sessionId, proactiveUrl, mlopsDashboardToken, instanceId)
+println "results: $results"
+
+mlopsEndpointUrl = results
+println "mlopsEndpointUrl: $mlopsEndpointUrl"
+variables.put("MLOPS_DASHBOARD_ENDPOINT_URL", mlopsEndpointUrl)
+]]>
+          </code>
+        </script>
+      </pre>
+      <scriptExecutable>
+        <script>
+          <code language="groovy">
+            <![CDATA[
+import groovy.json.JsonSlurper
+import java.net.URL
+import java.net.URLEncoder
+import java.net.HttpURLConnection
+
+// Print task beginning
+def taskName = variables.get("PA_TASK_NAME")
+println("BEGIN " + taskName)
+
+// Get schedulerapi access and acquire session id
+schedulerapi.connect()
+def sessionid = schedulerapi.getSession()
+def connectionInfo = schedulerapi.getConnectionInfo()
+def ciUrl = connectionInfo.getUrl()
+def url = new URL(ciUrl)
+def proactiveUrl = url.protocol + "://" + url.host + ":" + url.port
+println("proactive_url: " + proactiveUrl)
+
+// Get variables from workflow
+def MODEL_NAME = variables.get("MODEL_NAME")
+def MODEL_VERSION = variables.get("MODEL_VERSION")
+def MODEL_SERVER_ID = variables.get("MODEL_SERVER_ID")
+def MODEL_SERVER_TOKEN = variables.get("MODEL_SERVER_TOKEN")
+
+def MLOPS_DASHBOARD_ENDPOINT_URL = variables.get('MLOPS_DASHBOARD_ENDPOINT_URL')
+println("MLOPS_DASHBOARD_ENDPOINT_URL: " + MLOPS_DASHBOARD_ENDPOINT_URL)
+
+// Extract model server name from token
+def MODEL_SERVER_NAME = MODEL_SERVER_TOKEN.replace("PSA_", "")
+println("MODEL_SERVER_NAME: " + MODEL_SERVER_NAME)
+
+// Determine dashboard API URL
+def dashboard_url = variables.get('MLOPS_DASHBOARD_ENDPOINT_URL')
+
+// Call the API to update the deployment time
+def api_url = "${dashboard_url}/api/update_model_deployment_time"
+def params = [
+    model_server_name: MODEL_SERVER_NAME,
+    model_name: MODEL_NAME,
+    model_version: MODEL_VERSION
+]
+
+// Build query string
+def queryString = params.collect { k, v -> 
+    URLEncoder.encode(k, "UTF-8") + "=" + URLEncoder.encode(v.toString(), "UTF-8")
+}.join("&")
+
+def fullUrl = "${api_url}?${queryString}"
+println("Making API call to: " + fullUrl)
+
+try {
+    // Create connection
+    def apiConnection = new URL(fullUrl).openConnection() as HttpURLConnection
+    apiConnection.requestMethod = "GET"
+    
+    // Get response
+    def responseCode = apiConnection.responseCode
+    def responseText = apiConnection.inputStream.text
+    println("Response status code: " + responseCode)
+    println("Response body: " + responseText)
+    
+    if (responseCode == 200) {
+        println("Successfully updated deployment time")
+    } else {
+        println("Failed to update deployment time")
+    }
+} catch (Exception e) {
+    println("Error making API call: " + e.toString())
+}
+
+println("END " + taskName)
+]]>
+          </code>
+        </script>
+      </scriptExecutable>
+      <metadata>
+        <positionTop>
+            793
+        </positionTop>
+        <positionLeft>
+            503
         </positionLeft>
       </metadata>
     </task>
@@ -648,13 +841,13 @@ fi
         #workflow-designer {
             left:0 !important;
             top:0 !important;
-            width:2476px;
-            height:4892px;
+            width:2464px;
+            height:3428px;
             }
         </style>
     </head>
     <body>
-    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-267px;left:-339.484375px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_536" style="top: 272px; left: 344.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return the iris dataset classification."><img src="/automation-dashboard/styles/patterns/img/wf-icons/load_dataset.png" width="20px">&nbsp;<span class="name">Load_Iris_Dataset</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_539" style="top: 528px; left: 344.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Separate data into training and testing sets."><img src="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png" width="20px">&nbsp;<span class="name">Split_Data</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_542" style="top: 784px; left: 420.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Download a trained model."><img src="/automation-dashboard/styles/patterns/img/wf-icons/download_model.png" width="20px">&nbsp;<span class="name">Model_Packaging</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_545" style="top: 528px; left: 497.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Logistic Regression is a regression model where the Dependent Variable (DV) is categorical."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png" width="20px">&nbsp;<span class="name">Logistic_Regression</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_548" style="top: 656px; left: 420.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Train a classification/clustering/anomaly detection model"><img src="/automation-dashboard/styles/patterns/img/wf-icons/train.png" width="20px">&nbsp;<span class="name">Train_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_551" style="top: 912px; left: 420.984px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a bash engine."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">Deploy_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_554" style="top: 400px; left: 344.484px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Encode the specified columns from the data."><img src="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png" width="20px">&nbsp;<span class="name">Encode_Data</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><svg style="position:absolute;left:383.5px;top:439.5px" width="21.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 10.5 50 0.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.7747343749999995,66.78168750000002 L4.918836648297567,47.038107153227145 L-2.286251050858403,52.790212093809444 L-9.072638757893003,46.54962382908555 L-2.7747343749999995,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.7747343749999995,66.78168750000002 L4.918836648297567,47.038107153227145 L-2.286251050858403,52.790212093809444 L-9.072638757893003,46.54962382908555 L-2.7747343749999995,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:460.5px;top:695.5px" width="31" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 10 88 C 20 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.97856,66.303232 L15.663632585537552,45.43650633353954 L9.722170709660112,52.486260285096634 L1.846660870634195,47.69289562387942 L11.97856,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.97856,66.303232 L15.663632585537552,45.43650633353954 L9.722170709660112,52.486260285096634 L1.846660870634195,47.69289562387942 L11.97856,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:383.5px;top:567.5px" width="98" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 77 88 C 87 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M70.73858725,63.115491500000005 L60.101477842590654,44.789228829864456 L60.105259018935634,54.00877251177765 L50.9947588543683,55.42255706092881 L70.73858725,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M70.73858725,63.115491500000005 L60.101477842590654,44.789228829864456 L60.105259018935634,54.00877251177765 L50.9947588543683,55.42255706092881 L70.73858725,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:460.5px;top:567.5px" width="112" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 101 50 91 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.870343749999998,62.2538125 L29.23366776080275,56.39420199834852 L20.29014084100874,54.155156166990906 L21.135011427793653,44.974404907339775 L8.870343749999998,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.870343749999998,62.2538125 L29.23366776080275,56.39420199834852 L20.29014084100874,54.155156166990906 L21.135011427793653,44.974404907339775 L8.870343749999998,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:462.5px;top:823.5px" width="29" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 18 50 8 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.149632,66.303232 L7.49984351657956,47.438247975227235 L-0.24966605297428535,52.43275510120006 L-6.370633382220376,45.538282028201515 L-2.149632,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.149632,66.303232 L7.49984351657956,47.438247975227235 L-0.24966605297428535,52.43275510120006 L-6.370633382220376,45.538282028201515 L-2.149632,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><svg style="position:absolute;left:384px;top:311.5px" width="31.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 20.5 50 10.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.9357920000000004,66.303232 L8.31507669701995,47.75816012210056 L0.4090324791346134,52.50099311777328 L-5.487162185206769,45.41333564296595 L-1.9357920000000004,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.9357920000000004,66.303232 L8.31507669701995,47.75816012210056 L0.4090324791346134,52.50099311777328 L-5.487162185206769,45.41333564296595 L-1.9357920000000004,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 395px; top: 302px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 384px; top: 558px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 384px; top: 518px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 471px; top: 814px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 471px; top: 774px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 552px; top: 558px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 461px; top: 686px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 461px; top: 646px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 463px; top: 942px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 463px; top: 902px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 384.5px; top: 430px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 384.5px; top: 390px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style=""></circle></svg></div></div></div>
+    <div id="workflow-visualization-view"><div id="workflow-visualization" style="position:relative;top:-20px;left:-421.5px"><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_820" style="top: 25px; left: 426.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Load and return the iris dataset classification."><img src="/automation-dashboard/styles/patterns/img/wf-icons/load_dataset.png" width="20px">&nbsp;<span class="name">Load_Iris_Dataset</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_823" style="top: 281px; left: 426.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Separate data into training and testing sets."><img src="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png" width="20px">&nbsp;<span class="name">Split_Data</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_826" style="top: 537px; left: 503px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Download a trained model."><img src="/automation-dashboard/styles/patterns/img/wf-icons/download_model.png" width="20px">&nbsp;<span class="name">Model_Packaging</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task _jsPlumb_endpoint_anchor_ ui-draggable" id="jsPlumb_1_829" style="top: 281px; left: 579.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Logistic Regression is a regression model where the Dependent Variable (DV) is categorical."><img src="/automation-dashboard/styles/patterns/img/wf-icons/ml_classification.png" width="20px">&nbsp;<span class="name">Logistic_Regression</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_832" style="top: 409px; left: 503px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Train a classification/clustering/anomaly detection model"><img src="/automation-dashboard/styles/patterns/img/wf-icons/train.png" width="20px">&nbsp;<span class="name">Train_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_835" style="top: 665px; left: 503px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="The simplest task, ran by a bash engine."><img src="/studio/images/LinuxBash.png" width="20px">&nbsp;<span class="name">Deploy_Model</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_838" style="top: 153px; left: 426.5px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Encode the specified columns from the data."><img src="/automation-dashboard/styles/patterns/img/wf-icons/data-processing.png" width="20px">&nbsp;<span class="name">Encode_Data</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon" class="glyphicon glyphicon-list-alt"></i></a></div><div class="task ui-draggable _jsPlumb_endpoint_anchor_" id="jsPlumb_1_841" style="top: 793px; left: 503px;"><a class="task-name" data-toggle="tooltip" data-placement="right" title="Update the deployment time in the dashboard for the model that was just deployed."><img src="/studio/images/Groovy.png" width="20px">&nbsp;<span class="name">Update_Deployment_Time</span></a>&nbsp;&nbsp;<a id="called-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: 17px; right: 3px;"><i title="Workflows being Called by this Task" id="called-icon"></i></a><a title="Scripts being Called by this Task" id="reference-icon-a" href="javascript:void(0)" class="pointer" style=" position: inherit; top: -7px; right: 3px;"><i id="reference-icon"></i></a></div><svg style="position:absolute;left:466.5px;top:192.5px" width="21.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 10.5 50 0.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.7747343749999995,66.78168750000002 L4.918836648297567,47.038107153227145 L-2.286251050858403,52.790212093809444 L-9.072638757893003,46.54962382908555 L-2.7747343749999995,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.7747343749999995,66.78168750000002 L4.918836648297567,47.038107153227145 L-2.286251050858403,52.790212093809444 L-9.072638757893003,46.54962382908555 L-2.7747343749999995,66.78168750000002" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><svg style="position:absolute;left:542.5px;top:448.5px" width="31" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 10 88 C 20 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.97856,66.303232 L15.663632585537552,45.43650633353954 L9.722170709660112,52.486260285096634 L1.846660870634195,47.69289562387942 L11.97856,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M11.97856,66.303232 L15.663632585537552,45.43650633353954 L9.722170709660112,52.486260285096634 L1.846660870634195,47.69289562387942 L11.97856,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><svg style="position:absolute;left:466.5px;top:320.5px" width="97" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 76 88 C 86 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M69.8573855,63.115491500000005 L59.3333862576084,44.72404131394505 L59.28036566458122,53.94343331215811 L50.161328069766505,55.30106114936383 L69.8573855,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M69.8573855,63.115491500000005 L59.3333862576084,44.72404131394505 L59.28036566458122,53.94343331215811 L50.161328069766505,55.30106114936383 L69.8573855,63.115491500000005" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><svg style="position:absolute;left:542.5px;top:320.5px" width="113" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 102 50 92 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.999437499999999,62.2538125 L29.391382914682087,56.49459708428355 L20.458995641137577,54.21151635960033 L21.349086774282416,45.03503894314597 L8.999437499999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M8.999437499999999,62.2538125 L29.391382914682087,56.49459708428355 L20.458995641137577,54.21151635960033 L21.349086774282416,45.03503894314597 L8.999437499999999,62.2538125" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><svg style="position:absolute;left:544.5px;top:576.5px" width="29" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 18 50 8 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.149632,66.303232 L7.49984351657956,47.438247975227235 L-0.24966605297428535,52.43275510120006 L-6.370633382220376,45.538282028201515 L-2.149632,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-2.149632,66.303232 L7.49984351657956,47.438247975227235 L-0.24966605297428535,52.43275510120006 L-6.370633382220376,45.538282028201515 L-2.149632,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><svg style="position:absolute;left:467px;top:64.5px" width="31.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 0 88 C -10 38 20.5 50 10.5 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.9357920000000004,66.303232 L8.31507669701995,47.75816012210056 L0.4090324791346134,52.50099311777328 L-5.487162185206769,45.41333564296595 L-1.9357920000000004,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M-1.9357920000000004,66.303232 L8.31507669701995,47.75816012210056 L0.4090324791346134,52.50099311777328 L-5.487162185206769,45.41333564296595 L-1.9357920000000004,66.303232" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><svg style="position:absolute;left:544.5px;top:704.5px" width="48.5" height="89" pointer-events="none" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml" class="_jsPlumb_connector "><path d="M 27.5 88 C 37.5 38 -10 50 0 0 " transform="translate(10.5,0.5)" pointer-events="visibleStroke" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="none" stroke="#666" style="--darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);" data-darkreader-inline-stroke=""></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,65.8307285 L26.909461410455734,44.66308717037495 L22.65251929621236,52.841011346838144 L13.919744257293866,49.88489224916259 L27.874324375,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path><path pointer-events="all" version="1.1" xmlns="http://www.w3.org/1999/xhtml" d="M27.874324375,65.8307285 L26.909461410455734,44.66308717037495 L22.65251929621236,52.841011346838144 L13.919744257293866,49.88489224916259 L27.874324375,65.8307285" class="" stroke="#666" fill="#666" transform="translate(10.5,0.5)" data-darkreader-inline-fill="" data-darkreader-inline-stroke="" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: var(--darkreader-text-666666, #a8a095);"></path></svg><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 478px; top: 55px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 467px; top: 311px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 467px; top: 271px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 553px; top: 567px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 553px; top: 527px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 635px; top: 311px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 543px; top: 439px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 543px; top: 399px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 545px; top: 695px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 545px; top: 655px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 467.5px; top: 183px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 467.5px; top: 143px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint source-endpoint dependency-source-endpoint connected _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable" style="position: absolute; height: 20px; width: 20px; left: 572.5px; top: 823px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div><div class="_jsPlumb_endpoint target-endpoint dependency-target-endpoint _jsPlumb_endpoint_anchor_ ui-draggable ui-droppable _jsPlumb_endpoint_connected" style="position: absolute; height: 20px; width: 20px; left: 572.5px; top: 783px;"><svg style="position:absolute;left:0px;top:0px" width="20" height="20" pointer-events="all" position="absolute" version="1.1" xmlns="http://www.w3.org/1999/xhtml"><circle cx="10" cy="10" r="10" version="1.1" xmlns="http://www.w3.org/1999/xhtml" fill="#666" stroke="none" style="--darkreader-inline-fill: var(--darkreader-text-666666, #a8a095); --darkreader-inline-stroke: none;" data-darkreader-inline-fill="" data-darkreader-inline-stroke=""></circle></svg></div></div></div>
     </body>
 </html>
  ]]>
